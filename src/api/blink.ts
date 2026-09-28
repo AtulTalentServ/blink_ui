@@ -933,6 +933,38 @@ export async function saveFigmaDesign(payload: {
   return response.json() as Promise<FigmaDesignBindingResult>
 }
 
+export async function chooseStitchDesign(payload: {
+  projectId: string
+  name: string
+  imageUrl?: string
+  stories?: { id: string; title: string }[]
+  jiraIssues?: { sourceId: string; jiraKey: string }[]
+}): Promise<FigmaDesignBindingResult & { figmaUsage?: { fileReads: number; filesCreated: number; fileReadLimit: number; fileCreateLimit: number } }> {
+  const url = apiUrl('/integrations/stitch/designs/choose')
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) throw new ApiRequestError(await readError(response), response.status)
+  return response.json() as Promise<FigmaDesignBindingResult & { figmaUsage?: { fileReads: number; filesCreated: number; fileReadLimit: number; fileCreateLimit: number } }>
+}
+
+export async function proposeStitchDesigns(payload: {
+  projectName?: string
+  requirementText?: string
+  stories?: { title?: string; name?: string }[]
+}): Promise<{ projectId?: string; message?: string; options?: { id: string; name: string; summary: string; layout: string; imageUrl?: string; stitchScreenId?: string }[] }> {
+  const url = apiUrl('/integrations/stitch/designs')
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) throw new ApiRequestError(await readError(response), response.status)
+  return response.json() as Promise<{ projectId?: string; message?: string; options?: { id: string; name: string; summary: string; layout: string; imageUrl?: string; stitchScreenId?: string }[] }>
+}
+
 export async function ingestFigmaDesign(payload: {
   projectId: string
   fileKey?: string
