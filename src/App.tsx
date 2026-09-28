@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
-import { downloadWorkspace, fetchWorkspaceStatus, saveProject, createRepositories, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, postJiraGateEvidence, apiUrl, type ProjectPayload } from './api/blink'
+import { downloadWorkspace, fetchWorkspaceStatus, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
@@ -8,12 +8,15 @@ import { WizardSidebar, STEP_ORDER } from './components/WizardSidebar'
 import { SessionControls } from './components/SessionControls'
 import { ChatPanel, useChatPanelOpen } from './components/ChatPanel'
 import { ThemeBackground } from './components/ThemeBackground'
+import { JourneyGuide } from './components/JourneyGuide'
 import {
   ProjectShapeScreen,
   RepositoriesScreen,
   TechnologyPerRepoScreen,
 } from './screens/ExtendedScreens'
-import { ShipScreen } from './screens/ShipScreen'
+import { WorkspaceScreen } from './screens/WorkspaceScreen'
+import { ReviewPrScreen } from './screens/ReviewPrScreen'
+import { ReleaseClosureScreen } from './screens/ReleaseClosureScreen'
 import {
   ProjectStakeholdersScreen,
   validateProjectStakeholders,
@@ -29,6 +32,7 @@ import {
   SdlcPlanningScreen,
   validateSdlcPlan,
 } from './screens/SdlcPlanningScreen'
+import { ImplementationReadinessScreen } from './screens/ImplementationReadinessScreen'
 import { WelcomeScreen } from './screens/WelcomeScreen'
 import {
   assigneeForQuestion,
@@ -185,8 +189,7 @@ export default function App() {
   const [refreshingJira, setRefreshingJira] = useState(false)
   const [simulatingJira, setSimulatingJira] = useState(false)
   const [resettingSimJira, setResettingSimJira] = useState(false)
-  const [creatingRepos, setCreatingRepos] = useState(false)
-  const creatingReposRef = useRef(false)
+  const creatingRepos = false
   const [folderPrep, setFolderPrep] = useState<'idle' | 'preparing' | 'ready' | 'failed'>('idle')
   const [folderProgress, setFolderProgress] = useState({ percent: 0, copied: 0, total: 0 })
   const [folderQuery, setFolderQuery] = useState<{ name: string; id?: string } | null>(null)
@@ -665,86 +668,19 @@ export default function App() {
   }, [folderPrep])
 
   const handleCreateGithubRepos = useCallback(async (): Promise<boolean> => {
-    if (creatingReposRef.current) return false
-    const github = state.integrations?.find((item) => item.id === 'github')
-    if (!github?.connected || !state.projectId) {
-      setStatus({ type: 'error', message: 'Connect GitHub on the Integrations screen first.' })
+    const names = (state.repositories || [])
+      .map((repository) => repository.name.trim())
+      .filter(Boolean)
+    if (!names.length) {
+      setStatus({ type: 'error', message: 'Add at least one repository name before preparing manual setup instructions.' })
       return false
     }
-    const repos = state.repositories || []
-    const pending = repos.filter(
-      (repo) => repo.name.trim() && repo.createStatus !== 'created' && repo.createStatus !== 'exists',
-    )
-    if (!pending.length) {
-      if (!repos.some((repo) => repo.name.trim())) {
-        setStatus({ type: 'error', message: 'Add at least one repository name.' })
-        return false
-      }
-      return true
-    }
-    creatingReposRef.current = true
-    setCreatingRepos(true)
-    setStatus(null)
-    try {
-      const result = await createRepositories({
-        provider: 'github',
-        projectId: state.projectId,
-        organization: github.organization,
-        repositories: pending.map((repo) => ({ name: repo.name.trim(), description: repo.description })),
-      })
-      const createdRows = result.repositories || []
-      patch({
-        repositoriesTouched: true,
-        repositories: repos.map((repo) => {
-          const created = createdRows.find((item) => item.name === repo.name.trim())
-          if (!created) return repo
-          return {
-            ...repo,
-            htmlUrl: created.htmlUrl ?? repo.htmlUrl,
-            createStatus: created.status as 'created' | 'exists' | 'failed',
-            createMessage: created.message,
-          }
-        }),
-      })
-      const created = createdRows.filter((item) => item.status === 'created').length
-      const exists = createdRows.filter((item) => item.status === 'exists').length
-      const failed = createdRows.filter((item) => item.status === 'failed').length
-      if (failed && !created && !exists) {
-        setStatus({
-          type: 'error',
-          message: createdRows.map((item) => item.message).filter(Boolean).join(' ') || 'Could not create GitHub repositories.',
-        })
-        return false
-      }
-      if (state.bootstrapAcknowledged && (created > 0 || exists > 0)) {
-        const issueKey =
-          state.jiraCreatedIssues?.find((i) => i.jiraKey)?.jiraKey
-          || state.sdlcStartIssueId
-          || state.workClassification?.issueId
-          || state.specification?.issueId
-          || state.productScope?.storyIds?.[0]
-        if (issueKey && state.projectId) {
-          void postJiraGateEvidence(state.projectId, {
-            issueKey,
-            gate: 'G-BOOTSTRAP',
-            message:
-              'Human G-BOOTSTRAP acknowledgement plus remotes created (not an approve-gate; not overlay-only).',
-          }).catch(() => undefined)
-        }
-      }
-      setStatus({
-        type: failed ? 'info' : 'success',
-        message: `GitHub: ${created} created, ${exists} already existed, ${failed} failed.`,
-      })
-      return failed === 0
-    } catch (e) {
-      setStatus({ type: 'error', message: e instanceof Error ? e.message : 'Could not create GitHub repositories.' })
-      return false
-    } finally {
-      creatingReposRef.current = false
-      setCreatingRepos(false)
-    }
-  }, [state.integrations, state.repositories, state.projectId, state.bootstrapAcknowledged, state.jiraCreatedIssues, state.sdlcStartIssueId, state.workClassification, state.specification, state.productScope, patch])
+    setStatus({
+      type: 'info',
+      message: `Create ${names.join(', ')} manually in GitHub, then return to Blink and add each repository URL. Blink does not create repositories or record GitHub gate evidence.`,
+    })
+    return false
+  }, [state.repositories])
 
   const goNext = useCallback(async () => {
     const err = skipStepValidation ? null : validateCurrentStep()
@@ -2043,7 +1979,7 @@ export default function App() {
         return <TechnologyPerRepoScreen state={state} onUpdate={patch} />
       case 'generation':
         return (
-          <ShipScreen
+          <WorkspaceScreen
             state={state}
             onUpdate={patch}
             loading={loading}
@@ -2057,11 +1993,44 @@ export default function App() {
             }}
           />
         )
+      case 'implementation':
+        return (
+          <ImplementationReadinessScreen
+            state={state}
+            onUpdate={patch}
+            onNavigate={(next) => {
+              setStatus(null)
+              goToStep(next)
+            }}
+          />
+        )
+      case 'review-pr':
+        return (
+          <ReviewPrScreen
+            state={state}
+            onUpdate={patch}
+            onNavigate={(next) => {
+              setStatus(null)
+              goToStep(next)
+            }}
+          />
+        )
+      case 'release':
+        return (
+          <ReleaseClosureScreen
+            state={state}
+            onUpdate={patch}
+            onNavigate={(next) => {
+              setStatus(null)
+              goToStep(next)
+            }}
+          />
+        )
     }
   }
 
   const showBack = step !== 'welcome'
-  const showNext = step !== 'welcome' && step !== 'generation'
+  const showNext = step !== 'welcome' && step !== 'implementation' && step !== 'review-pr' && step !== 'release'
   const isWelcome = step === 'welcome'
   const isSuccessScreen = false
   const generationIdx = stepIndex('generation')
@@ -2167,6 +2136,16 @@ export default function App() {
 
         <div className={`content${isSuccessScreen ? ' content-fill' : ''}${isWelcome ? ' content-welcome' : ''}${currentSkipped ? ' content-skipped' : ''}`}>
           {status && !isWelcome && <div className={`status-banner ${status.type}`}>{status.message}</div>}
+          {!isWelcome ? (
+            <JourneyGuide
+              state={state}
+              step={step}
+              onNavigate={(next) => {
+                setStatus(null)
+                goToStep(next)
+              }}
+            />
+          ) : null}
           {renderScreen()}
         </div>
 

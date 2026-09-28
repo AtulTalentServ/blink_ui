@@ -5,9 +5,11 @@ import {
   FileText,
   GitBranch,
   Home,
+  Laptop,
   Layers,
   Link2,
   MessageSquare,
+  SearchCheck,
   Rocket,
   Users,
 } from 'lucide-react'
@@ -36,7 +38,10 @@ export const WIZARD_STEPS: StepDefinition[] = [
   { id: 'repositories', label: 'Repositories', icon: GitBranch, iconColor: '#2563eb' },
   { id: 'technology-per-repo', label: 'Technology', icon: Cpu, iconColor: '#2563eb' },
   { id: 'sdlc-plan', label: 'Work plan', icon: ClipboardList, iconColor: '#2563eb' },
-  { id: 'generation', label: 'Ship', icon: Rocket, iconColor: '#2563eb' },
+  { id: 'generation', label: 'Workspace', icon: Rocket, iconColor: '#2563eb' },
+  { id: 'implementation', label: 'Implementation', icon: Laptop, iconColor: '#2563eb' },
+  { id: 'review-pr', label: 'Review & PR', icon: SearchCheck, iconColor: '#2563eb' },
+  { id: 'release', label: 'Release', icon: Rocket, iconColor: '#2563eb' },
 ]
 
 export const WIZARD_PHASES: PhaseDefinition[] = [
@@ -66,9 +71,24 @@ export const WIZARD_PHASES: PhaseDefinition[] = [
     stepIds: ['sdlc-plan'],
   },
   {
-    id: 'ship',
-    label: 'Ship',
+    id: 'workspace',
+    label: 'Workspace',
     stepIds: ['generation'],
+  },
+  {
+    id: 'implementation',
+    label: 'Implementation',
+    stepIds: ['implementation'],
+  },
+  {
+    id: 'review-pr',
+    label: 'Review & PR',
+    stepIds: ['review-pr'],
+  },
+  {
+    id: 'release',
+    label: 'Release',
+    stepIds: ['release'],
   },
 ]
 

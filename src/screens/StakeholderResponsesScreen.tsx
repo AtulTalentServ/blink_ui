@@ -15,7 +15,6 @@ import {
   groomingStakeholderPack,
   groomingRevision,
   groomingSignOffCapture,
-  postJiraGateEvidence,
 } from '../api/blink'
 import {
   groomingLoopSettled,
@@ -311,18 +310,6 @@ export function StakeholderResponsesScreen({
     }
   }
 
-  const postSignOffEvidence = (projectId: string) => {
-    const issueKey =
-      state.jiraCreatedIssues?.find((i) => i.jiraKey)?.jiraKey
-      || state.questions.find((q) => q.jiraIssueKey)?.jiraIssueKey
-    if (!issueKey) return
-    void postJiraGateEvidence(projectId, {
-      issueKey,
-      gate: 'G-GROOM',
-      message: 'Grooming sign-off summary captured (advisory — not an approval).',
-    }).catch(() => undefined)
-  }
-
   const runSignOff = async () => {
     if (!state.projectId || !onUpdate) return
     setGroomBusy('signoff')
@@ -341,7 +328,6 @@ export function StakeholderResponsesScreen({
         nextSdlcCommand: res.nextCommand || '/sdlc-next',
         groomingLoopFeedbackAt: stakeholderFeedback,
       })
-      postSignOffEvidence(state.projectId)
     } catch (e) {
       setGroomError(e instanceof Error ? e.message : 'Could not capture sign-off summary.')
     } finally {
@@ -418,7 +404,6 @@ export function StakeholderResponsesScreen({
               nextSdlcCommand: sign.nextCommand || '/sdlc-next',
               groomingLoopFeedbackAt: feedback,
             })
-            postSignOffEvidence(projectId)
           } else {
             onUpdate({ groomingLoopFeedbackAt: feedback })
           }
@@ -462,7 +447,6 @@ export function StakeholderResponsesScreen({
         nextSdlcCommand: signRes?.nextCommand || packRes?.nextCommand || '/sdlc-next',
         groomingLoopFeedbackAt: feedback,
       })
-      if (signRes) postSignOffEvidence(projectId)
     } catch (e) {
       setGroomError(e instanceof Error ? e.message : 'Could not run the grooming loop.')
     } finally {
@@ -606,11 +590,6 @@ export function StakeholderResponsesScreen({
           const rejectBlocks = Boolean(state.groomRejectPending && !loopSettled)
           const canAck = Boolean(onUpdate) && !rejectBlocks && (emptyQa || loopSettled)
           if (!canAck && !state.groomAcknowledged && !state.groomRejectPending) return null
-          const issueKey =
-            state.jiraCreatedIssues?.find((i) => i.jiraKey)?.jiraKey
-            || state.questions.find((q) => q.jiraIssueKey)?.jiraIssueKey
-            || state.sdlcStartIssueId
-            || undefined
           return (
             <div style={{ marginTop: '0.75rem' }}>
               {state.groomAcknowledged ? (
@@ -655,14 +634,6 @@ export function StakeholderResponsesScreen({
                     disabled={!onUpdate || (!emptyQa && !loopSettled)}
                     onClick={() => {
                       onUpdate?.({ groomAcknowledged: true, groomRejectPending: false })
-                      if (issueKey && state.projectId) {
-                        void postJiraGateEvidence(state.projectId, {
-                          issueKey,
-                          gate: 'G-GROOM',
-                          message:
-                            'Human acknowledgement of G-GROOM (not an approve-gate). Required before classify.',
-                        }).catch(() => undefined)
-                      }
                     }}
                   >
                     Acknowledge G-GROOM

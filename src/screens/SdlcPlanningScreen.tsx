@@ -15,7 +15,6 @@ import {
   classifyWork,
   confirmProductScope,
   createSpec,
-  postJiraGateEvidence,
   sdlcStart,
   technicalPlan,
 } from '../api/blink'
@@ -61,17 +60,6 @@ const WORK_PLAN_STEPS: PlanStep[] = [
     icon: Map,
   },
 ]
-
-function primaryIssueKey(state: WizardState): string | undefined {
-  const fromJira = state.jiraCreatedIssues?.find((i) => i.jiraKey)?.jiraKey
-  if (fromJira) return fromJira
-  return (
-    state.sdlcStartIssueId
-    || state.workClassification?.issueId
-    || state.specification?.issueId
-    || state.productScope?.storyIds?.[0]
-  )
-}
 
 function scopeConfirmed(state: WizardState): boolean {
   return Boolean(state.productScope?.status === 'confirmed' || state.productScope?.confirmationDigest)
@@ -369,15 +357,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
 
   const acknowledgePlan = useCallback(() => {
     onUpdate({ planAcknowledged: true, shipPlanAcknowledged: true })
-    const issueKey = primaryIssueKey(state)
-    if (issueKey && state.projectId) {
-      void postJiraGateEvidence(state.projectId, {
-        issueKey,
-        gate: 'G-PLAN',
-        message: 'Human acknowledgement of G-PLAN (not an approve-gate). Required before Ship.',
-      }).catch(() => undefined)
-    }
-    setLastChange('G-PLAN acknowledged by human (evidence posted; not an approve-gate).')
+    setLastChange('G-PLAN acknowledgement is local product state, not an approval gate.')
   }, [onUpdate, state])
 
   const rejectPlan = useCallback(() => {
@@ -479,14 +459,6 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
         scopeOverlays: res.overlayFiles || state.scopeOverlays || [],
         nextSdlcCommand: res.nextCommand || '/sdlc-next',
       })
-      const issueKey = primaryIssueKey(state)
-      if (issueKey) {
-        void postJiraGateEvidence(state.projectId, {
-          issueKey,
-          gate: 'G-PLAN',
-          message: `Technical plan drafted — await human acknowledgement (${(res.technicalPlan?.steps || []).length} step(s)).`,
-        }).catch(() => undefined)
-      }
       setLastChange(
         `Technical plan ready via ${WORK_PLAN_STEPS[2].command}: ${(res.technicalPlan?.steps || []).length} step(s). Acknowledge G-PLAN before continuing.`,
       )

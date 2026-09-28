@@ -363,7 +363,7 @@ export function RepositoriesScreen({
       <div className="screen-header screen-header-row">
         <div>
           <h2>Repositories</h2>
-          <p>Name the repos for this project. Remotes are created on Ship.</p>
+          <p>Name the repositories for this project. Create remotes yourself when ready, then enter their URLs here.</p>
         </div>
         <div className="screen-header-actions">
           <button type="button" className="ghost-btn" onClick={restoreFromShape}>
@@ -412,7 +412,7 @@ export function RepositoriesScreen({
                   {repo.htmlUrl
                     ? repo.createStatus === 'exists'
                       ? 'Exists on GitHub'
-                      : 'Created'
+                      : 'Connected manually'
                     : repo.createStatus === 'failed'
                       ? repo.createMessage || 'Failed'
                       : creating
@@ -473,6 +473,15 @@ export function RepositoriesScreen({
                     value={repo.dependencies}
                     onChange={(e) => updateRepo(repo.id, 'dependencies', e.target.value)}
                     placeholder="Depends on…"
+                  />
+                </label>
+                <label className="field-group span-2">
+                  <span>Repository URL (optional)</span>
+                  <input
+                    className="table-input wide"
+                    value={repo.htmlUrl || ''}
+                    onChange={(e) => updateRepo(repo.id, 'htmlUrl', e.target.value)}
+                    placeholder="https://github.com/owner/repository"
                   />
                 </label>
               </div>

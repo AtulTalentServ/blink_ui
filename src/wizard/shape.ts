@@ -1,8 +1,8 @@
 import { STEP_ORDER } from './steps.ts'
 import type { WizardState, WizardStep } from './types.ts'
 
-/** Saved drafts from before Shape moved ahead of Work plan. */
-export const WIZARD_LAYOUT_VERSION = 3
+/** Saved drafts from before Release became its own phase. */
+export const WIZARD_LAYOUT_VERSION = 6
 
 export const WIZARD_STEPS_V1: WizardStep[] = [
   'welcome',
@@ -227,6 +227,52 @@ function applyV2ToV3(input: {
   return {
     step,
     completedThrough,
+    state: { ...input.state, wizardLayoutVersion: 3 },
+  }
+}
+
+/**
+ * Existing Generation progress is now the user-facing Workspace phase.
+ * Do not advance saved projects into Implementation just because that step
+ * was added after their draft was created.
+ */
+function applyV3ToV4(input: {
+  step: WizardStep
+  completedThrough: number
+  state: WizardState
+}): { step: WizardStep; completedThrough: number; state: WizardState } {
+  const workspaceIdx = indexIn(STEP_ORDER, 'generation')
+  return {
+    step: input.step === 'implementation' ? 'generation' : input.step,
+    completedThrough: Math.min(input.completedThrough, workspaceIdx),
+    state: { ...input.state, wizardLayoutVersion: WIZARD_LAYOUT_VERSION },
+  }
+}
+
+/** Existing Implementation progress must not auto-advance into Review & PR. */
+function applyV4ToV5(input: {
+  step: WizardStep
+  completedThrough: number
+  state: WizardState
+}): { step: WizardStep; completedThrough: number; state: WizardState } {
+  const implementationIdx = indexIn(STEP_ORDER, 'implementation')
+  return {
+    step: input.step === 'review-pr' ? 'implementation' : input.step,
+    completedThrough: Math.min(input.completedThrough, implementationIdx),
+    state: { ...input.state, wizardLayoutVersion: WIZARD_LAYOUT_VERSION },
+  }
+}
+
+/** Existing Review & PR progress must not auto-advance into Release. */
+function applyV5ToV6(input: {
+  step: WizardStep
+  completedThrough: number
+  state: WizardState
+}): { step: WizardStep; completedThrough: number; state: WizardState } {
+  const reviewIdx = indexIn(STEP_ORDER, 'review-pr')
+  return {
+    step: input.step === 'release' ? 'review-pr' : input.step,
+    completedThrough: Math.min(input.completedThrough, reviewIdx),
     state: { ...input.state, wizardLayoutVersion: WIZARD_LAYOUT_VERSION },
   }
 }
@@ -246,8 +292,17 @@ export function remapWizardProgress(input: {
   if (version < 2) {
     next = applyV1ToV2(next)
   }
-  if ((next.state.wizardLayoutVersion ?? 0) < WIZARD_LAYOUT_VERSION) {
+  if ((next.state.wizardLayoutVersion ?? 0) < 3) {
     next = applyV2ToV3(next)
+  }
+  if ((next.state.wizardLayoutVersion ?? 0) < 4) {
+    next = applyV3ToV4(next)
+  }
+  if ((next.state.wizardLayoutVersion ?? 0) < 5) {
+    next = applyV4ToV5(next)
+  }
+  if ((next.state.wizardLayoutVersion ?? 0) < 6) {
+    next = applyV5ToV6(next)
   }
   return next
 }

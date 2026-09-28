@@ -2,22 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, ChevronRight, ExternalLink, Layers, Loader2, RefreshCw, Ticket } from 'lucide-react'
 import {
   fetchJiraIssueStatuses,
-  ingestFigmaDesign,
   saveFigmaDesign,
-  transitionJiraIssue,
   type JiraIssueStatusItem,
 } from '../api/blink'
 import type { FigmaScreenBinding, JiraCreatedIssue, WizardState } from '../wizard/types'
-import { autoLinkFigmaScreens, designFromBinding, figmaJiraRefs, figmaStoryRefs } from '../wizard/figmaDesign'
+import { autoLinkFigmaScreens, figmaJiraRefs, figmaStoryRefs } from '../wizard/figmaDesign'
 import {
-  beginJiraCreate,
   createdTicketsOnScreen,
-  createJiraIssuesFromState,
-  endJiraCreate,
   isJiraReady,
   jiraConnection,
   markTicketsPipelineBusy,
-  mergeJiraCreatedIssues,
   pendingJiraTicketCount,
   planScopeFromWording,
 } from '../wizard/jiraTickets'
@@ -217,12 +211,12 @@ export function JiraPublishStatus({
 export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null }: Props) {
   const [planningScope, setPlanningScope] = useState(false)
   const [scopeError, setScopeError] = useState<string | null>(null)
-  const [creatingIssues, setCreatingIssues] = useState(false)
+  const creatingIssues = false
   const [createError, setCreateError] = useState<string | null>(null)
   const [issueStatuses, setIssueStatuses] = useState<Record<string, JiraIssueStatusItem>>({})
   const [statusLoading, setStatusLoading] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
-  const [transitionKey, setTransitionKey] = useState<string | null>(null)
+  const transitionKey: string | null = null
   const [expandedEpicIds, setExpandedEpicIds] = useState<string[]>([])
   const [replanningScope, setReplanningScope] = useState(false)
 
@@ -336,83 +330,10 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
   }, [onUpdate, scopeAnswers, scopeClarifyPending, state, wording])
 
   const handleCreateInJira = useCallback(async () => {
-    if (!beginJiraCreate()) return
-    if (!isJiraReady(state)) {
-      endJiraCreate()
-      setCreateError('Connect Atlassian and choose a Jira project on Integrations first.')
-      return
-    }
-    if (epics.length === 0 && stories.length === 0) {
-      endJiraCreate()
-      setCreateError('Plan product scope first so there is something to create.')
-      return
-    }
-    setCreatingIssues(true)
-    setCreateError(null)
-    const placeholders = [...epics, ...stories]
-      .filter((item) => item.id && createdBySource.get(item.id)?.status !== 'created')
-      .map((item) => ({ sourceId: item.id, status: 'creating' }))
-    if (placeholders.length) {
-      onUpdate({ jiraCreatedIssues: mergeJiraCreatedIssues(state.jiraCreatedIssues, placeholders) })
-    }
-    try {
-      const result = await createJiraIssuesFromState(state, {
-        pendingOnly: true,
-        onStart: () => undefined,
-        onItem: (issue) => {
-          onUpdate({
-            jiraCreatedIssues: mergeJiraCreatedIssues(state.jiraCreatedIssues, [issue, ...placeholders]),
-          })
-        },
-      })
-      onUpdate({ jiraCreatedIssues: mergeJiraCreatedIssues(state.jiraCreatedIssues, result.issues) })
-      if (result.status === 'error') {
-        setCreateError(result.message || 'Jira did not create the issues.')
-      } else if (state.projectId && state.figmaDesign?.fileKey) {
-        const mergedIssues = mergeJiraCreatedIssues(state.jiraCreatedIssues, result.issues)
-        const stories = figmaStoryRefs(state)
-        const jiraIssues = mergedIssues
-          .filter((item) => item.sourceId && item.jiraKey && item.status === 'created')
-          .map((item) => ({ sourceId: item.sourceId as string, jiraKey: item.jiraKey as string, status: 'created' as const }))
-        try {
-          let screens = state.figmaDesign.screens || []
-          let previous = state.figmaDesign
-          if (screens.length === 0) {
-            const ingested = await ingestFigmaDesign({
-              projectId: state.projectId,
-              fileKey: state.figmaDesign.fileKey,
-              fileUrl: state.figmaDesign.fileUrl,
-              syncJira: state.figmaDesign.syncJira !== false,
-              stories,
-              jiraIssues,
-            })
-            previous = designFromBinding(ingested, state.figmaDesign)
-            screens = previous.screens || []
-          }
-          const linked = autoLinkFigmaScreens(screens, stories, jiraIssues)
-          const saved = await saveFigmaDesign({
-            projectId: state.projectId,
-            fileKey: previous.fileKey || state.figmaDesign.fileKey,
-            fileUrl: previous.fileUrl || state.figmaDesign.fileUrl,
-            fileName: previous.fileName || state.figmaDesign.fileName,
-            syncJira: previous.syncJira !== false,
-            screens: linked,
-            stories,
-            jiraIssues,
-          })
-          onUpdate({ figmaDesign: designFromBinding(saved, { ...previous, screens: linked }) })
-        } catch {
-          const linked = autoLinkFigmaScreens(state.figmaDesign.screens, stories, jiraIssues)
-          onUpdate({ figmaDesign: { ...state.figmaDesign, screens: linked } })
-        }
-      }
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Could not create Jira issues.')
-    } finally {
-      setCreatingIssues(false)
-      endJiraCreate()
-    }
-  }, [createdBySource, epics, onUpdate, state, stories])
+    setCreateError(
+      'Blink does not create Jira issues. Create the proposed epics and stories manually in Jira, then return the resulting links as evidence.',
+    )
+  }, [])
 
   useEffect(() => {
     if (!state.projectId || !jiraReady || !issueKeySig) {
@@ -458,20 +379,10 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
   }, [issueKeySig, jiraReady, state.projectId])
 
   const markTicket = useCallback(
-    async (issueKey: string, target: 'done' | 'closed') => {
-      if (!state.projectId || transitionKey) return
-      setTransitionKey(issueKey)
-      setStatusError(null)
-      try {
-        const updated = await transitionJiraIssue({ projectId: state.projectId, issueKey, target })
-        setIssueStatuses((prev) => ({ ...prev, [updated.key.toUpperCase()]: updated }))
-      } catch (err) {
-        setStatusError(err instanceof Error ? err.message : `Could not mark ${issueKey} as ${target}.`)
-      } finally {
-        setTransitionKey(null)
-      }
+    (issueKey: string, target: 'done' | 'closed') => {
+      setStatusError(`Mark ${issueKey} as ${target} manually in Jira, then refresh its status in Blink.`)
     },
-    [state.projectId, transitionKey],
+    [],
   )
 
   const statusFor = useCallback(
@@ -494,8 +405,7 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
     void runProductScope()
   }, [autoPlan, planningScope, runProductScope])
 
-  const canCreate = jiraReady && pendingCount > 0 && !creatingIssues && !planningScope && !jiraPublish?.active
-  const itemCount = epics.length + stories.length
+  const canCreate = pendingCount > 0 && !planningScope
   const alreadyCreated = createdOk > 0
 
   return (
@@ -503,7 +413,7 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
       <div className="jira-scope-head">
         <div className="req-section-head">
           <h3>Epics for Jira</h3>
-          <p>Open an epic to review its stories. Status comes from Jira and can be marked done or closed.</p>
+          <p>Review proposed epics and stories here. Create and transition Jira issues manually; Blink does not modify Jira.</p>
         </div>
         <button
           type="button"
@@ -803,13 +713,7 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
           <span className="action-spacer" />
           <button type="button" className="primary-btn" disabled={!canCreate} onClick={() => void handleCreateInJira()}>
             {creatingIssues || jiraPublish?.active ? <Loader2 size={16} className="spin" /> : <Ticket size={16} />}
-            {creatingIssues || jiraPublish?.active
-              ? 'Creating in Jira…'
-              : alreadyCreated
-                ? pendingCount > 0
-                  ? `Create remaining ${pendingCount}`
-                  : `All ${itemCount || ''} item${itemCount === 1 ? '' : 's'} are in Jira`
-                : `Create ${itemCount || ''} item${itemCount === 1 ? '' : 's'} in Jira`}
+            View manual Jira instructions
           </button>
         </div>
       ) : null}

@@ -37,6 +37,9 @@ export type WizardStep =
   | 'repositories'
   | 'technology-per-repo'
   | 'generation'
+  | 'implementation'
+  | 'review-pr'
+  | 'release'
   /** Legacy ids remapped on resume. */
   | 'sdlc-scope'
   | 'sdlc-planning'
@@ -239,6 +242,123 @@ export interface TechnicalPlanState {
   issueId?: string
 }
 
+export interface ImplementationExecutionStep {
+  id: string
+  title: string
+  detail: string
+  repositoryIds: string[]
+  acceptanceCriteria: string[]
+  dependencies: string[]
+}
+
+export interface ImplementationExecutionPlan {
+  issueId: string
+  readinessDigest: string
+  stage: 'awaiting-cursor-confirmation' | 'ready-for-review' | 'accepted' | 'returned-to-work-plan'
+  source: 'approved-technical-plan'
+  steps: ImplementationExecutionStep[]
+  cursorPlanningReportedAt?: string | null
+  acceptedAt?: string | null
+}
+
+export type ImplementationStage =
+  | 'waiting-to-start'
+  | 'preparing'
+  | 'implementing'
+  | 'waiting-for-user-decision'
+  | 'blocked'
+  | 'reviewing'
+  | 'validation-reported'
+  | 'draft-pr-ready'
+  | 'complete'
+
+export interface ImplementationProgressReport {
+  id: string
+  issueId: string
+  stage: ImplementationStage
+  completedStepId?: string | null
+  currentStepId?: string | null
+  repositories: { name: string; branch?: string; commits?: string[] }[]
+  changedFiles: string[]
+  acceptanceCriteriaCovered: string[]
+  validation: string[]
+  blockers: string[]
+  deviations: string[]
+  recommendedNextAction: string
+  reportedAt: string
+  importedAt: string
+}
+
+export interface ImplementationResultReview {
+  reportId: string
+  issueId: string
+  readinessDigest: string
+  decision: 'accepted' | 'revision-requested'
+  feedback: string
+  decidedAt: string
+}
+
+export interface RegisteredPullRequest {
+  id: string
+  issueId: string
+  url: string
+  repository: string
+  branch: string
+  candidateCommit: string
+  provider: string
+  registeredAt: string
+}
+
+export interface ReviewFinding {
+  id: string
+  issueId: string
+  summary: string
+  severity: 'must-fix' | 'advisory'
+  status: 'open' | 'resolved'
+  createdAt: string
+  resolvedAt?: string | null
+}
+
+export interface QaEvidence {
+  issueId: string
+  status: 'not-reported' | 'passed' | 'failed' | 'not-required'
+  evidence: string
+  reportedAt: string
+}
+
+export interface MergeAuthorization {
+  issueId: string
+  authorizedBy: string
+  authorizedAt: string
+}
+
+export interface ReleaseClosureState {
+  issueId: string
+  humanMerge?: {
+    mergedBy: string
+    mergedAt: string
+    evidenceUrl: string
+    commit: string
+  } | null
+  deploymentRequired: boolean
+  deployment?: {
+    status: 'not-reported' | 'deployed' | 'failed' | 'not-required'
+    approvedBy: string
+    approvedAt: string
+    evidence: string
+  } | null
+  monitoring?: {
+    status: 'not-reported' | 'healthy' | 'blocker'
+    evidence: string
+    blocker: string
+    reportedAt: string
+  } | null
+  closure?: {
+    closedBy: string
+    closedAt: string
+  } | null
+}
+
 export interface WizardState extends SetupForm {
   applicationType: string
   javaVersion: string
@@ -306,6 +426,32 @@ export interface WizardState extends SetupForm {
   scopeClarifyStatus?: string | null
   scopeQuestions?: GroomQuestion[]
   scopeAnswers?: GroomAnswer[]
+  /** Work item selected for the external implementation handoff. */
+  implementationIssueId?: string | null
+  /** Context fingerprint when implementation readiness was last reviewed. */
+  implementationReadinessDigest?: string | null
+  /** Tool selected to execute the current implementation handoff. */
+  implementationTool?: 'cursor' | null
+  /** When the user confirmed that the handoff was opened in the selected tool. */
+  implementationHandoffStartedAt?: string | null
+  /** Readiness fingerprint associated with the recorded tool handoff. */
+  implementationHandoffStartedDigest?: string | null
+  /** Reviewable implementation sequence derived from the approved technical plan. */
+  implementationExecutionPlan?: ImplementationExecutionPlan | null
+  /** Cursor-reported implementation results, retained as an append-only timeline. */
+  implementationProgressHistory?: ImplementationProgressReport[]
+  /** Human result-review decisions retained separately from Cursor reports. */
+  implementationResultReviews?: ImplementationResultReview[]
+  /** Provider/draft pull requests explicitly registered for review. */
+  registeredPullRequests?: RegisteredPullRequest[]
+  /** Review findings retained independently from PR provider data. */
+  reviewFindings?: ReviewFinding[]
+  /** Human-entered or imported QA evidence; never inferred as passed. */
+  qaEvidence?: QaEvidence | null
+  /** Human approval to merge; Blink never performs the merge. */
+  mergeAuthorization?: MergeAuthorization | null
+  /** Human-recorded merge, deployment, monitoring, and closure evidence. */
+  releaseClosure?: ReleaseClosureState | null
   workClassification?: WorkClassificationState | null
   specification?: SpecificationState | null
   technicalPlan?: TechnicalPlanState | null
@@ -542,6 +688,19 @@ export const defaultWizardState: WizardState = {
   scopeClarifyStatus: null,
   scopeQuestions: [],
   scopeAnswers: [],
+  implementationIssueId: null,
+  implementationReadinessDigest: null,
+  implementationTool: null,
+  implementationHandoffStartedAt: null,
+  implementationHandoffStartedDigest: null,
+  implementationExecutionPlan: null,
+  implementationProgressHistory: [],
+  implementationResultReviews: [],
+  registeredPullRequests: [],
+  reviewFindings: [],
+  qaEvidence: null,
+  mergeAuthorization: null,
+  releaseClosure: null,
   workClassification: null,
   specification: null,
   technicalPlan: null,
@@ -558,7 +717,7 @@ export const defaultWizardState: WizardState = {
   groomAcknowledged: false,
   shapeAcknowledged: false,
   shapeDigest: null,
-  wizardLayoutVersion: 3,
+  wizardLayoutVersion: 6,
   groomRejectPending: false,
   acceptanceCriteriaAcknowledged: false,
   stakeholdersConfirmed: false,
@@ -689,6 +848,19 @@ export function clearGroomingPatch(): Partial<WizardState> {
     scopeClarifyStatus: null,
     scopeQuestions: [],
     scopeAnswers: [],
+    implementationIssueId: null,
+    implementationReadinessDigest: null,
+    implementationTool: null,
+    implementationHandoffStartedAt: null,
+    implementationHandoffStartedDigest: null,
+    implementationExecutionPlan: null,
+    implementationProgressHistory: [],
+    implementationResultReviews: [],
+    registeredPullRequests: [],
+    reviewFindings: [],
+    qaEvidence: null,
+    mergeAuthorization: null,
+    releaseClosure: null,
     workClassification: null,
     specification: null,
     technicalPlan: null,
