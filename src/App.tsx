@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
-import { downloadWorkspace, fetchWorkspaceStatus, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, apiUrl, type ProjectPayload } from './api/blink'
+import { downloadWorkspace, fetchWorkspaceStatus, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, fetchCanonicalSnapshot, syncCanonicalWizardDraft, shipCheckpoint, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
@@ -33,6 +33,7 @@ import {
   validateSdlcPlan,
 } from './screens/SdlcPlanningScreen'
 import { ImplementationReadinessScreen } from './screens/ImplementationReadinessScreen'
+import { ShipScreen } from './screens/ShipScreen'
 import { WelcomeScreen } from './screens/WelcomeScreen'
 import {
   assigneeForQuestion,
@@ -40,6 +41,8 @@ import {
   simulatedStakeholderReply,
 } from './wizard/questions'
 import { roleLabel } from './wizard/stakeholders'
+import { patchFromCanonicalSnapshot } from './wizard/canonical'
+import { substageFromLegacyStep } from './wizard/ship'
 import { primaryContinueLabel, phaseProgressLabel, stepIndex } from './wizard/steps'
 import {
   acknowledgeShapePatch,
@@ -55,6 +58,7 @@ import {
   defaultWizardState,
   generationStepDefs,
   type GroomAnswer,
+  type ShipSubstage,
   type WizardState,
   type WizardStep,
 } from './wizard/types'
@@ -159,6 +163,7 @@ export default function App() {
     groomingComplete(boot.state),
     false,
     Boolean(boot.state.shapeAcknowledged),
+    boot.state.canonicalAllowedSteps,
   )
   const [state, setState] = useState<WizardState>(boot.state)
   const [step, setStep] = useState<WizardStep>(bootStep)
@@ -290,19 +295,6 @@ export default function App() {
           const configured = await configureStakeholders(projectId)
           sodWarnings = configured.sodWarnings?.length ? configured.sodWarnings.map(String) : sodWarnings
           nextCommand = configured.nextCommand || nextCommand || '/plan-product-scope'
-          if (!opts?.draft) {
-            try {
-              const confirmed = await confirmStakeholders(projectId)
-              if (confirmed.status === 'ok') {
-                stakeholdersConfirmed = true
-                stakeholdersConfirmationDigest =
-                  confirmed.confirmationDigest || stakeholdersConfirmationDigest
-                nextCommand = confirmed.nextCommand || nextCommand
-              }
-            } catch {
-              /* confirm can retry from Integrations */
-            }
-          }
           lastGovernedPayloadRef.current = payloadStr
           patch({
             sodWarnings,
@@ -360,6 +352,9 @@ export default function App() {
       projectName: payload.projectName,
       description: payload.description,
     })
+    void syncCanonicalWizardDraft(id, stateRef.current.canonicalRevision ?? undefined)
+      .then((snap) => patch(patchFromCanonicalSnapshot(snap)))
+      .catch(() => undefined)
     setFolderQuery({ name: saved.projectName || payload.projectName, id })
     if (saved.workspaceStatus === 'preparing' || saved.workspaceStatus === 'ready' || saved.workspaceStatus === 'failed') {
       setFolderPrep(saved.workspaceStatus)
@@ -383,6 +378,9 @@ export default function App() {
 
   const goToStep = useCallback((next: WizardStep, historyMode: 'push' | 'replace' | 'silent' = 'push') => {
     const mapped = normalizeWizardStep(next, stateRef.current)
+    if (next !== mapped && mapped === 'ship') {
+      patch({ shipSubstage: substageFromLegacyStep(next) })
+    }
     if (mapped === stepRef.current && historyMode === 'push') {
       return
     }
@@ -391,7 +389,35 @@ export default function App() {
       return
     }
     writeStepUrl(mapped, historyMode)
-  }, [])
+  }, [patch])
+
+  const goToShipSubstage = useCallback(
+    (substage: ShipSubstage) => {
+      const current = stateRef.current
+      const allowed = current.canonicalAllowedShipSubstages?.length
+        ? current.canonicalAllowedShipSubstages
+        : (['workspace'] as ShipSubstage[])
+      if (!allowed.includes(substage)) {
+        setStatus({ type: 'info', message: `Complete the prior Ship phase before opening ${substage}.` })
+        return
+      }
+      setStatus(null)
+      patch({ shipSubstage: substage, canonicalShipSubstage: substage })
+      goToStep('ship')
+      const projectId = current.projectId
+      if (projectId) {
+        void shipCheckpoint(projectId, {
+          substage,
+          idempotencyKey: `ship-nav-${substage}`,
+          payload: { source: 'wizard-nav' },
+        }).catch(() => undefined)
+        void fetchCanonicalSnapshot(projectId)
+          .then((snap) => patch(patchFromCanonicalSnapshot(snap)))
+          .catch(() => undefined)
+      }
+    },
+    [goToStep, patch],
+  )
 
   const startFresh = useCallback((type: 'new' | 'existing') => {
     skipRemoteResumeRef.current = true
@@ -443,6 +469,7 @@ export default function App() {
             groomingComplete(stateRef.current),
             false,
             Boolean(stateRef.current.shapeAcknowledged),
+            stateRef.current.canonicalAllowedSteps,
           ),
         )
         return
@@ -573,7 +600,11 @@ export default function App() {
           groomingComplete(remoteDraft.state),
           false,
           Boolean(remoteDraft.state.shapeAcknowledged),
+          remoteDraft.state.canonicalAllowedSteps,
         )
+        void fetchCanonicalSnapshot(String(remote.id))
+          .then((snap) => patch(patchFromCanonicalSnapshot(snap)))
+          .catch(() => undefined)
         goToStep(nextStep, 'replace')
         seedWizardHistory(nextStep, true)
       })
@@ -611,6 +642,19 @@ export default function App() {
       cancelled = true
     }
   }, [session?.email, state.projectId])
+
+  useEffect(() => {
+    if (!state.projectId) return
+    let cancelled = false
+    void fetchCanonicalSnapshot(state.projectId)
+      .then((snap) => {
+        if (!cancelled) patch(patchFromCanonicalSnapshot(snap))
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [state.projectId, patch])
 
   useEffect(() => {
     publishDeveloperSession({
@@ -1714,7 +1758,7 @@ export default function App() {
     const fromIdx = stepIndex(step)
     setCompletedThrough((prev) => Math.max(prev, fromIdx))
     patch({ generationSteps: steps, generationComplete: false })
-    goToStep('generation')
+    goToShipSubstage('workspace')
 
     const advanceStep = (id: string, st: 'running' | 'done' | 'error') => {
       setState((prev) => ({
@@ -1977,67 +2021,76 @@ export default function App() {
         return <ProjectShapeScreen state={state} onUpdate={patch} />
       case 'technology-per-repo':
         return <TechnologyPerRepoScreen state={state} onUpdate={patch} />
-      case 'generation':
+      case 'ship':
         return (
-          <WorkspaceScreen
+          <ShipScreen
             state={state}
-            onUpdate={patch}
-            loading={loading}
-            exporting={creatingRepos}
-            onExportGithub={() => void handleCreateGithubRepos()}
-            onGenerateKit={() => void runGeneration()}
-            onBack={() => goToStep('welcome')}
-            onNavigate={(s) => {
-              setStatus(null)
-              goToStep(s)
-            }}
-          />
-        )
-      case 'implementation':
-        return (
-          <ImplementationReadinessScreen
-            state={state}
-            onUpdate={patch}
-            onNavigate={(next) => {
-              setStatus(null)
-              goToStep(next)
-            }}
-          />
-        )
-      case 'review-pr':
-        return (
-          <ReviewPrScreen
-            state={state}
-            onUpdate={patch}
-            onNavigate={(next) => {
-              setStatus(null)
-              goToStep(next)
-            }}
-          />
-        )
-      case 'release':
-        return (
-          <ReleaseClosureScreen
-            state={state}
-            onUpdate={patch}
-            onNavigate={(next) => {
-              setStatus(null)
-              goToStep(next)
-            }}
+            substage={state.shipSubstage || state.canonicalShipSubstage || 'workspace'}
+            onSubstage={(substage) => goToShipSubstage(substage)}
+            workspace={
+              <WorkspaceScreen
+                state={state}
+                onUpdate={patch}
+                loading={loading}
+                exporting={creatingRepos}
+                onExportGithub={() => void handleCreateGithubRepos()}
+                onGenerateKit={() => void runGeneration()}
+                onBack={() => goToStep('welcome')}
+                onNavigate={(s) => {
+                  setStatus(null)
+                  goToStep(s)
+                }}
+              />
+            }
+            implementation={
+              <ImplementationReadinessScreen
+                state={state}
+                onUpdate={patch}
+                onNavigate={(next) => {
+                  setStatus(null)
+                  if (next === 'ship') goToShipSubstage('implementation')
+                  else goToStep(next)
+                }}
+              />
+            }
+            reviewPr={
+              <ReviewPrScreen
+                state={state}
+                onUpdate={patch}
+                onNavigate={(next) => {
+                  setStatus(null)
+                  if (next === 'ship') goToShipSubstage('review-pr')
+                  else goToStep(next)
+                }}
+              />
+            }
+            release={
+              <ReleaseClosureScreen
+                state={state}
+                onUpdate={patch}
+                onNavigate={(next) => {
+                  setStatus(null)
+                  goToStep(next)
+                }}
+              />
+            }
           />
         )
     }
   }
 
+  const shipSubstage = state.shipSubstage || 'workspace'
   const showBack = step !== 'welcome'
-  const showNext = step !== 'welcome' && step !== 'implementation' && step !== 'review-pr' && step !== 'release'
+  const showNext =
+    step !== 'welcome'
+    && !(step === 'ship' && ['implementation', 'review-pr', 'release'].includes(shipSubstage))
   const isWelcome = step === 'welcome'
   const isSuccessScreen = false
-  const generationIdx = stepIndex('generation')
-  const currentSkipped = state.generationComplete && stepIndex(step) > completedThrough && stepIndex(step) < generationIdx
+  const shipIdx = stepIndex('ship')
+  const currentSkipped = state.generationComplete && stepIndex(step) > completedThrough && stepIndex(step) < shipIdx
   const showQuickDownload =
     !isWelcome &&
-    step !== 'generation' &&
+    step !== 'ship' &&
     stepIndex(step) >= stepIndex('sdlc-plan') &&
     Boolean(state.productScope?.status === 'confirmed' || state.productScope?.confirmationDigest)
 

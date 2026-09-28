@@ -36,9 +36,14 @@ export type WizardStep =
   | 'project-shape'
   | 'repositories'
   | 'technology-per-repo'
+  | 'ship'
+  /** @deprecated Remapped to ship + substage on resume. */
   | 'generation'
+  /** @deprecated Remapped to ship + substage on resume. */
   | 'implementation'
+  /** @deprecated Remapped to ship + substage on resume. */
   | 'review-pr'
+  /** @deprecated Remapped to ship + substage on resume. */
   | 'release'
   /** Legacy ids remapped on resume. */
   | 'sdlc-scope'
@@ -47,6 +52,8 @@ export type WizardStep =
   | 'platform-delivery'
   | 'review-resolve'
   | 'project-preview'
+
+export type ShipSubstage = 'workspace' | 'implementation' | 'review-pr' | 'release'
 
 /** Legacy step ids persisted in drafts / URLs before Q&A merge and spine split. */
 export type LegacyWizardStep =
@@ -475,6 +482,15 @@ export interface WizardState extends SetupForm {
   shapeDigest?: string | null
   /** Wizard sidebar order version. 2 = Shape before Work plan. */
   wizardLayoutVersion?: number
+  /** Active substage when `wizardStep` is `ship`. */
+  shipSubstage?: ShipSubstage
+  /** Canonical aggregate from Backend (remote wins on resume). */
+  canonicalRevision?: number | null
+  canonicalAllowedSteps?: string[] | null
+  canonicalAllowedShipSubstages?: ShipSubstage[] | null
+  canonicalMaxShipSubstage?: ShipSubstage | null
+  canonicalShipSubstage?: ShipSubstage | null
+  canonicalBlockers?: { code?: string; message?: string; step?: string; substage?: string }[] | null
   /** After G-GROOM reject: revision required before a new ack. */
   groomRejectPending?: boolean
   /** Human confirmation of acceptance criteria after /create-spec. */
@@ -715,7 +731,13 @@ export const defaultWizardState: WizardState = {
   groomAcknowledged: false,
   shapeAcknowledged: false,
   shapeDigest: null,
-  wizardLayoutVersion: 6,
+  shipSubstage: 'workspace',
+  wizardLayoutVersion: 7,
+  canonicalRevision: null,
+  canonicalAllowedSteps: null,
+  canonicalAllowedShipSubstages: null,
+  canonicalMaxShipSubstage: null,
+  canonicalShipSubstage: null,
   groomRejectPending: false,
   acceptanceCriteriaAcknowledged: false,
   stakeholdersConfirmed: false,

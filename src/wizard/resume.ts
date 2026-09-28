@@ -56,7 +56,15 @@ export function normalizeWizardStep(
     return 'requirements'
   }
   if (step === 'ide-and-tools' || step === 'platform-delivery') return 'project-shape'
-  if (step === 'review-resolve' || step === 'project-preview') return 'generation'
+  if (step === 'review-resolve' || step === 'project-preview') return 'ship'
+  if (
+    step === 'generation'
+    || step === 'implementation'
+    || step === 'review-pr'
+    || step === 'release'
+  ) {
+    return 'ship'
+  }
   if (STEP_ORDER.includes(step as WizardStep)) return step as WizardStep
   return 'welcome'
 }

@@ -53,7 +53,7 @@ assert.equal(
   'sdlc-plan',
 )
 assert.equal(normalizeWizardStep('ide-and-tools'), 'project-shape')
-assert.equal(normalizeWizardStep('review-resolve'), 'generation')
+assert.equal(normalizeWizardStep('review-resolve'), 'ship')
 assert.ok(parseRemoteUpdatedAt('2026-09-11T10:00:00') > 0)
 
 assert.equal(

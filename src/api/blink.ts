@@ -459,6 +459,176 @@ export async function fetchProject(id: string): Promise<ProjectDto> {
   return response.json() as Promise<ProjectDto>
 }
 
+export interface CanonicalEligibilityDto {
+  spineVersion?: string
+  currentStep?: string
+  completedThrough?: string
+  completedIndex?: number
+  allowedSteps?: string[]
+  shipSubstage?: string
+  allowedShipSubstages?: string[]
+  maxShipSubstage?: string
+}
+
+export interface ShipStepDto {
+  id: number
+  stepKind: string
+  status: string
+  payload?: unknown
+  result?: unknown
+  idempotencyKey?: string | null
+  createdAt?: string
+  finishedAt?: string | null
+}
+
+export interface ShipSessionDetailDto {
+  id: string
+  scopeKind?: string
+  substage: string
+  status: string
+  updatedAt?: string
+  scopeRef?: string
+  allowedSubstages?: string[]
+  maxSubstage?: string
+  recentSteps?: ShipStepDto[]
+}
+
+export interface CanonicalSnapshotDto {
+  projectId: number
+  revision: number
+  wizardDigest?: string
+  stageSpine?: string
+  eligibility: CanonicalEligibilityDto
+  blockers?: unknown
+  metadata?: unknown
+  migratedFromWizard?: boolean
+  updatedAt?: string
+}
+
+export async function fetchCanonicalSnapshot(projectId: string): Promise<CanonicalSnapshotDto> {
+  const url = apiUrl(`/projects/${projectId}/canonical/snapshot`)
+  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<CanonicalSnapshotDto>
+}
+
+export type CanonicalGateKind =
+  | 'shape'
+  | 'g-groom'
+  | 'g-plan'
+  | 'repository-roster'
+  | 'repo-technology-all'
+
+export async function confirmCanonicalGate(
+  projectId: string,
+  kind: CanonicalGateKind,
+  digest: string,
+  expectedRevision?: number | null,
+): Promise<{ status: string; snapshot: CanonicalSnapshotDto }> {
+  const url = apiUrl(`/projects/${projectId}/canonical/gates/confirm`)
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({
+      kind,
+      digest,
+      expectedRevision: expectedRevision ?? undefined,
+    }),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ status: string; snapshot: CanonicalSnapshotDto }>
+}
+
+export interface GraphViewDto {
+  revision: number
+  graphDigest: string
+  cycles: string[][]
+  frontier: string[]
+  executionOrder: string[]
+}
+
+export async function fetchCanonicalGraph(projectId: string): Promise<GraphViewDto> {
+  const url = apiUrl(`/projects/${projectId}/canonical/graph`)
+  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<GraphViewDto>
+}
+
+export async function fetchRequirementRevisionHistory(
+  projectId: string,
+  view?: string,
+): Promise<{ revisions: { id: number; revisionNo: number; viewKind: string; contentDigest: string; createdAt: string }[] }> {
+  const q = view ? `?view=${encodeURIComponent(view)}` : ''
+  const url = apiUrl(`/projects/${projectId}/canonical/requirements/history${q}`)
+  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ revisions: { id: number; revisionNo: number; viewKind: string; contentDigest: string; createdAt: string }[] }>
+}
+
+export async function fetchShipSession(projectId: string): Promise<{ session: ShipSessionDetailDto | null }> {
+  const url = apiUrl(`/projects/${projectId}/canonical/ship/session`)
+  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ session: ShipSessionDetailDto | null }>
+}
+
+export async function shipCheckpoint(
+  projectId: string,
+  body: { substage: string; stepKind?: string; idempotencyKey?: string; payload?: Record<string, unknown> },
+): Promise<{ status: string; session: { id: string; substage: string } | null }> {
+  const url = apiUrl(`/projects/${projectId}/canonical/ship/checkpoint`)
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ status: string; session: { id: string; substage: string } | null }>
+}
+
+export async function fetchGroomingReadiness(projectId: string): Promise<{
+  readiness: {
+    questionCount: number
+    mandatoryPending: number
+    answeredMandatory: number
+    groomAcknowledged: boolean
+    readyForGGroom: boolean
+  }
+}> {
+  const url = apiUrl(`/projects/${projectId}/canonical/grooming-readiness`)
+  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{
+    readiness: {
+      questionCount: number
+      mandatoryPending: number
+      answeredMandatory: number
+      groomAcknowledged: boolean
+      readyForGGroom: boolean
+    }
+  }>
+}
+
+export async function syncCanonicalWizardDraft(
+  projectId: string,
+  expectedRevision?: number | null,
+): Promise<CanonicalSnapshotDto> {
+  const url = apiUrl(`/projects/${projectId}/canonical/commands/execute`)
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({
+      command: 'sync-wizard-draft',
+      expectedRevision: expectedRevision ?? undefined,
+      idempotencyKey: '',
+      payload: {},
+    }),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  await response.json()
+  return fetchCanonicalSnapshot(projectId)
+}
+
 export async function fetchMyProject(): Promise<ProjectDto | null> {
   const url = apiUrl('/projects/mine')
   const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })

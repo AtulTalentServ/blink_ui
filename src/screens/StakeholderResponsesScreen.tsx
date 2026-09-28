@@ -634,6 +634,17 @@ export function StakeholderResponsesScreen({
                     disabled={!onUpdate || (!emptyQa && !loopSettled)}
                     onClick={() => {
                       onUpdate?.({ groomAcknowledged: true, groomRejectPending: false })
+                      const projectId = state.projectId
+                      if (projectId) {
+                        void import('../wizard/gates.ts').then(({ groomSessionDigest, persistCanonicalGate }) =>
+                          persistCanonicalGate(
+                            projectId,
+                            'g-groom',
+                            groomSessionDigest(state),
+                            state.canonicalRevision,
+                          ).then((patch) => onUpdate?.(patch)),
+                        )
+                      }
                     }}
                   >
                     Acknowledge G-GROOM

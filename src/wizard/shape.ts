@@ -1,8 +1,26 @@
+import { substageFromLegacyStep } from './ship.ts'
 import { STEP_ORDER } from './steps.ts'
 import type { WizardState, WizardStep } from './types.ts'
 
-/** Saved drafts from before Release became its own phase. */
-export const WIZARD_LAYOUT_VERSION = 6
+/** Saved drafts from before Ship consolidated workspace/implementation/review/release. */
+export const WIZARD_LAYOUT_VERSION = 7
+
+/** Pre-ship sidebar order (welcome + 12 working steps). Used only for layout migrations. */
+export const LEGACY_STEP_ORDER_PRE_SHIP: WizardStep[] = [
+  'welcome',
+  'project-stakeholders',
+  'integrations',
+  'requirements',
+  'stakeholder-qa',
+  'project-shape',
+  'repositories',
+  'technology-per-repo',
+  'sdlc-plan',
+  'generation',
+  'implementation',
+  'review-pr',
+  'release',
+]
 
 export const WIZARD_STEPS_V1: WizardStep[] = [
   'welcome',
@@ -241,11 +259,11 @@ function applyV3ToV4(input: {
   completedThrough: number
   state: WizardState
 }): { step: WizardStep; completedThrough: number; state: WizardState } {
-  const workspaceIdx = indexIn(STEP_ORDER, 'generation')
+  const workspaceIdx = indexIn(LEGACY_STEP_ORDER_PRE_SHIP, 'generation')
   return {
     step: input.step === 'implementation' ? 'generation' : input.step,
     completedThrough: Math.min(input.completedThrough, workspaceIdx),
-    state: { ...input.state, wizardLayoutVersion: WIZARD_LAYOUT_VERSION },
+    state: { ...input.state, wizardLayoutVersion: 4 },
   }
 }
 
@@ -255,11 +273,11 @@ function applyV4ToV5(input: {
   completedThrough: number
   state: WizardState
 }): { step: WizardStep; completedThrough: number; state: WizardState } {
-  const implementationIdx = indexIn(STEP_ORDER, 'implementation')
+  const implementationIdx = indexIn(LEGACY_STEP_ORDER_PRE_SHIP, 'implementation')
   return {
     step: input.step === 'review-pr' ? 'implementation' : input.step,
     completedThrough: Math.min(input.completedThrough, implementationIdx),
-    state: { ...input.state, wizardLayoutVersion: WIZARD_LAYOUT_VERSION },
+    state: { ...input.state, wizardLayoutVersion: 5 },
   }
 }
 
@@ -269,11 +287,44 @@ function applyV5ToV6(input: {
   completedThrough: number
   state: WizardState
 }): { step: WizardStep; completedThrough: number; state: WizardState } {
-  const reviewIdx = indexIn(STEP_ORDER, 'review-pr')
+  const reviewIdx = indexIn(LEGACY_STEP_ORDER_PRE_SHIP, 'review-pr')
   return {
     step: input.step === 'release' ? 'review-pr' : input.step,
     completedThrough: Math.min(input.completedThrough, reviewIdx),
-    state: { ...input.state, wizardLayoutVersion: WIZARD_LAYOUT_VERSION },
+    state: { ...input.state, wizardLayoutVersion: 6 },
+  }
+}
+
+function applyV6ToV7(input: {
+  step: WizardStep
+  completedThrough: number
+  state: WizardState
+}): { step: WizardStep; completedThrough: number; state: WizardState } {
+  const shipIdx = indexIn(STEP_ORDER, 'ship')
+  let step = input.step
+  let substage = input.state.shipSubstage || 'workspace'
+  if (
+    step === 'generation'
+    || step === 'implementation'
+    || step === 'review-pr'
+    || step === 'release'
+  ) {
+    substage = substageFromLegacyStep(step)
+    step = 'ship'
+  }
+  let completedThrough = input.completedThrough
+  if (completedThrough >= indexIn(LEGACY_STEP_ORDER_PRE_SHIP, 'generation')) {
+    completedThrough = shipIdx
+  }
+  completedThrough = Math.min(completedThrough, shipIdx)
+  return {
+    step,
+    completedThrough,
+    state: {
+      ...input.state,
+      shipSubstage: substage,
+      wizardLayoutVersion: WIZARD_LAYOUT_VERSION,
+    },
   }
 }
 
@@ -285,6 +336,14 @@ export function remapWizardProgress(input: {
   const version = input.state.wizardLayoutVersion ?? 0
   if (version >= WIZARD_LAYOUT_VERSION) {
     if (input.step === 'sdlc-scope') return { ...input, step: 'requirements' }
+    if (
+      input.step === 'generation'
+      || input.step === 'implementation'
+      || input.step === 'review-pr'
+      || input.step === 'release'
+    ) {
+      return applyV6ToV7(input)
+    }
     return input
   }
 
@@ -303,6 +362,9 @@ export function remapWizardProgress(input: {
   }
   if ((next.state.wizardLayoutVersion ?? 0) < 6) {
     next = applyV5ToV6(next)
+  }
+  if ((next.state.wizardLayoutVersion ?? 0) < 7) {
+    next = applyV6ToV7(next)
   }
   return next
 }

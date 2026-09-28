@@ -44,6 +44,14 @@ import {
   buildDownloadStructure,
   sanitizeDownloadStructure,
 } from '../wizard/defaults'
+import { syncCanonicalWizardDraft } from '../api/blink'
+import {
+  applyShapeAcknowledgement,
+  confirmAllRepoTechnologies,
+  confirmRepositoryRoster,
+  persistCanonicalGate,
+  shapeGateDigest,
+} from '../wizard/gates'
 import { computeReadiness, type WizardState, type WizardStep } from '../wizard/types'
 import { buildReviewIssues } from '../wizard/reviewIssues'
 
@@ -296,6 +304,9 @@ export function RepositoriesScreen({
 }: ScreenProps & {
   creating?: boolean
 }) {
+  const [rosterBusy, setRosterBusy] = useState(false)
+  const [rosterError, setRosterError] = useState<string | null>(null)
+
   useEffect(() => {
     if (state.repositoriesTouched) return
     const shape = shapeFrom(state)
@@ -357,6 +368,25 @@ export function RepositoriesScreen({
   const github = state.integrations?.find((item) => item.id === 'github')
   const githubReady = Boolean(github?.connected)
   const namedCount = repositories.filter((r) => r.name.trim()).length
+
+  const confirmRoster = async () => {
+    const projectId = state.projectId
+    if (!projectId) {
+      setRosterError('Save the project before confirming the roster.')
+      return
+    }
+    setRosterBusy(true)
+    setRosterError(null)
+    try {
+      await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
+      const canonicalPatch = await confirmRepositoryRoster(projectId, state.canonicalRevision)
+      onUpdate({ repositoriesTouched: true, ...canonicalPatch })
+    } catch (err) {
+      setRosterError(err instanceof Error ? err.message : 'Could not confirm repository roster.')
+    } finally {
+      setRosterBusy(false)
+    }
+  }
 
   return (
     <div className="screen shape-screen">
@@ -495,6 +525,30 @@ export function RepositoriesScreen({
           ))}
         </div>
       )}
+
+      {repositories.length > 0 ? (
+        <section className="card shape-section" style={{ marginTop: '1rem' }}>
+          <div className="shape-section-head">
+            <h3 className="card-title">Repository roster (human gate)</h3>
+            <span className="shape-section-meta">Required before Technology</span>
+          </div>
+          <p className="muted">
+            Confirm the named repositories and topology match what you intend to implement. Edits after
+            confirmation invalidate this gate until you confirm again.
+          </p>
+          {rosterError ? <p className="sdlc-timeline__outcome is-blocked">{rosterError}</p> : null}
+          <div className="ship-actions" style={{ marginTop: '0.75rem' }}>
+            <button
+              type="button"
+              className="primary-btn"
+              disabled={rosterBusy || namedCount === 0}
+              onClick={() => void confirmRoster()}
+            >
+              {rosterBusy ? 'Confirming…' : 'Confirm repository roster'}
+            </button>
+          </div>
+        </section>
+      ) : null}
     </div>
   )
 }
@@ -503,6 +557,8 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
   const shape = shapeFrom(state)
   const repositories = state.repositories || []
   const techRows = state.repoTechnologies || []
+  const [techBusy, setTechBusy] = useState(false)
+  const [techError, setTechError] = useState<string | null>(null)
 
   useEffect(() => {
     const missing = repositories.filter((repo) => !techRows.some((t) => t.repoId === repo.id))
@@ -530,12 +586,27 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     })
   }
 
-  const confirmAll = () => {
-    onUpdate({
-      repoTechnologies: techRows.map((t) =>
-        t.status === 'recommendation' || t.status === 'tbd' ? { ...t, status: 'confirmed' as const } : t,
-      ),
-    })
+  const confirmAll = async () => {
+    const nextRows = techRows.map((t) =>
+      t.status === 'recommendation' || t.status === 'tbd' ? { ...t, status: 'confirmed' as const } : t,
+    )
+    onUpdate({ repoTechnologies: nextRows })
+    const projectId = state.projectId
+    if (!projectId) {
+      setTechError('Save the project before confirming technology.')
+      return
+    }
+    setTechBusy(true)
+    setTechError(null)
+    try {
+      await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
+      const canonicalPatch = await confirmAllRepoTechnologies(projectId, state.canonicalRevision)
+      onUpdate(canonicalPatch)
+    } catch (err) {
+      setTechError(err instanceof Error ? err.message : 'Could not confirm technology.')
+    } finally {
+      setTechBusy(false)
+    }
   }
 
   const pending = techRows.filter((t) => t.status !== 'confirmed').length
@@ -548,11 +619,12 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
           <p>Confirm the stack for each repository.</p>
         </div>
         {pending > 0 ? (
-          <button type="button" className="primary-btn" onClick={confirmAll}>
-            Confirm all ({pending})
+          <button type="button" className="primary-btn" disabled={techBusy} onClick={() => void confirmAll()}>
+            {techBusy ? 'Confirming…' : `Confirm all (${pending})`}
           </button>
         ) : null}
       </div>
+      {techError ? <p className="sdlc-timeline__outcome is-blocked">{techError}</p> : null}
 
       {techRows.length === 0 ? (
         <section className="card empty-panel">
@@ -639,7 +711,23 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
             <input
               type="checkbox"
               checked={Boolean(state.shapeAcknowledged)}
-              onChange={(e) => onUpdate({ shapeAcknowledged: e.target.checked })}
+              onChange={(e) => {
+                if (!e.target.checked) {
+                  onUpdate({ shapeAcknowledged: false, shapeDigest: null })
+                  return
+                }
+                const patch = applyShapeAcknowledgement(state)
+                onUpdate(patch)
+                const projectId = state.projectId
+                if (projectId) {
+                  void persistCanonicalGate(
+                    projectId,
+                    'shape',
+                    shapeGateDigest({ ...state, ...patch }),
+                    state.canonicalRevision,
+                  ).then((canonicalPatch) => onUpdate(canonicalPatch))
+                }
+              }}
             />
             I have reviewed this setup and it is ready for the work plan.
           </label>
