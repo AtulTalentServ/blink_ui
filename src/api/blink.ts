@@ -926,6 +926,23 @@ export async function saveFigmaDesign(payload: {
   return response.json() as Promise<FigmaDesignBindingResult>
 }
 
+export async function chooseStitchDesign(payload: {
+  projectId: string
+  name: string
+  imageUrl?: string
+  stories?: { id: string; title: string }[]
+  jiraIssues?: { sourceId: string; jiraKey: string }[]
+}): Promise<FigmaDesignBindingResult & { figmaUsage?: { fileReads: number; filesCreated: number; fileReadLimit: number; fileCreateLimit: number } }> {
+  const url = apiUrl('/integrations/stitch/designs/choose')
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) throw new ApiRequestError(await readError(response), response.status)
+  return response.json() as Promise<FigmaDesignBindingResult & { figmaUsage?: { fileReads: number; filesCreated: number; fileReadLimit: number; fileCreateLimit: number } }>
+}
+
 export async function proposeStitchDesigns(payload: {
   projectName?: string
   requirementText?: string

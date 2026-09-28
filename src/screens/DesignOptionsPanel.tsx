@@ -7,6 +7,7 @@ import {
   ingestFigmaDesign,
   apiUrl,
   proposeStitchDesigns,
+  chooseStitchDesign,
   saveFigmaDesign,
   type FigmaFileItem,
 } from '../api/blink'
@@ -358,17 +359,43 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
 
   const chooseDesign = (option: DesignOption) => {
     setChosenId(option.id)
-    const message = `Chose ${option.name}. In Stitch, export this screen to Figma, then bind that file below.`
+    if (!state.projectId) {
+      setError('Save the project before choosing a design.')
+      return
+    }
+    setGenerating(true)
+    setError(null)
+    const message = `Creating ${option.name} in Figma.`
     setStitchMessage(message)
-    onUpdate({
-      designOptions: {
-        ...(state.designOptions || {}),
-        status: 'ready',
-        chosenId: option.id,
-        message,
-        options: stitchOptions,
-      },
+    void chooseStitchDesign({
+      projectId: state.projectId,
+      name: option.name,
+      imageUrl: option.imageUrl,
+      stories: figmaStoryRefs(state),
+      jiraIssues: figmaJiraRefs(state),
     })
+      .then((result) => {
+        const usage = result.figmaUsage
+        const budget = usage
+          ? ` Figma demo today: ${usage.filesCreated} of ${usage.fileCreateLimit} files, ${usage.fileReads} of ${usage.fileReadLimit} reads.`
+          : ''
+        const next = `Chose ${option.name}. Blink created the Figma file and will comment on the linked Jira ticket when that file changes.${budget}`
+        setStitchMessage(next)
+        onUpdate({
+          figmaDesign: designFromBinding(result, state.figmaDesign),
+          designOptions: {
+            ...(state.designOptions || {}),
+            status: 'ready',
+            chosenId: option.id,
+            message: next,
+            options: stitchOptions,
+          },
+        })
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Could not create the Figma file.')
+      })
+      .finally(() => setGenerating(false))
   }
 
   if (!state.groomConfirmed) return null
@@ -393,7 +420,7 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
       <div className="jira-scope-head">
         <div className="req-section-head">
           <h3>Design options</h3>
-          <p>Blink asks Google Stitch for three screens from the groomed requirement. Pick one, export it to Figma, then bind that file.</p>
+          <p>Blink asks Google Stitch for three screens from the groomed requirement. Pick one and Blink creates that Figma file.</p>
         </div>
         <button type="button" className="text-btn" disabled={generating} onClick={() => void generateDesigns()}>
           {generating ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
