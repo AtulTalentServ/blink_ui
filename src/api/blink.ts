@@ -545,6 +545,16 @@ export interface GraphViewDto {
   cycles: string[][]
   frontier: string[]
   executionOrder: string[]
+  requirementEdges?: GraphEdgeDto[]
+  technicalEdges?: GraphEdgeDto[]
+  effectiveEdges?: GraphEdgeDto[]
+}
+
+export interface GraphEdgeDto {
+  from: string
+  to: string
+  kind: string
+  accepted: boolean
 }
 
 export async function fetchCanonicalGraph(projectId: string): Promise<GraphViewDto> {
@@ -552,6 +562,238 @@ export async function fetchCanonicalGraph(projectId: string): Promise<GraphViewD
   const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
   if (!response.ok) throw new Error(await readError(response))
   return response.json() as Promise<GraphViewDto>
+}
+
+export interface GroomingReadinessDto {
+  sessionDigest: string
+  revision: number
+  questionCount: number
+  mandatoryPending: number
+  openBlockers: number
+  ready: boolean
+  reasons: string[]
+}
+
+export async function fetchGroomingReadiness(projectId: string): Promise<{ readiness: GroomingReadinessDto }> {
+  const url = apiUrl(`/projects/${projectId}/canonical/grooming-readiness`)
+  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ readiness: GroomingReadinessDto }>
+}
+
+export interface CanonicalHistoryEventDto {
+  id: string
+  revision: number
+  eventType: string
+  payload?: unknown
+  actorEmail?: string
+  correlationId?: string
+  createdAt: string
+}
+
+export async function fetchCanonicalHistory(
+  projectId: string,
+  limit = 10,
+): Promise<{ events: CanonicalHistoryEventDto[] }> {
+  const url = apiUrl(`/projects/${projectId}/canonical/history?limit=${encodeURIComponent(String(limit))}`)
+  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ events: CanonicalHistoryEventDto[] }>
+}
+
+export async function upsertCanonicalGroomingQuestion(
+  projectId: string,
+  body: { key: string; prompt: string; mandatory: boolean; assignedRoleId?: string; sourceDigest?: string },
+): Promise<{ questionId: string }> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/grooming/questions`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ questionId: string }>
+}
+
+export async function recordCanonicalGroomingAnswer(
+  projectId: string,
+  body: { questionKey: string; answer: string; status?: string; evidence?: Record<string, unknown> },
+): Promise<{ answerId: string }> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/grooming/answers`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ answerId: string }>
+}
+
+export async function recordCanonicalGroomingDecision(
+  projectId: string,
+  key: string,
+  decision: Record<string, unknown>,
+): Promise<{ decisionId: string }> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/grooming/decisions`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ key, decision }),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ decisionId: string }>
+}
+
+export async function setCanonicalGroomingContext(
+  projectId: string,
+  body: {
+    key: string
+    context: Record<string, unknown>
+    inheritedFromProjectId?: number
+    inheritedFromRevision?: number
+  },
+): Promise<void> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/grooming/contexts`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+}
+
+export async function setCanonicalGroomingBlocker(
+  projectId: string,
+  body: { key: string; severity?: string; message?: string; details?: Record<string, unknown>; resolve?: boolean },
+): Promise<void> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/grooming/blockers`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+}
+
+export interface ArchitecturePinDto {
+  key: string
+  value: unknown
+  digest: string
+}
+
+export interface ArchitectureViewDto {
+  revision: number
+  architecture: Record<string, unknown>
+  digest: string
+  confirmedDigest?: string
+  invalidatedAt?: string
+  pins: ArchitecturePinDto[]
+}
+
+export async function fetchCanonicalArchitecture(projectId: string): Promise<ArchitectureViewDto> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/architecture`), {
+    cache: 'no-store',
+    headers: authHeaders(),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<ArchitectureViewDto>
+}
+
+export async function saveCanonicalArchitecture(
+  projectId: string,
+  architecture: Record<string, unknown>,
+): Promise<{ digest: string }> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/architecture`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ architecture }),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ digest: string }>
+}
+
+export async function confirmCanonicalArchitecture(projectId: string, digest: string): Promise<void> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/architecture`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ confirm: true, digest }),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+}
+
+export async function pinCanonicalArchitecture(
+  projectId: string,
+  key: string,
+  value: Record<string, unknown>,
+): Promise<{ digest: string }> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/architecture/pins`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ key, value }),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ digest: string }>
+}
+
+export interface ExecutionScopeDto {
+  id: string
+  scopeKind: string
+  scopeRef: string
+  status: string
+}
+
+export interface ExecutionLeaseDto {
+  id: string
+  scopeId: string
+  holder: string
+  fencingToken: number
+  expiresAt: string
+}
+
+export async function openExecutionScope(
+  projectId: string,
+  body: { kind: string; ref: string; digest?: string },
+): Promise<ExecutionScopeDto> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/execution/scopes`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<ExecutionScopeDto>
+}
+
+export async function acquireExecutionLease(
+  projectId: string,
+  body: { scopeId: string; leaseId?: string; fencingToken?: number; ttlSeconds?: number; renew?: boolean },
+): Promise<ExecutionLeaseDto> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/execution/leases`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<ExecutionLeaseDto>
+}
+
+export async function recordExecutionEvidence(
+  projectId: string,
+  body: { scopeId: string; leaseId: string; fencingToken: number; kind: string; evidence: Record<string, unknown> },
+): Promise<{ evidenceId: string }> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/execution/evidence`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<{ evidenceId: string }>
+}
+
+export async function recoverExecutionScope(
+  projectId: string,
+  body: { scopeId: string; reason: string },
+): Promise<void> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/execution/recover`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await readError(response))
 }
 
 export async function fetchRequirementRevisionHistory(
@@ -584,29 +826,6 @@ export async function shipCheckpoint(
   })
   if (!response.ok) throw new Error(await readError(response))
   return response.json() as Promise<{ status: string; session: { id: string; substage: string } | null }>
-}
-
-export async function fetchGroomingReadiness(projectId: string): Promise<{
-  readiness: {
-    questionCount: number
-    mandatoryPending: number
-    answeredMandatory: number
-    groomAcknowledged: boolean
-    readyForGGroom: boolean
-  }
-}> {
-  const url = apiUrl(`/projects/${projectId}/canonical/grooming-readiness`)
-  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json() as Promise<{
-    readiness: {
-      questionCount: number
-      mandatoryPending: number
-      answeredMandatory: number
-      groomAcknowledged: boolean
-      readyForGGroom: boolean
-    }
-  }>
 }
 
 export async function syncCanonicalWizardDraft(
