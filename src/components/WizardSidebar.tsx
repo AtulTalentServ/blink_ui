@@ -169,6 +169,7 @@ export function WizardSidebar({
             groomingUnlocked,
             unrestrictedNav,
             Boolean(state.shapeAcknowledged),
+            state.canonicalAllowedSteps,
           )
           const Icon =
             attention === 'done'
@@ -274,6 +275,7 @@ export function WizardSidebar({
               groomingUnlocked,
               unrestrictedNav,
               Boolean(state.shapeAcknowledged),
+              state.canonicalAllowedSteps,
             )
             const Icon =
               attention === 'done'
@@ -297,6 +299,16 @@ export function WizardSidebar({
             )
           })}
         </nav>
+      ) : null}
+
+      {state.canonicalBlockers?.length ? (
+        <div className="sidebar-blockers" aria-label="Canonical blockers">
+          {state.canonicalBlockers.slice(0, 2).map((b) => (
+            <p key={b.code || b.message} className="quiet-hint">
+              {b.message}
+            </p>
+          ))}
+        </div>
       ) : null}
 
       {developerState.enabled ? (

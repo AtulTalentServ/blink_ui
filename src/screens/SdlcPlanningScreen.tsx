@@ -15,6 +15,8 @@ import {
   classifyWork,
   confirmProductScope,
   createSpec,
+  fetchCanonicalGraph,
+  type GraphViewDto,
   sdlcStart,
   technicalPlan,
 } from '../api/blink'
@@ -84,17 +86,9 @@ function stepDone(id: StepId, state: WizardState): boolean {
   }
 }
 
-/** Prevents StrictMode / remount from kicking confirm+/sdlc-start twice. */
-const autoScopeStarted = new Set<string>()
-
 /** Scope already locked on Requirements — nothing left to pick. */
-export function shouldAutoRunScopeStart(state: WizardState): boolean {
-  if (!state.projectId) return false
-  if (scopeConfirmed(state) && state.sdlcStartIssueId) return false
-  const hasScope = Boolean(state.productScope?.epics?.length || state.productScope?.stories?.length)
-  const digest = state.scopeDigest || state.productScope?.proposalDigest || ''
-  const hasOverlays = (state.scopeOverlays || []).length > 0
-  return hasScope && Boolean(digest) && hasOverlays
+export function shouldAutoRunScopeStart(_state: WizardState): boolean {
+  return false
 }
 
 const autoPlanDraftStarted = new Set<string>()
@@ -134,9 +128,11 @@ export function ScopeStartStatus({
 }) {
   const [busy, setBusy] = useState<'confirm' | 'start' | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const auto = shouldAutoRunScopeStart(state)
   const done = scopeConfirmed(state) && Boolean(state.sdlcStartIssueId)
-  const waiting = Boolean(state.groomConfirmed) && !auto && !done
+  const canConfirm =
+    Boolean(state.productScope?.epics?.length || state.productScope?.stories?.length)
+    && (state.scopeOverlays || []).length > 0
+  const waiting = Boolean(state.groomConfirmed) && !done && !canConfirm
 
   const runAutoScope = useCallback(async () => {
     if (!state.projectId) return
@@ -203,17 +199,7 @@ export function ScopeStartStatus({
     }
   }, [onUpdate, state])
 
-  useEffect(() => {
-    if (!auto || busy || done) return
-    const key = state.projectId
-    if (!key || autoScopeStarted.has(key)) return
-    autoScopeStarted.add(key)
-    void runAutoScope()
-    // Snapshot at trigger; in-flight onUpdate must not restart.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, done, state.projectId])
-
-  if (!state.groomConfirmed && !done && !auto) return null
+  if (!state.groomConfirmed && !done) return null
 
   const running = Boolean(busy)
   return (
@@ -251,18 +237,23 @@ export function ScopeStartStatus({
         ) : waiting ? (
           <>
             <strong>Waiting for epics and stories</strong>
-            <p>Once product scope is proposed, Blink locks it and starts the SDLC automatically.</p>
+            <p>Propose product scope first, then confirm it explicitly as a human gate.</p>
           </>
         ) : (
           <>
-            <strong>Ready to start</strong>
-            <p>Blink will lock scope and start the SDLC in the background.</p>
+            <strong>Confirm product scope</strong>
+            <p>Lock scope, then start the SDLC chain — both require your explicit action.</p>
           </>
         )}
       </div>
-      {error && !running ? (
+      {!running && !done && canConfirm ? (
         <button type="button" className="secondary-btn" onClick={() => void runAutoScope()}>
-          {scopeConfirmed(state) && !state.sdlcStartIssueId ? 'Start SDLC' : 'Confirm scope'}
+          {scopeConfirmed(state) && !state.sdlcStartIssueId ? 'Start SDLC' : 'Confirm product scope'}
+        </button>
+      ) : null}
+      {error && !running ? (
+        <button type="button" className="ghost-btn" onClick={() => void runAutoScope()}>
+          Retry
         </button>
       ) : null}
     </section>
@@ -318,6 +309,37 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
   const [busy, setBusy] = useState<StepId | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [lastChange, setLastChange] = useState<string | null>(null)
+  const [graph, setGraph] = useState<GraphViewDto | null>(null)
+  const [graphError, setGraphError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!state.projectId) {
+      setGraph(null)
+      return
+    }
+    let cancelled = false
+    void fetchCanonicalGraph(state.projectId)
+      .then((view) => {
+        if (!cancelled) {
+          setGraph(view)
+          setGraphError(null)
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setGraph(null)
+          setGraphError(err instanceof Error ? err.message : 'Graph not available yet.')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    state.projectId,
+    state.technicalPlan?.markdown,
+    state.technicalPlan?.steps?.length,
+    state.productScope?.stories?.length,
+  ])
 
   const requirementText = requirementTextOf(state)
   const nextId = nextStepId(state)
@@ -357,7 +379,17 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
 
   const acknowledgePlan = useCallback(() => {
     onUpdate({ planAcknowledged: true, shipPlanAcknowledged: true })
-    setLastChange('G-PLAN acknowledgement is local product state, not an approval gate.')
+    setLastChange('G-PLAN recorded in Blink canonical state.')
+    if (state.projectId) {
+      void import('../wizard/gates.ts').then(({ persistCanonicalGate, workPlanPackageDigest }) =>
+        persistCanonicalGate(
+          state.projectId!,
+          'g-plan',
+          workPlanPackageDigest(state),
+          state.canonicalRevision,
+        ).then((patch) => onUpdate(patch)),
+      )
+    }
   }, [onUpdate, state])
 
   const rejectPlan = useCallback(() => {
@@ -571,6 +603,43 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
         })}
       </ol>
 
+      {graph || graphError ? (
+        <section className="card shape-section" style={{ marginTop: '1rem' }}>
+          <div className="sdlc-panel__head">
+            <Map size={18} />
+            <div>
+              <h3>Dependency graph</h3>
+              <p className="muted">
+                Derived from stories and the technical plan. Resolve cycles before acknowledging G-PLAN.
+              </p>
+            </div>
+          </div>
+          {graphError && !graph ? <p className="sdlc-timeline__outcome is-blocked">{graphError}</p> : null}
+          {graph ? (
+            <>
+              {graph.cycles?.length ? (
+                <p className="sdlc-timeline__outcome is-blocked">
+                  {graph.cycles.length} cycle(s):{' '}
+                  {graph.cycles.map((c) => c.join(' → ')).join('; ')}
+                </p>
+              ) : (
+                <p className="sdlc-timeline__outcome">No dependency cycles detected.</p>
+              )}
+              {graph.frontier?.length ? (
+                <p className="muted small">
+                  Frontier: <code>{graph.frontier.join(', ')}</code>
+                </p>
+              ) : null}
+              {graph.executionOrder?.length ? (
+                <p className="muted small">
+                  Suggested order: <code>{graph.executionOrder.join(' → ')}</code>
+                </p>
+              ) : null}
+            </>
+          ) : null}
+        </section>
+      ) : null}
+
       {needsAcAck ? (
         <section className="card shape-section" style={{ marginTop: '1rem' }}>
           <div className="sdlc-panel__head">
@@ -653,18 +722,13 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
 
 export function validateSdlcScope(state: WizardState): string | null {
   if (!scopeConfirmed(state)) {
-    if (shouldAutoRunScopeStart(state)) {
-      return 'Wait for Blink to lock scope and start the SDLC, then continue.'
-    }
     if (!state.productScope?.epics?.length && !state.productScope?.stories?.length) {
-      return 'Wait for epics and stories, then Blink will start the SDLC automatically.'
+      return 'Propose epics and stories, then confirm product scope explicitly.'
     }
-    return 'Wait for Blink to lock product scope, then continue.'
+    return 'Confirm product scope on Requirements before Stakeholder Q&A.'
   }
   if (!state.sdlcStartIssueId) {
-    return shouldAutoRunScopeStart(state)
-      ? 'Wait for Blink to start the SDLC, then continue to Stakeholder Q&A.'
-      : 'Start the SDLC chain before Stakeholder Q&A.'
+    return 'Start the SDLC chain on Requirements before Stakeholder Q&A.'
   }
   return null
 }

@@ -5,11 +5,9 @@ import {
   FileText,
   GitBranch,
   Home,
-  Laptop,
   Layers,
   Link2,
   MessageSquare,
-  SearchCheck,
   Rocket,
   Users,
 } from 'lucide-react'
@@ -38,10 +36,7 @@ export const WIZARD_STEPS: StepDefinition[] = [
   { id: 'repositories', label: 'Repositories', icon: GitBranch, iconColor: '#2563eb' },
   { id: 'technology-per-repo', label: 'Technology', icon: Cpu, iconColor: '#2563eb' },
   { id: 'sdlc-plan', label: 'Work plan', icon: ClipboardList, iconColor: '#2563eb' },
-  { id: 'generation', label: 'Workspace', icon: Rocket, iconColor: '#2563eb' },
-  { id: 'implementation', label: 'Implementation', icon: Laptop, iconColor: '#2563eb' },
-  { id: 'review-pr', label: 'Review & PR', icon: SearchCheck, iconColor: '#2563eb' },
-  { id: 'release', label: 'Release', icon: Rocket, iconColor: '#2563eb' },
+  { id: 'ship', label: 'Ship', icon: Rocket, iconColor: '#2563eb' },
 ]
 
 export const WIZARD_PHASES: PhaseDefinition[] = [
@@ -71,24 +66,9 @@ export const WIZARD_PHASES: PhaseDefinition[] = [
     stepIds: ['sdlc-plan'],
   },
   {
-    id: 'workspace',
-    label: 'Workspace',
-    stepIds: ['generation'],
-  },
-  {
-    id: 'implementation',
-    label: 'Implementation',
-    stepIds: ['implementation'],
-  },
-  {
-    id: 'review-pr',
-    label: 'Review & PR',
-    stepIds: ['review-pr'],
-  },
-  {
-    id: 'release',
-    label: 'Release',
-    stepIds: ['release'],
+    id: 'ship',
+    label: 'Ship',
+    stepIds: ['ship'],
   },
 ]
 
@@ -110,6 +90,18 @@ export function phaseProgressLabel(step: WizardStep): string {
   return `${idx + 1} of ${visible.length}`
 }
 
+export function resolveNavStep(step: WizardStep): WizardStep {
+  if (
+    step === 'generation'
+    || step === 'implementation'
+    || step === 'review-pr'
+    || step === 'release'
+  ) {
+    return 'ship'
+  }
+  return step
+}
+
 export function canNavigateToStep(
   target: WizardStep,
   current: WizardStep,
@@ -117,7 +109,10 @@ export function canNavigateToStep(
   groomingUnlocked = true,
   unrestricted = false,
   shapeAcknowledged = false,
+  canonicalAllowedSteps?: string[] | null,
 ): boolean {
+  target = resolveNavStep(target)
+  current = resolveNavStep(current)
   if (unrestricted) return stepIndex(target) >= 0
   if (target === 'welcome') return true
   // Leaving welcome is only via Start (unrestricted / completedThrough), not sidebar nav.
@@ -125,6 +120,9 @@ export function canNavigateToStep(
   const targetIdx = stepIndex(target)
   const currentIdx = stepIndex(current)
   if (targetIdx < 0) return false
+  if (canonicalAllowedSteps?.length && !canonicalAllowedSteps.includes(target)) {
+    return false
+  }
   const reqIdx = stepIndex('requirements')
   if (targetIdx > reqIdx && !groomingUnlocked) return false
   const planIdx = stepIndex('sdlc-plan')
@@ -147,11 +145,12 @@ export function stepAttention(
 ): StepAttention {
   const idx = stepIndex(stepId)
   if (stepId === 'welcome') return current === 'welcome' ? 'active' : 'idle'
-  const generationIdx = stepIndex('generation')
-  const skipped = generationComplete && idx > completedThrough && idx < generationIdx
+  const shipIdx = stepIndex('ship')
+  const skipped = generationComplete && idx > completedThrough && idx < shipIdx
   if (skipped) return 'skipped'
-  if (stepId === current) return 'active'
-  if (idx <= completedThrough || (generationComplete && stepId === 'generation')) {
+  const currentNav = resolveNavStep(current)
+  if (stepId === currentNav || (stepId === 'ship' && currentNav === 'ship')) return 'active'
+  if (idx <= completedThrough || (generationComplete && stepId === 'ship')) {
     if (stepId === 'technology-per-repo' && !state.shapeAcknowledged) return 'attention'
     if (stepId === 'stakeholder-qa') {
       if (!state.groomAcknowledged) return 'attention'

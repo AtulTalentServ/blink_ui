@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
-import { fetchStakeholderRoles } from '../api/blink'
+import { configureStakeholders, confirmStakeholders, fetchStakeholderRoles } from '../api/blink'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import {
   STAKEHOLDER_ROLES,
@@ -55,6 +55,8 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
   const [roles, setRoles] = useState<StakeholderRoleDef[]>(STAKEHOLDER_ROLES)
   const [catalogQuiet, setCatalogQuiet] = useState<string | null>('Loading directory…')
   const [removeTarget, setRemoveTarget] = useState<{ id: string; label: string } | null>(null)
+  const [confirmBusy, setConfirmBusy] = useState(false)
+  const [confirmError, setConfirmError] = useState<string | null>(null)
   const dirtyRef = useRef(false)
   const catalogLoadedRef = useRef(state.stakeholdersCatalogLoaded)
   const assignmentsRef = useRef(state.stakeholderAssignments)
@@ -117,6 +119,8 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
   const updateRow = (id: string, field: 'roleId' | 'personName' | 'personEmail', value: string) => {
     dirtyRef.current = true
     onUpdate({
+      stakeholdersConfirmed: false,
+      stakeholdersConfirmationDigest: null,
       stakeholderAssignments: state.stakeholderAssignments.map((a) => {
         if (a.id !== id) return a
         if (field !== 'roleId') return { ...a, [field]: value }
@@ -135,6 +139,8 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
     dirtyRef.current = true
     const fallback = roles[0] ?? STAKEHOLDER_ROLES[0]
     onUpdate({
+      stakeholdersConfirmed: false,
+      stakeholdersConfirmationDigest: null,
       stakeholderAssignments: [
         ...state.stakeholderAssignments,
         {
@@ -287,6 +293,51 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
             </div>
           )}
         </div>
+
+        {state.projectId ? (
+          <div className="stakeholder-confirm-row">
+            {state.stakeholdersConfirmed ? (
+              <p className="status-banner success">Stakeholder registry confirmed.</p>
+            ) : (
+              <>
+                <p className="quiet-hint">
+                  Save the project, then confirm the registry as an explicit human gate.
+                </p>
+                {confirmError ? <p className="status-banner error">{confirmError}</p> : null}
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  disabled={confirmBusy || Boolean(validateProjectStakeholders(state))}
+                  onClick={() => {
+                    void (async () => {
+                      if (!state.projectId) return
+                      setConfirmBusy(true)
+                      setConfirmError(null)
+                      try {
+                        await configureStakeholders(state.projectId)
+                        const res = await confirmStakeholders(state.projectId)
+                        if (res.status !== 'ok') {
+                          throw new Error(res.message || res.errors?.join('; ') || 'Confirm failed')
+                        }
+                        onUpdate({
+                          stakeholdersConfirmed: true,
+                          stakeholdersConfirmationDigest: res.confirmationDigest || null,
+                          nextSdlcCommand: res.nextCommand || state.nextSdlcCommand,
+                        })
+                      } catch (err) {
+                        setConfirmError(err instanceof Error ? err.message : 'Could not confirm stakeholders.')
+                      } finally {
+                        setConfirmBusy(false)
+                      }
+                    })()
+                  }}
+                >
+                  {confirmBusy ? 'Confirming…' : 'Confirm stakeholder registry'}
+                </button>
+              </>
+            )}
+          </div>
+        ) : null}
       </section>
 
       {removeTarget && (

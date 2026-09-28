@@ -96,7 +96,17 @@ function readinessGap(state: WizardState): { target: WizardStep; action: string;
   return null
 }
 
+function journeyStep(step: WizardStep, state: WizardState): WizardStep {
+  if (step !== 'ship') return step
+  const sub = state.shipSubstage || 'workspace'
+  if (sub === 'implementation') return 'implementation'
+  if (sub === 'review-pr') return 'review-pr'
+  if (sub === 'release') return 'release'
+  return 'generation'
+}
+
 function guidanceFor(state: WizardState, step: WizardStep): Guidance | null {
+  step = journeyStep(step, state)
   if (step === 'sdlc-plan') {
     return {
       stage: 'plan',
