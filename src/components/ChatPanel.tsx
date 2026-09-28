@@ -17,15 +17,9 @@ import {
 } from '../api/blink'
 import { WIZARD_STEPS } from '../wizard/steps'
 import { ChatMarkdown } from './ChatMarkdown'
-
-const MODELS = [
-  { id: 'gpt-5.6-luna', label: 'Luna', hint: 'Fast' },
-  { id: 'terra', label: 'Terra', hint: 'Balanced' },
-  { id: 'sol', label: 'Sol', hint: 'Strong' },
-] as const
+import { CHAT_MODELS, CHAT_MODEL_STORAGE_KEY } from '../developer/chatModels'
 
 const OPEN_KEY = 'blink.chatPanel.open'
-const MODEL_KEY = 'blink.chatPanel.model'
 
 type ChatMode = 'ask' | 'agent'
 
@@ -76,7 +70,7 @@ interface Props {
 export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChange }: Props) {
   const [model, setModel] = useState<string>(() => {
     try {
-      return localStorage.getItem(MODEL_KEY) || 'gpt-5.6-luna'
+      return localStorage.getItem(CHAT_MODEL_STORAGE_KEY) || 'gpt-5.6-luna'
     } catch {
       return 'gpt-5.6-luna'
     }
@@ -132,11 +126,19 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
 
   useEffect(() => {
     try {
-      localStorage.setItem(MODEL_KEY, model)
+      localStorage.setItem(CHAT_MODEL_STORAGE_KEY, model)
     } catch {
       /* ignore */
     }
   }, [model])
+
+  useEffect(() => {
+    const syncModel = (event: StorageEvent) => {
+      if (event.key === CHAT_MODEL_STORAGE_KEY && event.newValue) setModel(event.newValue)
+    }
+    window.addEventListener('storage', syncModel)
+    return () => window.removeEventListener('storage', syncModel)
+  }, [])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -488,7 +490,7 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
                       disabled={busy}
                       title="Model"
                     >
-                      {MODELS.map((m) => (
+                      {CHAT_MODELS.map((m) => (
                         <option key={m.id} value={m.id}>
                           {m.label} · {m.hint}
                         </option>

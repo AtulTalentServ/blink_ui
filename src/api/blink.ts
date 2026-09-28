@@ -2,6 +2,7 @@ import { sanitizeDownloadStructure } from '../wizard/defaults'
 import type { DesignOption, ProductScopeData, WizardState } from '../wizard/types'
 import { stripExcludedZipFolders } from './stripZipFolders'
 import { loadAuthSession } from '../auth/session'
+import { CHAT_MODEL_STORAGE_KEY } from '../developer/chatModels'
 
 export interface StakeholderRoleDto {
   roleCode: string
@@ -85,6 +86,12 @@ function authHeaders(json = false): HeadersInit {
   }
   const session = loadAuthSession()
   if (session?.token) headers.Authorization = `Bearer ${session.token}`
+  try {
+    const selectedModel = localStorage.getItem(CHAT_MODEL_STORAGE_KEY)
+    if (selectedModel) headers['X-Blink-AI-Model'] = selectedModel
+  } catch {
+    /* Model selection is optional; requests remain usable if browser storage is unavailable. */
+  }
   return headers
 }
 
