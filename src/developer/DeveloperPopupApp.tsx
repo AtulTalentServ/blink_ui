@@ -9,6 +9,7 @@ import { DeveloperModeProvider, useDeveloperMode } from './DeveloperModeContext'
 import { loadDeveloperSession, subscribeDeveloperSession, type DeveloperSessionSnapshot } from './session'
 import { S3WorkspacesPanel } from './S3WorkspacesPanel'
 import { JiraEpicsPanel } from './JiraEpicsPanel'
+import { CHAT_MODELS, CHAT_MODEL_STORAGE_KEY } from './chatModels'
 
 function SessionBlock() {
   const { has } = useDeveloperMode()
@@ -35,6 +36,42 @@ function SessionBlock() {
           <dd>{session?.groomingUnlocked ? 'ready' : 'locked'}</dd>
         </div>
       </dl>
+    </section>
+  )
+}
+
+function ChatModelPanel() {
+  const [model, setModel] = useState(() => {
+    try {
+      return localStorage.getItem(CHAT_MODEL_STORAGE_KEY) || 'gpt-5.6-luna'
+    } catch {
+      return 'gpt-5.6-luna'
+    }
+  })
+
+  const selectModel = (next: string) => {
+    setModel(next)
+    try {
+      localStorage.setItem(CHAT_MODEL_STORAGE_KEY, next)
+    } catch {
+      /* The chat can still use this window's selected value when storage is unavailable. */
+    }
+  }
+
+  return (
+    <section className="dev-chat-model">
+      <h2>AI model</h2>
+      <p>Used by Blink chat and all AI operations. Credentials stay in the runtime environment.</p>
+      <label>
+        <span>Provider and model</span>
+        <select value={model} onChange={(event) => selectModel(event.target.value)}>
+          {CHAT_MODELS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label} · {option.hint}
+            </option>
+          ))}
+        </select>
+      </label>
     </section>
   )
 }
@@ -101,6 +138,7 @@ function DeveloperToolsPage() {
       </div>
 
       <SessionBlock />
+      <ChatModelPanel />
 
       <S3WorkspacesPanel />
       <JiraEpicsPanel />
