@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
-import { downloadWorkspace, fetchWorkspaceStatus, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, fetchCanonicalSnapshot, syncCanonicalWizardDraft, shipCheckpoint, apiUrl, type ProjectPayload } from './api/blink'
+import { downloadWorkspace, fetchWorkspaceStatus, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, syncCanonicalWizardDraft, shipCheckpoint, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
@@ -194,7 +194,8 @@ export default function App() {
   const [refreshingJira, setRefreshingJira] = useState(false)
   const [simulatingJira, setSimulatingJira] = useState(false)
   const [resettingSimJira, setResettingSimJira] = useState(false)
-  const creatingRepos = false
+  const creatingReposRef = useRef(false)
+  const [creatingRepos, setCreatingRepos] = useState(false)
   const [folderPrep, setFolderPrep] = useState<'idle' | 'preparing' | 'ready' | 'failed'>('idle')
   const [folderProgress, setFolderProgress] = useState({ percent: 0, copied: 0, total: 0 })
   const [folderQuery, setFolderQuery] = useState<{ name: string; id?: string } | null>(null)
@@ -712,19 +713,92 @@ export default function App() {
   }, [folderPrep])
 
   const handleCreateGithubRepos = useCallback(async (): Promise<boolean> => {
-    const names = (state.repositories || [])
-      .map((repository) => repository.name.trim())
-      .filter(Boolean)
-    if (!names.length) {
-      setStatus({ type: 'error', message: 'Add at least one repository name before preparing manual setup instructions.' })
+    if (creatingReposRef.current) return false
+    const github = state.integrations?.find((item) => item.id === 'github')
+    if (!github?.connected || !state.projectId) {
+      setStatus({ type: 'error', message: 'Connect GitHub on the Integrations screen first.' })
       return false
     }
-    setStatus({
-      type: 'info',
-      message: `Create ${names.join(', ')} manually in GitHub, then return to Blink and add each repository URL. Blink does not create repositories or record GitHub gate evidence.`,
-    })
-    return false
-  }, [state.repositories])
+    const repositories = state.repositories || []
+    const pending = repositories.filter(
+      (repository) =>
+        repository.name.trim()
+        && repository.createStatus !== 'created'
+        && repository.createStatus !== 'exists',
+    )
+    if (!pending.length) {
+      if (!repositories.some((repository) => repository.name.trim())) {
+        setStatus({ type: 'error', message: 'Add at least one repository name.' })
+        return false
+      }
+      return true
+    }
+
+    creatingReposRef.current = true
+    setCreatingRepos(true)
+    setStatus(null)
+    try {
+      const result = await createRepositories({
+        provider: 'github',
+        projectId: state.projectId,
+        organization: github.organization,
+        repositories: pending.map((repository) => ({
+          name: repository.name.trim(),
+          description: repository.description,
+        })),
+      })
+      const createdRows = result.repositories || []
+      patch({
+        repositoriesTouched: true,
+        repositories: repositories.map((repository) => {
+          const created = createdRows.find((item) => item.name === repository.name.trim())
+          if (!created) return repository
+          return {
+            ...repository,
+            htmlUrl: created.htmlUrl ?? repository.htmlUrl,
+            createStatus: created.status as 'created' | 'exists' | 'failed',
+            createMessage: created.message,
+          }
+        }),
+      })
+      const created = createdRows.filter((item) => item.status === 'created').length
+      const exists = createdRows.filter((item) => item.status === 'exists').length
+      const failed = createdRows.filter((item) => item.status === 'failed').length
+      if (failed && !created && !exists) {
+        setStatus({
+          type: 'error',
+          message: createdRows.map((item) => item.message).filter(Boolean).join(' ') || 'Could not create GitHub repositories.',
+        })
+        return false
+      }
+      if (state.bootstrapAcknowledged && (created > 0 || exists > 0)) {
+        const issueKey =
+          state.jiraCreatedIssues?.find((item) => item.jiraKey)?.jiraKey
+          || state.sdlcStartIssueId
+          || state.workClassification?.issueId
+          || state.specification?.issueId
+          || state.productScope?.storyIds?.[0]
+        if (issueKey) {
+          void postJiraGateEvidence(state.projectId, {
+            issueKey,
+            gate: 'G-BOOTSTRAP',
+            message: 'Human G-BOOTSTRAP acknowledgement plus remotes created.',
+          }).catch(() => undefined)
+        }
+      }
+      setStatus({
+        type: failed ? 'info' : 'success',
+        message: `GitHub: ${created} created, ${exists} already existed, ${failed} failed.`,
+      })
+      return failed === 0
+    } catch (err) {
+      setStatus({ type: 'error', message: err instanceof Error ? err.message : 'Could not create GitHub repositories.' })
+      return false
+    } finally {
+      creatingReposRef.current = false
+      setCreatingRepos(false)
+    }
+  }, [patch, state.bootstrapAcknowledged, state.integrations, state.jiraCreatedIssues, state.productScope, state.projectId, state.repositories, state.sdlcStartIssueId, state.specification, state.workClassification])
 
   const goNext = useCallback(async () => {
     const err = skipStepValidation ? null : validateCurrentStep()
