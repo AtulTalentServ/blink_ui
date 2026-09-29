@@ -7,7 +7,6 @@ import {
   ingestFigmaDesign,
   apiUrl,
   proposeStitchDesigns,
-  chooseStitchDesign,
   saveFigmaDesign,
   type FigmaFileItem,
 } from '../api/blink'
@@ -239,7 +238,25 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
           stories: figmaStoryRefs({ ...state, figmaDesign: previous }),
           jiraIssues: figmaJiraRefs(state),
         })
-        await applyBound(designFromBinding(result, previous))
+        const bound = designFromBinding(result, previous)
+        const next = chosenId
+          ? 'This file is bound. Later edits comment on the linked Jira tickets automatically.'
+          : ''
+        if (next) setStitchMessage(next)
+        onUpdate({
+          figmaDesign: bound,
+          ...(chosenId
+            ? {
+                designOptions: {
+                  ...(state.designOptions || {}),
+                  status: 'ready' as const,
+                  chosenId,
+                  message: next,
+                  options: stitchOptions,
+                },
+              }
+            : {}),
+        })
         setShowBind(false)
       } catch (err) {
         try {
@@ -250,7 +267,25 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
             fileName: previous.fileName,
             syncJira: previous.syncJira,
           })
-          await applyBound(designFromBinding(saved, previous))
+          const bound = designFromBinding(saved, previous)
+          const next = chosenId
+            ? 'This file is bound. Later edits comment on the linked Jira tickets automatically.'
+            : ''
+          if (next) setStitchMessage(next)
+          onUpdate({
+            figmaDesign: bound,
+            ...(chosenId
+              ? {
+                  designOptions: {
+                    ...(state.designOptions || {}),
+                    status: 'ready' as const,
+                    chosenId,
+                    message: next,
+                    options: stitchOptions,
+                  },
+                }
+              : {}),
+          })
           setShowBind(false)
         } catch {
           setError(figmaActionError(err, 'Could not bind the Figma file.'))
@@ -259,7 +294,7 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
         setBinding(false)
       }
     },
-    [applyBound, figmaFiles, fileUrl, onUpdate, state],
+    [chosenId, figmaFiles, fileUrl, onUpdate, state, stitchOptions],
   )
 
   const openBind = () => {
@@ -359,43 +394,19 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
 
   const chooseDesign = (option: DesignOption) => {
     setChosenId(option.id)
-    if (!state.projectId) {
-      setError('Save the project before choosing a design.')
-      return
-    }
-    setGenerating(true)
     setError(null)
-    const message = `Creating ${option.name} in Figma.`
+    const message = `You picked ${option.name}. Copy that screen into Figma, then bind the file URL below.`
     setStitchMessage(message)
-    void chooseStitchDesign({
-      projectId: state.projectId,
-      name: option.name,
-      imageUrl: option.imageUrl,
-      stories: figmaStoryRefs(state),
-      jiraIssues: figmaJiraRefs(state),
+    if (figmaConnected && !hasFigmaFile) setShowBind(true)
+    onUpdate({
+      designOptions: {
+        ...(state.designOptions || {}),
+        status: 'ready',
+        chosenId: option.id,
+        message,
+        options: stitchOptions,
+      },
     })
-      .then((result) => {
-        const usage = result.figmaUsage
-        const budget = usage
-          ? ` Figma demo today: ${usage.filesCreated} of ${usage.fileCreateLimit} files, ${usage.fileReads} of ${usage.fileReadLimit} reads.`
-          : ''
-        const next = `Chose ${option.name}. Blink created the Figma file and will comment on the linked Jira ticket when that file changes.${budget}`
-        setStitchMessage(next)
-        onUpdate({
-          figmaDesign: designFromBinding(result, state.figmaDesign),
-          designOptions: {
-            ...(state.designOptions || {}),
-            status: 'ready',
-            chosenId: option.id,
-            message: next,
-            options: stitchOptions,
-          },
-        })
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Could not create the Figma file.')
-      })
-      .finally(() => setGenerating(false))
   }
 
   if (!state.groomConfirmed) return null
@@ -413,6 +424,7 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
   const syncLocked = syncLockUntil > nowTick
   const rateLimited = syncLocked
   const lastGoodSummary = isRateLimitCopy(design?.lastSyncSummary) ? null : design?.lastSyncSummary
+  const chosenOption = stitchOptions.find((option) => option.id === chosenId)
 
   return (
     <>
@@ -420,14 +432,13 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
       <div className="jira-scope-head">
         <div className="req-section-head">
           <h3>Design options</h3>
-          <p>Blink asks Google Stitch for three screens from the groomed requirement. Pick one and Blink creates that Figma file.</p>
+          <p>Blink asks Google Stitch for three screens from the groomed requirement. Pick one, copy it into Figma, then bind the file URL.</p>
         </div>
         <button type="button" className="text-btn" disabled={generating} onClick={() => void generateDesigns()}>
           {generating ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
           {generating ? 'Generating…' : stitchOptions.length ? 'Generate again' : 'Generate designs'}
         </button>
       </div>
-      {stitchMessage ? <p className="field-hint">{stitchMessage}</p> : null}
       {stitchOptions.length ? (
         <div className="stitch-options">
           {stitchOptions.map((option) => (
@@ -435,14 +446,41 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
               key={option.id}
               type="button"
               className={chosenId === option.id ? 'stitch-option is-chosen' : 'stitch-option'}
+              aria-pressed={chosenId === option.id}
               onClick={() => chooseDesign(option)}
             >
               {option.imageUrl ? <img src={designImageSrc(option.imageUrl)} alt="" referrerPolicy="no-referrer" /> : <span className="design-screen-thumb is-empty"><Layers size={16} /></span>}
               <strong>{option.name}</strong>
               <span>{option.summary}</span>
+              {chosenId === option.id ? <em className="stitch-picked">Selected</em> : null}
             </button>
           ))}
         </div>
+      ) : null}
+      {chosenOption ? (
+        <div className="stitch-handoff">
+          <p>You picked <strong>{chosenOption.name}</strong>.</p>
+          <ol>
+            <li>
+              In <a href="https://stitch.withgoogle.com" target="_blank" rel="noreferrer">Google Stitch</a>, open this screen and choose <strong>Copy to Figma</strong>.
+            </li>
+            <li>Paste it into a file in your Professional team.</li>
+            <li>
+              {hasFigmaFile
+                ? 'This file is already bound. Use Change Figma file if you pasted the screen into a different file.'
+                : figmaConnected
+                  ? 'Copy that file’s URL and paste it in Figma file URL below.'
+                  : 'Connect Figma, then paste that file’s URL below.'}
+            </li>
+          </ol>
+          <p>
+            {hasFigmaFile
+              ? 'Later edits in that file comment on the linked Jira tickets automatically.'
+              : 'After the bind, later edits in that file comment on the linked Jira tickets automatically.'}
+          </p>
+        </div>
+      ) : stitchMessage ? (
+        <p className="field-hint">{stitchMessage}</p>
       ) : null}
     </section>
     <section className="card ref-card jira-scope-panel">
@@ -452,7 +490,7 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
           <p>
             {hasFigmaFile
               ? 'This project is linked to a Figma file. Open it to edit, change the file, or clear the link.'
-              : 'Figma cannot create files from Blink. Open Figma to design, then bind the file here.'}
+              : 'Paste the Figma file URL after you copy the chosen screen into your Professional team.'}
           </p>
         </div>
         {hasFigmaFile ? (
@@ -569,7 +607,7 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
             Open Figma
             <ExternalLink size={14} />
           </a>
-          {!showBind ? (
+          {!(showBind || (chosenOption && figmaConnected)) ? (
             <button type="button" className="text-btn" onClick={openBind}>
               {figmaConnected ? 'Bind a Figma file' : 'Connect Figma'}
             </button>
@@ -577,7 +615,7 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
         </div>
       )}
 
-      {showBind && figmaConnected ? (
+      {(showBind || (chosenOption && !hasFigmaFile)) && figmaConnected ? (
         <div className="design-figma-bind">
           <label htmlFor="design-figma-url">Figma file URL</label>
           <input
@@ -626,9 +664,11 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
                 'Bind this file'
               )}
             </button>
-            <button type="button" className="text-btn" onClick={() => setShowBind(false)}>
-              Cancel
-            </button>
+            {hasFigmaFile ? (
+              <button type="button" className="text-btn" onClick={() => setShowBind(false)}>
+                Cancel
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}
