@@ -3270,6 +3270,11 @@ textarea::placeholder {
   background: var(--primary-soft);
 }
 
+.req-dropzone.is-reading {
+  cursor: progress;
+  opacity: 0.72;
+}
+
 .req-dropzone:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
