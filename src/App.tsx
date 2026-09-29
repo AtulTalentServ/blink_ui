@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
-import { downloadWorkspace, fetchWorkspaceStatus, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, syncCanonicalWizardDraft, shipCheckpoint, apiUrl, type ProjectPayload } from './api/blink'
+import { downloadWorkspace, fetchWorkspaceStatus, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
@@ -1715,6 +1715,35 @@ export default function App() {
 
       let working = nextState
       if (working.projectId) {
+        const canonicalQuestion = working.questions.find((question) => question.id === questionId)
+        if (canonicalQuestion) {
+          try {
+            await upsertCanonicalGroomingQuestion(working.projectId, {
+              key: canonicalQuestion.id,
+              prompt: canonicalQuestion.question,
+              mandatory: Boolean(canonicalQuestion.mandatory),
+              assignedRoleId: canonicalQuestion.assignedRoleId,
+            })
+            await recordCanonicalGroomingAnswer(working.projectId, {
+              questionKey: canonicalQuestion.id,
+              answer: body,
+              status: 'answered',
+              evidence: {
+                source: patchResponse.source || 'manual',
+                receivedAt: patchResponse.receivedAt || new Date().toISOString(),
+                jiraCommentId: patchResponse.jiraCommentId || null,
+              },
+            })
+          } catch (e) {
+            // Legacy projects may predate project-grooming tables. Preserve the existing story workflow.
+            setStatus({
+              type: 'info',
+              message: `Answer saved locally; canonical project grooming sync is unavailable: ${
+                e instanceof Error ? e.message : 'unknown error'
+              }`,
+            })
+          }
+        }
         const mapped = autoMapQuestionsToJira(working.questions, working)
         const question = mapped.find((q) => q.id === questionId)
         if (question?.jiraIssueKey) {

@@ -15,7 +15,10 @@ import {
   classifyWork,
   confirmProductScope,
   createSpec,
+  fetchCanonicalArchitecture,
   fetchCanonicalGraph,
+  pinCanonicalArchitecture,
+  type ArchitectureViewDto,
   type GraphViewDto,
   sdlcStart,
   technicalPlan,
@@ -311,6 +314,8 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
   const [lastChange, setLastChange] = useState<string | null>(null)
   const [graph, setGraph] = useState<GraphViewDto | null>(null)
   const [graphError, setGraphError] = useState<string | null>(null)
+  const [architecture, setArchitecture] = useState<ArchitectureViewDto | null>(null)
+  const [architectureError, setArchitectureError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!state.projectId) {
@@ -341,6 +346,30 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
     state.productScope?.stories?.length,
   ])
 
+  useEffect(() => {
+    if (!state.projectId) {
+      setArchitecture(null)
+      return
+    }
+    let cancelled = false
+    void fetchCanonicalArchitecture(state.projectId)
+      .then((view) => {
+        if (!cancelled) {
+          setArchitecture(view)
+          setArchitectureError(null)
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setArchitecture(null)
+          setArchitectureError(err instanceof Error ? err.message : 'Architecture governance is unavailable.')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [state.projectId, state.shapeDigest])
+
   const requirementText = requirementTextOf(state)
   const nextId = nextStepId(state)
   const complete = nextId === null
@@ -348,6 +377,11 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
   const hasPlan = planReady(state)
   const needsPlanAck = hasPlan && !state.planAcknowledged && !state.shipPlanAcknowledged
   const needsAcAck = specReady(state) && !planReady(state) && !state.acceptanceCriteriaAcknowledged
+  const architectureConfirmed = architecture?.confirmedDigest === architecture?.digest && !architecture?.invalidatedAt
+  const architectureStale = Boolean(architecture && !architectureConfirmed)
+  const graphBlockers = (state.canonicalBlockers || []).filter(
+    (blocker) => (blocker.code || '').includes('graph') || (blocker.message || '').toLowerCase().includes('dependency'),
+  )
 
   const statuses = useMemo(() => {
     const map = {} as Record<StepId, StepStatus>
@@ -389,8 +423,17 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
           state.canonicalRevision,
         ).then((patch) => onUpdate(patch)),
       )
+      if (architectureConfirmed && architecture) {
+        void pinCanonicalArchitecture(state.projectId, 'g-plan-package', {
+          architectureDigest: architecture.digest,
+          planSummary: state.technicalPlan?.summary || '',
+          planSteps: state.technicalPlan?.steps || [],
+        })
+          .then(() => setLastChange('G-PLAN and its confirmed architecture revision are pinned canonically.'))
+          .catch((err) => setError(err instanceof Error ? err.message : 'Could not pin the architecture package.'))
+      }
     }
-  }, [onUpdate, state])
+  }, [architecture, architectureConfirmed, onUpdate, state])
 
   const rejectPlan = useCallback(() => {
     onUpdate({
@@ -635,8 +678,45 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
                   Suggested order: <code>{graph.executionOrder.join(' → ')}</code>
                 </p>
               ) : null}
+              {graph.effectiveEdges?.length ? (
+                <ul className="ship-step-list">
+                  {graph.effectiveEdges.map((edge) => (
+                    <li key={`${edge.from}-${edge.to}-${edge.kind}`}>
+                      <code>{edge.from} → {edge.to}</code>
+                      <span className="muted small">
+                        {edge.kind || 'dependency'} · {edge.accepted ? 'accepted' : 'pending disposition'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <p className={graphBlockers.length ? 'sdlc-timeline__outcome is-blocked' : 'muted small'}>
+                Enforcement: {graphBlockers.length
+                  ? graphBlockers.map((blocker) => blocker.message).join('; ')
+                  : 'No canonical graph enforcement blocker is currently reported.'}
+              </p>
             </>
           ) : null}
+        </section>
+      ) : null}
+
+      {(architecture || architectureError) ? (
+        <section className="card shape-section" style={{ marginTop: '1rem' }}>
+          <div className="sdlc-panel__head">
+            <Layers size={18} />
+            <div>
+              <h3>Architecture readiness</h3>
+              <p className="muted">G-PLAN is pinned to a confirmed architecture revision when available.</p>
+            </div>
+          </div>
+          {architecture ? (
+            <p className={architectureStale ? 'sdlc-timeline__outcome is-blocked' : 'sdlc-timeline__outcome'}>
+              {architectureStale
+                ? 'Architecture is unconfirmed or stale. Return to Project Shape, refresh the baseline, and confirm it.'
+                : `Confirmed architecture revision ${architecture.revision}; package pin will be recorded with G-PLAN.`}
+            </p>
+          ) : null}
+          {architectureError ? <p className="muted small">Compatibility mode: {architectureError}</p> : null}
         </section>
       ) : null}
 
@@ -686,7 +766,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
             I have reviewed the technical plan (G-PLAN)
           </label>
           <div className="ship-actions">
-            <button type="button" className="primary-btn" onClick={acknowledgePlan}>
+            <button type="button" className="primary-btn" onClick={acknowledgePlan} disabled={architectureStale}>
               Acknowledge G-PLAN (human)
             </button>
             <button type="button" className="secondary-btn" onClick={rejectPlan}>

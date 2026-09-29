@@ -44,7 +44,13 @@ import {
   buildDownloadStructure,
   sanitizeDownloadStructure,
 } from '../wizard/defaults'
-import { syncCanonicalWizardDraft } from '../api/blink'
+import {
+  confirmCanonicalArchitecture,
+  fetchCanonicalArchitecture,
+  saveCanonicalArchitecture,
+  syncCanonicalWizardDraft,
+  type ArchitectureViewDto,
+} from '../api/blink'
 import {
   applyShapeAcknowledgement,
   confirmAllRepoTechnologies,
@@ -98,6 +104,80 @@ export function ProjectShapeScreen({ state, onUpdate }: ScreenProps) {
   const topologyLabel = TOPOLOGY_OPTIONS.find((t) => t.id === state.topology)?.label
   const modelLabel = REPO_MODEL_OPTIONS.find((m) => m.id === state.repositoryModel)?.label
   const archLabel = ARCHITECTURE_OPTIONS.find((a) => a.id === state.architectureStyle)?.label
+  const [architecture, setArchitecture] = useState<ArchitectureViewDto | null>(null)
+  const [architectureBusy, setArchitectureBusy] = useState(false)
+  const [architectureError, setArchitectureError] = useState<string | null>(null)
+
+  const architectureBaseline = {
+    topology: state.topology,
+    repositoryModel: state.repositoryModel,
+    architectureStyle: state.architectureStyle,
+    repositories: (state.repositories || []).map((repo) => ({
+      id: repo.id,
+      name: repo.name,
+      purpose: repo.purpose,
+    })),
+  }
+  const architectureIsCurrent = Boolean(
+    architecture && JSON.stringify(architecture.architecture) === JSON.stringify(architectureBaseline),
+  )
+
+  useEffect(() => {
+    if (!state.projectId) {
+      setArchitecture(null)
+      return
+    }
+    let cancelled = false
+    void fetchCanonicalArchitecture(state.projectId)
+      .then((view) => {
+        if (!cancelled) {
+          setArchitecture(view)
+          setArchitectureError(null)
+        }
+      })
+      .catch((cause) => {
+        if (!cancelled) {
+          setArchitecture(null)
+          setArchitectureError(cause instanceof Error ? cause.message : 'Architecture baseline has not been recorded.')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [state.projectId])
+
+  const saveArchitecture = async () => {
+    if (!state.projectId) return
+    setArchitectureBusy(true)
+    try {
+      const result = await saveCanonicalArchitecture(state.projectId, architectureBaseline)
+      setArchitecture({
+        revision: architecture?.revision || 1,
+        architecture: architectureBaseline,
+        digest: result.digest,
+        pins: [],
+      })
+      setArchitectureError(null)
+    } catch (cause) {
+      setArchitectureError(cause instanceof Error ? cause.message : 'Could not save architecture baseline.')
+    } finally {
+      setArchitectureBusy(false)
+    }
+  }
+
+  const confirmArchitecture = async () => {
+    if (!state.projectId || !architecture?.digest || !architectureIsCurrent) return
+    setArchitectureBusy(true)
+    try {
+      await confirmCanonicalArchitecture(state.projectId, architecture.digest)
+      setArchitecture({ ...architecture, confirmedDigest: architecture.digest })
+      setArchitectureError(null)
+    } catch (cause) {
+      setArchitectureError(cause instanceof Error ? cause.message : 'Could not confirm architecture baseline.')
+    } finally {
+      setArchitectureBusy(false)
+    }
+  }
 
   const applyShape = (patch: Partial<WizardState>) => {
     const next = { ...state, ...patch }
@@ -120,6 +200,42 @@ export function ProjectShapeScreen({ state, onUpdate }: ScreenProps) {
         <h2>Project Shape</h2>
         <p>Choose how the product is structured.</p>
       </div>
+
+      {state.projectId ? (
+        <section className="card shape-section" style={{ marginBottom: '1rem' }}>
+          <div className="shape-section-head">
+            <h3 className="card-title">Architecture governance</h3>
+            <span className="shape-section-meta">
+              {architecture?.confirmedDigest && architectureIsCurrent
+                ? 'Confirmed'
+                : architecture && !architectureIsCurrent
+                  ? 'Stale — shape changed'
+                  : 'Needs baseline'}
+            </span>
+          </div>
+          <p className="muted">
+            Save the current topology and repository boundaries as the canonical baseline, then confirm it before
+            G-PLAN. A changed Shape invalidates the prior confirmation.
+          </p>
+          {architectureError && architecture ? <p className="sdlc-timeline__outcome is-blocked">{architectureError}</p> : null}
+          <div className="ship-actions">
+            <button type="button" className="secondary-btn" disabled={architectureBusy} onClick={() => void saveArchitecture()}>
+              {architectureBusy ? 'Saving…' : architecture ? 'Refresh baseline' : 'Save architecture baseline'}
+            </button>
+            <button
+              type="button"
+              className="primary-btn"
+              disabled={architectureBusy || !architecture?.digest || !architectureIsCurrent || architecture.confirmedDigest === architecture.digest}
+              onClick={() => void confirmArchitecture()}
+            >
+              Confirm architecture
+            </button>
+          </div>
+          {architecture?.pins?.length ? (
+            <p className="muted small">Pinned: {architecture.pins.map((pin) => pin.key).join(', ')}</p>
+          ) : null}
+        </section>
+      ) : null}
 
       <div className="shape-layout">
         <div className="shape-controls">
