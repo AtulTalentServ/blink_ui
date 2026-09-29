@@ -6,6 +6,7 @@ import { JiraScopePanel } from './JiraScopePanel'
 import { DesignOptionsPanel } from './DesignOptionsPanel'
 import { ScopeStartStatus, validateSdlcScope } from './SdlcPlanningScreen'
 import { RequirementRevisionPanel } from './RequirementRevisionPanel'
+import { extractRequirementText } from '../api/blink'
 import { unansweredRequired } from '../wizard/grooming'
 import { shouldAutoStartClarify } from '../wizard/thinking'
 import type { JiraPublishState } from '../wizard/thinking'
@@ -31,16 +32,6 @@ interface Props {
 function isAllowedRequirementFile(name: string) {
   const lower = name.toLowerCase()
   return REQ_FILE_TYPES.some((ext) => lower.endsWith(ext))
-}
-
-function handleFile(file: File | undefined, onUpdate: Props['onUpdate'], onError: (message: string | null) => void) {
-  if (!file) return
-  if (!isAllowedRequirementFile(file.name)) {
-    onError('Use a PDF, Word, TXT, or Markdown file.')
-    return
-  }
-  onError(null)
-  onUpdate({ requirementFileName: file.name, requirementFile: file, requirementsText: '' })
 }
 
 function clearFile(onUpdate: Props['onUpdate'], fileInputRef: React.RefObject<HTMLInputElement | null>) {
@@ -82,7 +73,9 @@ export function RequirementsScreen({
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const zipInputRef = useRef<HTMLInputElement>(null)
+  const extractInFlight = useRef(false)
   const [dragging, setDragging] = useState(false)
+  const [extracting, setExtracting] = useState(false)
   const [fileError, setFileError] = useState<string | null>(null)
   const [wordingOpen, setWordingOpen] = useState(false)
   const hasUploadedFile = Boolean(state.requirementFileName)
@@ -113,11 +106,30 @@ export function RequirementsScreen({
     onAsk()
   }, [stage, hasPaste, grooming, onAsk, state.groomQuestions.length, state.groomStatus])
 
-  useEffect(() => {
-    if (state.requirementFileName && state.requirementsText.trim()) {
-      onUpdate({ requirementsText: '' })
+  async function acceptFile(file: File | undefined) {
+    if (!file || extractInFlight.current || pasteLocked) return
+    if (fileInputRef.current) fileInputRef.current.value = ''
+    if (!isAllowedRequirementFile(file.name)) {
+      setFileError('Use a PDF, Word, TXT, or Markdown file.')
+      return
     }
-  }, [state.requirementFileName, state.requirementsText, onUpdate])
+    extractInFlight.current = true
+    setFileError(null)
+    setExtracting(true)
+    try {
+      const extracted = await extractRequirementText(file)
+      onUpdate({
+        requirementFileName: file.name,
+        requirementFile: file,
+        requirementsText: extracted.text,
+      })
+    } catch (error) {
+      setFileError(error instanceof Error ? error.message : 'Could not read this file. Paste the requirements instead.')
+    } finally {
+      extractInFlight.current = false
+      setExtracting(false)
+    }
+  }
 
   const stages: { id: ReqStage; label: string; enabled: boolean; done: boolean }[] = [
     { id: 'capture', label: 'Capture', enabled: true, done: hasPaste || hasUploadedFile },
@@ -185,7 +197,7 @@ export function RequirementsScreen({
         <section className="card ref-card req-capture-card">
           <div className="req-section-head">
             <h3>Requirement</h3>
-            <p>Upload a document or paste the text. One source is enough.</p>
+            <p>Upload a document or paste the text. A document is read into text, then clarified like a paste.</p>
           </div>
 
           {hasUploadedFile ? (
@@ -193,7 +205,7 @@ export function RequirementsScreen({
               <FileText size={18} aria-hidden />
               <div className="req-file-meta">
                 <strong>{state.requirementFileName}</strong>
-                <span>Ready to use for tickets</span>
+                <span>Text extracted. Review it below, then continue to clarify.</span>
               </div>
               {!pasteLocked && (
                 <button
@@ -209,25 +221,48 @@ export function RequirementsScreen({
               )}
             </div>
           ) : (
-            <button
-              type="button"
-              className={`req-dropzone${dragging ? ' is-dragging' : ''}`}
-              onClick={() => fileInputRef.current?.click()}
+            <div
+              role="button"
+              tabIndex={extracting ? -1 : 0}
+              aria-disabled={extracting}
+              aria-busy={extracting}
+              className={`req-dropzone${dragging ? ' is-dragging' : ''}${extracting ? ' is-reading' : ''}`}
+              onClick={() => {
+                if (!extracting) fileInputRef.current?.click()
+              }}
+              onKeyDown={(event) => {
+                if (extracting) return
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  fileInputRef.current?.click()
+                }
+              }}
+              onDragEnter={(event) => {
+                event.preventDefault()
+                if (!extracting) setDragging(true)
+              }}
               onDragOver={(event) => {
                 event.preventDefault()
-                setDragging(true)
+                event.dataTransfer.dropEffect = 'copy'
+                if (!extracting) setDragging(true)
               }}
-              onDragLeave={() => setDragging(false)}
+              onDragLeave={(event) => {
+                const next = event.relatedTarget
+                if (next instanceof Node && event.currentTarget.contains(next)) return
+                setDragging(false)
+              }}
               onDrop={(event) => {
                 event.preventDefault()
                 setDragging(false)
-                handleFile(event.dataTransfer.files[0], onUpdate, setFileError)
+                void acceptFile(event.dataTransfer.files[0])
               }}
             >
               <CloudUpload size={28} strokeWidth={1.6} />
-              <span className="dropzone-title">Drop a requirement file here</span>
+              <span className="dropzone-title">
+                {extracting ? 'Reading the document…' : 'Drop a requirement file here'}
+              </span>
               <span className="dropzone-sub">PDF, Word, TXT, or Markdown — or click to browse</span>
-            </button>
+            </div>
           )}
           {fileError ? (
             <p className="field-hint req-file-error" role="alert">
@@ -239,12 +274,17 @@ export function RequirementsScreen({
             type="file"
             accept={REQ_FILE_TYPES.join(',')}
             hidden
-            onChange={(event) => handleFile(event.target.files?.[0], onUpdate, setFileError)}
+            onChange={(event) => void acceptFile(event.target.files?.[0])}
           />
 
-          {!hasUploadedFile && (
+          {!hasUploadedFile || hasPaste ? (
             <div className="field-group">
-              <label htmlFor="requirementsText">Paste requirements</label>
+              <label htmlFor="requirementsText">
+                {hasUploadedFile ? 'Requirement text' : 'Paste requirements'}
+              </label>
+              {hasUploadedFile && !pasteLocked ? (
+                <p className="field-hint">Read from the file. Edit anything that looks wrong before clarifying.</p>
+              ) : null}
               {pasteLocked ? (
                 <p className="field-hint">
                   Text is locked while you answer questions. Start over on Clarify if you need to change it.
@@ -253,20 +293,24 @@ export function RequirementsScreen({
               <textarea
                 id="requirementsText"
                 className={`req-textarea${pasteLocked ? ' locked' : ''}`}
-                rows={6}
+                rows={hasUploadedFile ? 10 : 6}
                 placeholder="Describe what you are building…"
                 value={state.requirementsText}
                 readOnly={pasteLocked}
                 onChange={(event) =>
-                  onUpdate({
-                    requirementsText: event.target.value,
-                    requirementFileName: null,
-                    requirementFile: null,
-                  })
+                  onUpdate(
+                    hasUploadedFile
+                      ? { requirementsText: event.target.value }
+                      : {
+                          requirementsText: event.target.value,
+                          requirementFileName: null,
+                          requirementFile: null,
+                        },
+                  )
                 }
               />
             </div>
-          )}
+          ) : null}
 
           {hasUploadedFile && !pasteLocked && (
             <button type="button" className="text-btn" onClick={() => {

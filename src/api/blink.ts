@@ -1763,6 +1763,25 @@ function parseStructureHeader(header: string | null): WorkspaceEntryDto[] {
   })
 }
 
+export async function extractRequirementText(file: File): Promise<{ fileName: string; text: string }> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await timedFetch(
+    apiUrl('/requirements/extract'),
+    {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    },
+    60_000,
+  )
+  if (!response.ok) throw new Error(await readError(response))
+  const body = (await response.json()) as { fileName?: string; text?: string }
+  const text = (body.text ?? '').trim()
+  if (!text) throw new Error('No text could be read from this file. Paste the requirements instead.')
+  return { fileName: body.fileName || file.name, text }
+}
+
 export async function downloadWorkspace(options: {
   projectId: string
   file: File | null
