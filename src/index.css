@@ -5780,8 +5780,9 @@ textarea::placeholder {
 .figma-story-bind {
   appearance: none;
   -webkit-appearance: none;
+  width: min(10.5rem, 100%);
   max-width: 10.5rem;
-  min-width: 7.25rem;
+  min-width: 0;
   height: 1.7rem;
   font-family: var(--font-ui);
   font-size: 0.72rem;
@@ -6627,8 +6628,14 @@ textarea::placeholder {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.65rem 0.75rem;
   margin-bottom: 0.85rem;
+}
+
+.jira-scope-head .req-section-head {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 
 .integrations-panel-head h3 {
@@ -6771,7 +6778,7 @@ textarea::placeholder {
 }
 
 .jira-epic-card li.jira-row {
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, max-content);
 }
 
 .jira-row-meta {
@@ -6780,8 +6787,9 @@ textarea::placeholder {
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 0.35rem;
-  flex-shrink: 0;
+  flex-shrink: 1;
   min-width: 0;
+  max-width: 100%;
 }
 
 .jira-epic-card header.jira-row {
@@ -7858,6 +7866,7 @@ textarea::placeholder {
 .req-zip-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.55rem;
   min-height: 40px;
 }
@@ -7974,6 +7983,20 @@ textarea::placeholder {
   background: transparent;
   color: inherit;
   cursor: pointer;
+  min-width: 0;
+}
+
+.stitch-option strong {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-navy);
+}
+
+.stitch-option > span:not(.design-screen-thumb) {
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--muted);
 }
 
 .stitch-option.is-chosen {
@@ -7999,8 +8022,10 @@ textarea::placeholder {
 
 .stitch-handoff p {
   margin: 0;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
+  font-weight: 500;
   line-height: 1.45;
+  color: var(--text-navy);
 }
 
 .stitch-handoff ol {
@@ -8009,8 +8034,10 @@ textarea::placeholder {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
+  font-weight: 500;
   line-height: 1.45;
+  color: var(--text);
 }
 
 .stitch-handoff a {
@@ -9013,6 +9040,29 @@ textarea::placeholder {
 
   .req-step-label {
     font-size: 0.75rem;
+  }
+
+  .design-screen-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .design-screen-meta {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .jira-epic-card header.jira-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .jira-epic-card li.jira-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .jira-epic-card header .jira-row-meta,
+  .jira-epic-card li .jira-row-meta {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 }
 
