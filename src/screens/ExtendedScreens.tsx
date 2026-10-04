@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   AlertTriangle,
   Boxes,
@@ -37,6 +37,7 @@ import {
   TOPOLOGY_OPTIONS,
   defaultRepositories,
   defaultRepoTechnologies,
+  repositoriesFromComponents,
   ensurePlatformDefaults,
   githubRepoSlug,
   platformOptionsForCloud,
@@ -45,11 +46,12 @@ import {
   sanitizeDownloadStructure,
 } from '../wizard/defaults'
 import {
-  confirmCanonicalArchitecture,
-  fetchCanonicalArchitecture,
-  saveCanonicalArchitecture,
+  confirmProjectTopology,
+  isNotProjectOwnerError,
+  proposeProjectShape,
+  rehomeProject,
   syncCanonicalWizardDraft,
-  type ArchitectureViewDto,
+  type ProjectPayload,
 } from '../api/blink'
 import {
   applyShapeAcknowledgement,
@@ -58,12 +60,26 @@ import {
   persistCanonicalGate,
   shapeGateDigest,
 } from '../wizard/gates'
+import {
+  canonicalRepositoryStructure,
+  nextTopologyConfirmation,
+  shapeRequirementText,
+  topologyConfirmer,
+  topologyRoster,
+} from '../wizard/shape'
 import { computeReadiness, type WizardState, type WizardStep } from '../wizard/types'
 import { buildReviewIssues } from '../wizard/reviewIssues'
 
 interface ScreenProps {
   state: WizardState
   onUpdate: (patch: Partial<WizardState>) => void
+}
+
+export type ShapeConfirmAction = {
+  run: () => Promise<void>
+  busy: boolean
+  pending: boolean
+  confirmed: boolean
 }
 
 const TOPOLOGY_ICONS = {
@@ -80,6 +96,38 @@ const CLOUD_OPTIONS = [
   { id: 'azure', label: 'Azure', hint: 'AKS, App Service' },
   { id: 'gcp', label: 'GCP', hint: 'GKE, Cloud Run' },
 ] as const
+
+function ownedProjectPayload(state: WizardState): ProjectPayload {
+  return {
+    projectType: state.projectType === 'existing' ? 'existing' : 'new',
+    projectName: state.projectName.trim(),
+    description: state.description.trim() || state.projectName.trim(),
+    stakeholders: (state.stakeholderAssignments || []).map((row) => ({
+      roleCode: row.roleId,
+      name: row.personName,
+      email: row.personEmail,
+    })),
+  }
+}
+
+function plannedRepositories(state: WizardState) {
+  const proposal = state.shapeProposal
+  const sameSuggestion = Boolean(
+    proposal
+    && state.topology === proposal.topology
+    && state.architectureStyle === proposal.architectureStyle
+    && proposal.components?.length,
+  )
+  if (!state.repositoriesTouched && sameSuggestion && proposal?.components?.length) {
+    const built = repositoriesFromComponents(state.projectName, state.repositoryModel, proposal.components)
+    if (built.length) return built
+  }
+  return defaultRepositories(state.projectName, {
+    topology: state.topology,
+    repositoryModel: state.repositoryModel,
+    architectureStyle: state.architectureStyle,
+  })
+}
 
 function shapeFrom(state: Pick<WizardState, 'topology' | 'repositoryModel' | 'architectureStyle'>) {
   return {
@@ -98,95 +146,105 @@ function statusTone(status: string | undefined) {
   return 'muted'
 }
 
-export function ProjectShapeScreen({ state, onUpdate }: ScreenProps) {
-  const shape = shapeFrom(state)
-  const suggested = defaultRepositories(state.projectName, shape)
+export function ProjectShapeScreen({
+  state,
+  onUpdate,
+  onShapeConfirm,
+}: ScreenProps & {
+  onShapeConfirm?: (action: ShapeConfirmAction | null) => void
+}) {
+  const suggested = (state.repositories || []).some((repo) => repo.name.trim())
+    ? state.repositories
+    : plannedRepositories(state)
   const topologyLabel = TOPOLOGY_OPTIONS.find((t) => t.id === state.topology)?.label
   const modelLabel = REPO_MODEL_OPTIONS.find((m) => m.id === state.repositoryModel)?.label
   const archLabel = ARCHITECTURE_OPTIONS.find((a) => a.id === state.architectureStyle)?.label
-  const [architecture, setArchitecture] = useState<ArchitectureViewDto | null>(null)
-  const [architectureBusy, setArchitectureBusy] = useState(false)
-  const [architectureError, setArchitectureError] = useState<string | null>(null)
-
-  const architectureBaseline = {
-    topology: state.topology,
-    repositoryModel: state.repositoryModel,
-    architectureStyle: state.architectureStyle,
-    repositories: (state.repositories || []).map((repo) => ({
-      id: repo.id,
-      name: repo.name,
-      purpose: repo.purpose,
-    })),
-  }
-  const architectureIsCurrent = Boolean(
-    architecture && JSON.stringify(architecture.architecture) === JSON.stringify(architectureBaseline),
+  const requirementText = shapeRequirementText(state)
+  const [confirmBusy, setConfirmBusy] = useState(false)
+  const [confirmError, setConfirmError] = useState<string | null>(null)
+  const [proposalNote, setProposalNote] = useState<string | null>(state.shapeProposal?.rationale || null)
+  const [proposalError, setProposalError] = useState<string | null>(null)
+  const [proposing, setProposing] = useState(
+    () => Boolean(state.projectId && requirementText && !state.shapeProposal?.components?.length && !state.topologyConfirmation),
   )
+  const userEditedShape = useRef(false)
 
   useEffect(() => {
-    if (!state.projectId) {
-      setArchitecture(null)
+    if (!state.projectId || state.topologyConfirmation || !requirementText || state.shapeProposal?.components?.length) {
+      setProposing(false)
       return
     }
     let cancelled = false
-    void fetchCanonicalArchitecture(state.projectId)
-      .then((view) => {
-        if (!cancelled) {
-          setArchitecture(view)
-          setArchitectureError(null)
+    setProposing(true)
+    setProposalError(null)
+    void proposeProjectShape(state.projectId, {
+      projectName: state.projectName,
+      requirementText,
+    })
+      .then((proposal) => {
+        if (cancelled) return
+        setProposalNote(proposal.rationale)
+        const patch: Partial<WizardState> = { shapeProposal: proposal }
+        if (!userEditedShape.current && !state.repositoriesTouched) {
+          const nextShape = {
+            topology: proposal.topology,
+            repositoryModel: proposal.repositoryModel,
+            architectureStyle: proposal.architectureStyle,
+          }
+          const fromRequirement = proposal.components?.length
+            ? repositoriesFromComponents(state.projectName, proposal.repositoryModel, proposal.components)
+            : []
+          const repos = fromRequirement.length ? fromRequirement : defaultRepositories(state.projectName, nextShape)
+          Object.assign(patch, {
+            ...nextShape,
+            repositories: repos,
+            repoTechnologies: defaultRepoTechnologies(repos, nextShape),
+          })
         }
+        onUpdate(patch)
       })
-      .catch((cause) => {
-        if (!cancelled) {
-          setArchitecture(null)
-          setArchitectureError(cause instanceof Error ? cause.message : 'Architecture baseline has not been recorded.')
+      .catch(async (cause) => {
+        if (cancelled) return
+        if (isNotProjectOwnerError(cause)) {
+          try {
+            const saved = await rehomeProject(ownedProjectPayload(state))
+            if (!cancelled) onUpdate({ projectId: String(saved.id) })
+            return
+          } catch (next) {
+            if (!cancelled) {
+              setProposalError(next instanceof Error ? next.message : 'Could not save this project for the signed-in account.')
+            }
+            return
+          }
         }
+        setProposalError(cause instanceof Error ? cause.message : 'Shape proposal is unavailable. Pick a repository structure and confirm it.')
+      })
+      .finally(() => {
+        if (!cancelled) setProposing(false)
       })
     return () => {
       cancelled = true
     }
-  }, [state.projectId])
-
-  const saveArchitecture = async () => {
-    if (!state.projectId) return
-    setArchitectureBusy(true)
-    try {
-      const result = await saveCanonicalArchitecture(state.projectId, architectureBaseline)
-      setArchitecture({
-        revision: architecture?.revision || 1,
-        architecture: architectureBaseline,
-        digest: result.digest,
-        pins: [],
-      })
-      setArchitectureError(null)
-    } catch (cause) {
-      setArchitectureError(cause instanceof Error ? cause.message : 'Could not save architecture baseline.')
-    } finally {
-      setArchitectureBusy(false)
-    }
-  }
-
-  const confirmArchitecture = async () => {
-    if (!state.projectId || !architecture?.digest || !architectureIsCurrent) return
-    setArchitectureBusy(true)
-    try {
-      await confirmCanonicalArchitecture(state.projectId, architecture.digest)
-      setArchitecture({ ...architecture, confirmedDigest: architecture.digest })
-      setArchitectureError(null)
-    } catch (cause) {
-      setArchitectureError(cause instanceof Error ? cause.message : 'Could not confirm architecture baseline.')
-    } finally {
-      setArchitectureBusy(false)
-    }
-  }
+  }, [
+    onUpdate,
+    requirementText,
+    state.projectId,
+    state.projectName,
+    state.repositoriesTouched,
+    state.shapeProposal?.components,
+    state.topologyConfirmation,
+  ])
 
   const applyShape = (patch: Partial<WizardState>) => {
+    userEditedShape.current = true
+    setProposing(false)
     const next = { ...state, ...patch }
     if (state.repositoriesTouched) {
       onUpdate(patch)
       return
     }
     const nextShape = shapeFrom(next)
-    const repos = defaultRepositories(next.projectName, nextShape)
+    const repos = plannedRepositories(next)
     onUpdate({
       ...patch,
       repositories: repos,
@@ -194,48 +252,104 @@ export function ProjectShapeScreen({ state, onUpdate }: ScreenProps) {
     })
   }
 
+  const structureConfirmed = canonicalRepositoryStructure(state.topologyConfirmation?.structure)
+    === canonicalRepositoryStructure(state.repositoryModel)
+    && Boolean(state.topologyConfirmation?.confirmedBy)
+
+  const confirmStructure = useCallback(async () => {
+    if (!state.projectId) {
+      setConfirmError('Save the project before confirming the repository structure.')
+      return
+    }
+    const lead = topologyConfirmer(state)
+    if (!lead) {
+      setConfirmError('Add a tech lead name and email before confirming the repository structure.')
+      return
+    }
+    setConfirmBusy(true)
+    setConfirmError(null)
+    try {
+      const reposForConfirm = (state.repositories || []).some((repo) => repo.name.trim())
+        ? state.repositories
+        : plannedRepositories(state)
+      let projectId = state.projectId
+      const runConfirm = (id: string) => confirmProjectTopology(id, {
+        projectName: state.projectName,
+        requirementText,
+        repositoryModel: state.repositoryModel,
+        confirmedBy: `${lead.name}:${lead.email}`,
+        evidenceRef: `blink:project:${id}`,
+        repositories: topologyRoster({ repositories: reposForConfirm }),
+        repoTechnologies: state.repoTechnologies,
+      })
+      let confirmation
+      try {
+        confirmation = await runConfirm(projectId)
+      } catch (cause) {
+        if (!isNotProjectOwnerError(cause)) throw cause
+        const saved = await rehomeProject(ownedProjectPayload(state))
+        projectId = String(saved.id)
+        confirmation = await runConfirm(projectId)
+      }
+      onUpdate({
+        projectId,
+        topologyConfirmation: confirmation,
+        ...(state.repositoriesTouched
+          ? {}
+          : {
+              repositories: reposForConfirm,
+              repoTechnologies: defaultRepoTechnologies(reposForConfirm, {
+                topology: state.topology,
+                repositoryModel: state.repositoryModel,
+                architectureStyle: state.architectureStyle,
+              }),
+            }),
+      })
+    } catch (cause) {
+      setConfirmError(cause instanceof Error ? cause.message : 'Could not confirm repository structure.')
+    } finally {
+      setConfirmBusy(false)
+    }
+  }, [
+    onUpdate,
+    requirementText,
+    state.architectureStyle,
+    state.description,
+    state.projectId,
+    state.projectType,
+    state.projectName,
+    state.repoTechnologies,
+    state.repositories,
+    state.repositoriesTouched,
+    state.shapeProposal,
+    state.repositoryModel,
+    state.stakeholderAssignments,
+    state.topology,
+  ])
+
+  useEffect(() => {
+    onShapeConfirm?.({
+      run: confirmStructure,
+      busy: confirmBusy,
+      pending: proposing,
+      confirmed: structureConfirmed,
+    })
+  }, [confirmBusy, confirmStructure, onShapeConfirm, proposing, structureConfirmed])
+
+  useEffect(() => () => onShapeConfirm?.(null), [onShapeConfirm])
+
   return (
     <div className="screen shape-screen">
       <div className="screen-header">
         <h2>Project Shape</h2>
-        <p>Choose how the product is structured.</p>
+        <p>
+          {proposing
+            ? 'Reading the groomed requirement…'
+            : proposalNote || 'Choose how the product is structured.'}
+        </p>
       </div>
-
-      {state.projectId ? (
-        <section className="card shape-section" style={{ marginBottom: '1rem' }}>
-          <div className="shape-section-head">
-            <h3 className="card-title">Architecture governance</h3>
-            <span className="shape-section-meta">
-              {architecture?.confirmedDigest && architectureIsCurrent
-                ? 'Confirmed'
-                : architecture && !architectureIsCurrent
-                  ? 'Stale — shape changed'
-                  : 'Needs baseline'}
-            </span>
-          </div>
-          <p className="muted">
-            Save the current topology and repository boundaries as the canonical baseline, then confirm it before
-            G-PLAN. A changed Shape invalidates the prior confirmation.
-          </p>
-          {architectureError && architecture ? <p className="sdlc-timeline__outcome is-blocked">{architectureError}</p> : null}
-          <div className="ship-actions">
-            <button type="button" className="secondary-btn" disabled={architectureBusy} onClick={() => void saveArchitecture()}>
-              {architectureBusy ? 'Saving…' : architecture ? 'Refresh baseline' : 'Save architecture baseline'}
-            </button>
-            <button
-              type="button"
-              className="primary-btn"
-              disabled={architectureBusy || !architecture?.digest || !architectureIsCurrent || architecture.confirmedDigest === architecture.digest}
-              onClick={() => void confirmArchitecture()}
-            >
-              Confirm architecture
-            </button>
-          </div>
-          {architecture?.pins?.length ? (
-            <p className="muted small">Pinned: {architecture.pins.map((pin) => pin.key).join(', ')}</p>
-          ) : null}
-        </section>
-      ) : null}
+      {confirmError ? <p className="sdlc-timeline__outcome is-blocked">{confirmError}</p> : null}
+      {proposalError ? <p className="screen-note is-warn">{proposalError}</p> : null}
 
       <div className="shape-layout">
         <div className="shape-controls">
@@ -329,49 +443,80 @@ export function ProjectShapeScreen({ state, onUpdate }: ScreenProps) {
 
           <section className="card shape-section">
             <div className="shape-section-head">
-              <h3 className="card-title">IDE &amp; platform defaults</h3>
-              <span className="shape-section-meta">Not a tour — change later if needed</span>
+              <h3 className="card-title">IDE &amp; platform</h3>
+              <span className="shape-section-meta">
+                {IDE_TOOL_OPTIONS.find((opt) => opt.id === state.ideTool)?.label ?? 'IDE'}
+                {' · '}
+                {CLOUD_OPTIONS.find((opt) => opt.id === state.cloudProvider)?.label ?? 'Cloud'}
+                {' · '}
+                {platformOptionsForCloud(state.cloudProvider).cicd.find((opt) => opt.id === state.cicd)?.label ?? 'CI/CD'}
+              </span>
             </div>
-            <div className="platform-row">
-              <div className="field-group">
-                <label>Primary IDE</label>
-                <select value={state.ideTool} onChange={(e) => onUpdate({ ideTool: e.target.value })}>
+            <div className="shape-platform">
+              <div>
+                <p className="shape-platform-label">IDE</p>
+                <div className="shape-chip-row">
                   {IDE_TOOL_OPTIONS.map((opt) => (
-                    <option key={opt.id} value={opt.id} disabled={!opt.enabled}>
-                      {opt.label}{opt.enabled ? '' : ' (soon)'}
-                    </option>
+                    <button
+                      key={opt.id}
+                      type="button"
+                      className={`shape-chip ${state.ideTool === opt.id ? 'active' : ''}`}
+                      disabled={!opt.enabled}
+                      aria-pressed={state.ideTool === opt.id}
+                      onClick={() => onUpdate({ ideTool: opt.id })}
+                    >
+                      {opt.label}{opt.enabled ? '' : ' · soon'}
+                    </button>
                   ))}
-                </select>
+                </div>
               </div>
-              <div className="field-group">
-                <label>Cloud</label>
-                <select
-                  value={state.cloudProvider}
-                  onChange={(e) => {
-                    const cloudProvider = e.target.value
-                    onUpdate({
-                      cloudProvider,
-                      ...ensurePlatformDefaults(cloudProvider, {
-                        deploymentModel: state.deploymentModel,
-                        iac: state.iac,
-                        secretsManagement: state.secretsManagement,
-                        cicd: state.cicd,
-                      }),
-                    })
-                  }}
-                >
-                  {CLOUD_OPTIONS.map((opt) => (
-                    <option key={opt.id} value={opt.id}>{opt.label}</option>
-                  ))}
-                </select>
+              <div>
+                <p className="shape-platform-label">Cloud</p>
+                <div className="cloud-card-grid">
+                  {CLOUD_OPTIONS.map((opt) => {
+                    const active = state.cloudProvider === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        className={`cloud-card ${active ? 'active' : ''}`}
+                        aria-pressed={active}
+                        onClick={() => {
+                          const cloudProvider = opt.id
+                          onUpdate({
+                            cloudProvider,
+                            ...ensurePlatformDefaults(cloudProvider, {
+                              deploymentModel: state.deploymentModel,
+                              iac: state.iac,
+                              secretsManagement: state.secretsManagement,
+                              cicd: state.cicd,
+                            }),
+                          })
+                        }}
+                      >
+                        <Cloud size={18} />
+                        <strong>{opt.label}</strong>
+                        <span>{opt.hint}</span>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-              <div className="field-group">
-                <label>CI/CD</label>
-                <select value={state.cicd} onChange={(e) => onUpdate({ cicd: e.target.value })}>
+              <div>
+                <p className="shape-platform-label">CI/CD</p>
+                <div className="shape-chip-row">
                   {platformOptionsForCloud(state.cloudProvider).cicd.map((opt) => (
-                    <option key={opt.id} value={opt.id}>{opt.label}</option>
+                    <button
+                      key={opt.id}
+                      type="button"
+                      className={`shape-chip ${state.cicd === opt.id ? 'active' : ''}`}
+                      aria-pressed={state.cicd === opt.id}
+                      onClick={() => onUpdate({ cicd: opt.id })}
+                    >
+                      {opt.label}
+                    </button>
                   ))}
-                </select>
+                </div>
               </div>
             </div>
           </section>
@@ -426,7 +571,7 @@ export function RepositoriesScreen({
   useEffect(() => {
     if (state.repositoriesTouched) return
     const shape = shapeFrom(state)
-    const repos = defaultRepositories(state.projectName, shape)
+    const repos = plannedRepositories(state)
     const current = state.repositories || []
     const unchanged =
       current.length === repos.length &&
@@ -440,6 +585,7 @@ export function RepositoriesScreen({
     state.architectureStyle,
     state.repositoriesTouched,
     state.repositories,
+    state.shapeProposal,
     onUpdate,
   ])
 
@@ -473,7 +619,7 @@ export function RepositoriesScreen({
 
   const restoreFromShape = () => {
     const shape = shapeFrom(state)
-    const repos = defaultRepositories(state.projectName, shape)
+    const repos = plannedRepositories({ ...state, repositoriesTouched: false })
     onUpdate({
       repositories: repos,
       repositoriesTouched: false,
@@ -481,8 +627,6 @@ export function RepositoriesScreen({
     })
   }
 
-  const github = state.integrations?.find((item) => item.id === 'github')
-  const githubReady = Boolean(github?.connected)
   const namedCount = repositories.filter((r) => r.name.trim()).length
 
   const confirmRoster = async () => {
@@ -496,7 +640,22 @@ export function RepositoriesScreen({
     try {
       await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
       const canonicalPatch = await confirmRepositoryRoster(projectId, state.canonicalRevision)
-      onUpdate({ repositoriesTouched: true, ...canonicalPatch })
+      const topologyConfirmation = nextTopologyConfirmation(
+        { ...state, repositoriesTouched: true },
+        { repositories },
+      )
+      onUpdate({ repositoriesTouched: true, ...canonicalPatch, ...(topologyConfirmation ? { topologyConfirmation } : {}) })
+      if (topologyConfirmation) {
+        void confirmProjectTopology(projectId, {
+          projectName: state.projectName,
+          requirementText: shapeRequirementText(state),
+          repositoryModel: state.repositoryModel,
+          confirmedBy: topologyConfirmation.confirmedBy,
+          evidenceRef: topologyConfirmation.evidenceRef,
+          repositories: topologyConfirmation.roster,
+          repoTechnologies: state.repoTechnologies,
+        }).catch(() => undefined)
+      }
     } catch (err) {
       setRosterError(err instanceof Error ? err.message : 'Could not confirm repository roster.')
     } finally {
@@ -505,40 +664,17 @@ export function RepositoriesScreen({
   }
 
   return (
-    <div className="screen shape-screen">
-      <div className="screen-header screen-header-row">
-        <div>
-          <h2>Repositories</h2>
-          <p>Name the repositories for this project. Create remotes yourself when ready, then enter their URLs here.</p>
-        </div>
-        <div className="screen-header-actions">
-          <button type="button" className="ghost-btn" onClick={restoreFromShape}>
-            Reset from shape
-          </button>
-          <button type="button" className="secondary-btn" onClick={addRepo}>
-            <Plus size={14} /> Add repository
-          </button>
-        </div>
-      </div>
-
-      <div className="repo-toolbar">
-        <div className="repo-toolbar-stat">
-          <strong>{namedCount}</strong>
-          <span>named · {repositories.length} total</span>
-        </div>
-        <div className={`repo-github-pill ${githubReady ? 'ready' : ''}`}>
-          <GitBranch size={14} />
-          {githubReady
-            ? `GitHub · ${github?.account ?? 'connected'}${github?.organization ? ` / ${github.organization}` : ''}`
-            : 'GitHub not connected'}
-        </div>
+    <div className="screen screen-project">
+      <div className="screen-header">
+        <h2>Repositories</h2>
+        <p>Names follow the project shape. Rename them if you need to, then confirm.</p>
       </div>
 
       {repositories.length === 0 ? (
         <section className="card empty-panel">
           <Boxes size={28} />
           <h3>No repositories yet</h3>
-          <p>Restore the shape suggestion or add a repository manually.</p>
+          <p>Restore the shape suggestion or add a repository.</p>
           <div className="row-actions">
             <button type="button" className="primary-btn" onClick={restoreFromShape}>
               Restore from shape
@@ -549,122 +685,128 @@ export function RepositoriesScreen({
           </div>
         </section>
       ) : (
-        <div className="repo-card-grid">
-          {repositories.map((repo, index) => (
-            <article key={repo.id} className="card repo-edit-card">
-              <header className="repo-edit-head">
-                <span className="repo-edit-index">#{index + 1}</span>
-                <span className={`status-pill ${statusTone(repo.createStatus)}`}>
-                  {repo.htmlUrl
-                    ? repo.createStatus === 'exists'
-                      ? 'Exists on GitHub'
-                      : 'Connected manually'
-                    : repo.createStatus === 'failed'
-                      ? repo.createMessage || 'Failed'
-                      : creating
-                        ? 'Creating…'
-                        : 'Local only'}
-                </span>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  title="Delete repository"
-                  onClick={() => markTouched(repositories.filter((r) => r.id !== repo.id))}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </header>
-
-              <div className="repo-edit-fields">
-                <label className="field-group">
-                  <span>Repository name</span>
-                  <input
-                    className="table-input mono"
-                    value={repo.name}
-                    onChange={(e) => updateRepo(repo.id, 'name', e.target.value)}
-                    placeholder="my-service"
-                  />
-                </label>
-                <label className="field-group">
-                  <span>Purpose / role</span>
-                  <input
-                    className="table-input"
-                    value={repo.purpose}
-                    onChange={(e) => updateRepo(repo.id, 'purpose', e.target.value)}
-                    placeholder="Frontend"
-                  />
-                </label>
-                <label className="field-group span-2">
-                  <span>Description</span>
-                  <input
-                    className="table-input wide"
-                    value={repo.description}
-                    onChange={(e) => updateRepo(repo.id, 'description', e.target.value)}
-                    placeholder="What this repo owns"
-                  />
-                </label>
-                <label className="field-group">
-                  <span>Owner</span>
-                  <input
-                    className="table-input"
-                    value={repo.owner}
-                    onChange={(e) => updateRepo(repo.id, 'owner', e.target.value)}
-                    placeholder="Team or person"
-                  />
-                </label>
-                <label className="field-group">
-                  <span>Dependencies</span>
-                  <input
-                    className="table-input"
-                    value={repo.dependencies}
-                    onChange={(e) => updateRepo(repo.id, 'dependencies', e.target.value)}
-                    placeholder="Depends on…"
-                  />
-                </label>
-                <label className="field-group span-2">
-                  <span>Repository URL (optional)</span>
-                  <input
-                    className="table-input wide"
-                    value={repo.htmlUrl || ''}
-                    onChange={(e) => updateRepo(repo.id, 'htmlUrl', e.target.value)}
-                    placeholder="https://github.com/owner/repository"
-                  />
-                </label>
-              </div>
-
-              {repo.htmlUrl ? (
-                <a className="repo-link" href={repo.htmlUrl} target="_blank" rel="noreferrer">
-                  Open on GitHub <ExternalLink size={12} />
-                </a>
-              ) : null}
-            </article>
-          ))}
-        </div>
-      )}
-
-      {repositories.length > 0 ? (
-        <section className="card shape-section" style={{ marginTop: '1rem' }}>
-          <div className="shape-section-head">
-            <h3 className="card-title">Repository roster (human gate)</h3>
-            <span className="shape-section-meta">Required before Technology</span>
+        <section className="card project-setup-card">
+          <div className="field-label-row">
+            <label>Repositories</label>
+            <span className="shape-label-actions">
+              <button type="button" className="text-btn" onClick={restoreFromShape}>
+                Reset from shape
+              </button>
+              <button type="button" className="text-btn" onClick={addRepo}>
+                <Plus size={14} /> Add repository
+              </button>
+            </span>
           </div>
-          <p className="muted">
-            Confirm the named repositories and topology match what you intend to implement. Edits after
-            confirmation invalidate this gate until you confirm again.
-          </p>
+
+          <div className="repo-card-grid">
+            {repositories.map((repo, index) => (
+              <article key={repo.id} className="repo-edit-card">
+                <header className="repo-edit-head">
+                  <span className="repo-edit-index">#{index + 1}</span>
+                  <span className={`status-pill ${statusTone(repo.createStatus)}`}>
+                    {repo.htmlUrl
+                      ? repo.createStatus === 'exists'
+                        ? 'Exists on GitHub'
+                        : 'Connected manually'
+                      : repo.createStatus === 'failed'
+                        ? repo.createMessage || 'Failed'
+                        : creating
+                          ? 'Creating…'
+                          : 'Local only'}
+                  </span>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    title="Delete repository"
+                    onClick={() => markTouched(repositories.filter((r) => r.id !== repo.id))}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </header>
+
+                <div className="repo-edit-fields">
+                  <label className="field-group">
+                    <span>Repository name</span>
+                    <input
+                      className="table-input mono"
+                      value={repo.name}
+                      onChange={(e) => updateRepo(repo.id, 'name', e.target.value)}
+                      placeholder="my-service"
+                    />
+                  </label>
+                  <label className="field-group">
+                    <span>Purpose</span>
+                    <input
+                      className="table-input"
+                      value={repo.purpose}
+                      onChange={(e) => updateRepo(repo.id, 'purpose', e.target.value)}
+                      placeholder="Frontend"
+                    />
+                  </label>
+                  <details className="repo-more">
+                    <summary>Description, owner, and URL</summary>
+                    <div className="repo-edit-fields">
+                      <label className="field-group span-2">
+                        <span>Description</span>
+                        <input
+                          className="table-input wide"
+                          value={repo.description}
+                          onChange={(e) => updateRepo(repo.id, 'description', e.target.value)}
+                          placeholder="What this repo owns"
+                        />
+                      </label>
+                      <label className="field-group">
+                        <span>Owner</span>
+                        <input
+                          className="table-input"
+                          value={repo.owner}
+                          onChange={(e) => updateRepo(repo.id, 'owner', e.target.value)}
+                          placeholder="Team or person"
+                        />
+                      </label>
+                      <label className="field-group">
+                        <span>Dependencies</span>
+                        <input
+                          className="table-input"
+                          value={repo.dependencies}
+                          onChange={(e) => updateRepo(repo.id, 'dependencies', e.target.value)}
+                          placeholder="Depends on…"
+                        />
+                      </label>
+                      <label className="field-group span-2">
+                        <span>Repository URL</span>
+                        <input
+                          className="table-input wide"
+                          value={repo.htmlUrl || ''}
+                          onChange={(e) => updateRepo(repo.id, 'htmlUrl', e.target.value)}
+                          placeholder="https://github.com/owner/repository"
+                        />
+                      </label>
+                    </div>
+                    {repo.htmlUrl ? (
+                      <a className="repo-link" href={repo.htmlUrl} target="_blank" rel="noreferrer">
+                        Open on GitHub <ExternalLink size={12} />
+                      </a>
+                    ) : null}
+                  </details>
+                </div>
+              </article>
+            ))}
+          </div>
+
           {rosterError ? <p className="sdlc-timeline__outcome is-blocked">{rosterError}</p> : null}
-          <div className="ship-actions" style={{ marginTop: '0.75rem' }}>
+          <div className="row-actions">
             <button
               type="button"
               className="primary-btn"
               disabled={rosterBusy || namedCount === 0}
               onClick={() => void confirmRoster()}
             >
-              {rosterBusy ? 'Confirming…' : 'Confirm repository roster'}
+              {rosterBusy ? 'Confirming…' : 'Confirm repositories'}
             </button>
           </div>
         </section>
-      ) : null}
+      )}
     </div>
   )
 }
@@ -717,7 +859,19 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     try {
       await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
       const canonicalPatch = await confirmAllRepoTechnologies(projectId, state.canonicalRevision)
-      onUpdate(canonicalPatch)
+      const topologyConfirmation = nextTopologyConfirmation(state, { repoTechnologies: nextRows })
+      onUpdate({ ...canonicalPatch, ...(topologyConfirmation ? { topologyConfirmation } : {}) })
+      if (topologyConfirmation) {
+        void confirmProjectTopology(projectId, {
+          projectName: state.projectName,
+          requirementText: shapeRequirementText(state),
+          repositoryModel: state.repositoryModel,
+          confirmedBy: topologyConfirmation.confirmedBy,
+          evidenceRef: topologyConfirmation.evidenceRef,
+          repositories: topologyConfirmation.roster,
+          repoTechnologies: nextRows,
+        }).catch(() => undefined)
+      }
     } catch (err) {
       setTechError(err instanceof Error ? err.message : 'Could not confirm technology.')
     } finally {

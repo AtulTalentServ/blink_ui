@@ -54,7 +54,7 @@ function apiFallbackProxy(): Plugin {
             res.end(
               JSON.stringify({
                 message:
-                  'Local Blink API is not running on port 8090. In blink-backend run mvn spring-boot:run, then try again.',
+                  'Local Blink API is not running on port 8090. In blink-backend run go run ./cmd/server, then try again.',
               }),
             )
             return

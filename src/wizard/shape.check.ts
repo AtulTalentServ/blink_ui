@@ -86,9 +86,21 @@ assert.equal(remappedReview.step, 'ship')
 assert.equal(remappedReview.state.shipSubstage, 'review-pr')
 assert.equal(remappedReview.completedThrough, STEP_ORDER.indexOf('ship'))
 
-const before = { ...defaultWizardState, shapeAcknowledged: true, technicalPlan: { markdown: '# plan' } }
+const before = {
+  ...defaultWizardState,
+  shapeAcknowledged: true,
+  technicalPlan: { markdown: '# plan' },
+  topologyConfirmation: {
+    structure: 'multi-repo',
+    confirmedBy: 'Ada:ada@example.com',
+    evidenceRef: 'blink:project:1',
+  },
+}
 const invalidated = withShapeInvalidation(before, { topology: 'microservices' })
 assert.equal(invalidated.shapeAcknowledged, false)
+assert.equal(invalidated.topologyConfirmation, undefined)
+const structureCleared = withShapeInvalidation(before, { repositoryModel: 'single-repo' })
+assert.equal(structureCleared.topologyConfirmation, null)
 assert.equal(invalidated.technicalPlan, null)
 assert.notEqual(shapeFingerprint(before), shapeFingerprint({ ...before, topology: 'microservices' }))
 

@@ -172,6 +172,68 @@ export const DEFAULT_INTEGRATIONS: IntegrationItem[] = [
   { id: 'bitbucket', label: 'Bitbucket', category: 'Git Provider', icon: '🪣', connected: false },
 ]
 
+export interface RequirementComponent {
+  id: string
+  purpose: string
+  description: string
+}
+
+/** Turn requirement surfaces into repository rows for the chosen model. */
+export function repositoriesFromComponents(
+  projectName: string,
+  repositoryModel: string,
+  components: RequirementComponent[],
+): RepoDefinition[] {
+  const slug = githubRepoSlug(projectName)
+  const parts = components.filter((item) => item.id.trim() && item.purpose.trim())
+  if (!parts.length) return []
+  const workspace: RepoDefinition = {
+    id: 'workspace',
+    name: `${slug}-workspace`,
+    purpose: 'Workspace',
+    description: 'SDLC workspace for this product',
+    owner: '',
+    dependencies: '',
+  }
+  if (repositoryModel === 'single-repo') {
+    return [
+      workspace,
+      {
+        id: 'repo-product',
+        name: slug,
+        purpose: 'Product',
+        description: parts.map((item) => item.purpose).join(', '),
+        owner: '',
+        dependencies: '',
+      },
+    ]
+  }
+  if (repositoryModel === 'monorepo' || repositoryModel === 'mono-repo') {
+    return [
+      workspace,
+      {
+        id: 'repo-monorepo',
+        name: `${slug}-monorepo`,
+        purpose: 'Monorepo',
+        description: `Packages: ${parts.map((item) => item.id).join(', ')}`,
+        owner: '',
+        dependencies: '',
+      },
+    ]
+  }
+  return [
+    workspace,
+    ...parts.map((item) => ({
+      id: item.id,
+      name: `${slug}-${item.id}`,
+      purpose: item.purpose,
+      description: item.description,
+      owner: '',
+      dependencies: '',
+    })),
+  ]
+}
+
 export function githubRepoSlug(projectName: string): string {
   const slug = projectName
     .trim()
@@ -371,7 +433,42 @@ export function defaultRepoTechnologies(
         status: 'confirmed' as const,
       }
     }
-    if (purpose === 'frontend' || name.endsWith('-frontend') || name.includes('web')) {
+    if (purpose === 'web' || purpose === 'frontend' || name.endsWith('-frontend') || name.endsWith('-web') || name.includes('web')) {
+      return {
+        repoId: repo.id,
+        language: 'TypeScript',
+        framework: 'React 19 + Vite',
+        database: '—',
+        buildTool: 'npm / Vite',
+        status: 'recommendation' as const,
+      }
+    }
+    if (
+      purpose === 'api'
+      || purpose === 'backend'
+      || name.endsWith('-api')
+      || name.endsWith('-backend')
+    ) {
+      return {
+        repoId: repo.id,
+        language: 'Java 21',
+        framework: 'Spring Boot 3.4',
+        database: 'PostgreSQL',
+        buildTool: 'Gradle',
+        status: 'recommendation' as const,
+      }
+    }
+    if (purpose === 'mobile' || name.endsWith('-mobile')) {
+      return {
+        repoId: repo.id,
+        language: 'TypeScript',
+        framework: 'React Native',
+        database: '—',
+        buildTool: 'npm',
+        status: 'recommendation' as const,
+      }
+    }
+    if (purpose === 'admin' || name.endsWith('-admin')) {
       return {
         repoId: repo.id,
         language: 'TypeScript',
