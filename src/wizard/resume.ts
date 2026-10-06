@@ -19,6 +19,17 @@ export const WIZARD_DRAFT_KEY = 'blink.wizard.v1'
 export const WIZARD_SESSION_STEP_KEY = 'blink.wizard.session.v1'
 export const OPEN_WELCOME_KEY = 'blink.openWelcome.v1'
 
+type RemovedTicketHandoffState = {
+  implementationIssueId?: unknown
+  implementationReadinessDigest?: unknown
+  implementationTool?: unknown
+  implementationHandoffStartedAt?: unknown
+  implementationHandoffStartedDigest?: unknown
+  implementationExecutionPlan?: unknown
+  implementationProgressHistory?: unknown
+  implementationResultReviews?: unknown
+}
+
 export interface WizardDraft {
   email: string
   step: WizardStep
@@ -70,8 +81,19 @@ export function normalizeWizardStep(
 }
 
 export function serializeWizardState(state: WizardState): WizardState {
+  const {
+    implementationIssueId: _implementationIssueId,
+    implementationReadinessDigest: _implementationReadinessDigest,
+    implementationTool: _implementationTool,
+    implementationHandoffStartedAt: _implementationHandoffStartedAt,
+    implementationHandoffStartedDigest: _implementationHandoffStartedDigest,
+    implementationExecutionPlan: _implementationExecutionPlan,
+    implementationProgressHistory: _implementationProgressHistory,
+    implementationResultReviews: _implementationResultReviews,
+    ...currentState
+  } = state as WizardState & RemovedTicketHandoffState
   return {
-    ...state,
+    ...currentState,
     requirementFile: null,
     integrations: (state.integrations || []).map((item) => {
       const { token: _token, ...rest } = item
@@ -82,21 +104,32 @@ export function serializeWizardState(state: WizardState): WizardState {
 
 export function restoreWizardState(raw: unknown): WizardState {
   const parsed = raw && typeof raw === 'object' ? (raw as Partial<WizardState>) : {}
+  const {
+    implementationIssueId: _implementationIssueId,
+    implementationReadinessDigest: _implementationReadinessDigest,
+    implementationTool: _implementationTool,
+    implementationHandoffStartedAt: _implementationHandoffStartedAt,
+    implementationHandoffStartedDigest: _implementationHandoffStartedDigest,
+    implementationExecutionPlan: _implementationExecutionPlan,
+    implementationProgressHistory: _implementationProgressHistory,
+    implementationResultReviews: _implementationResultReviews,
+    ...currentState
+  } = parsed as Partial<WizardState> & RemovedTicketHandoffState
   const integrationsById = new Map(
-    (Array.isArray(parsed.integrations) ? parsed.integrations : []).map((item) => [item.id, item]),
+    (Array.isArray(currentState.integrations) ? currentState.integrations : []).map((item) => [item.id, item]),
   )
   return {
     ...defaultWizardState,
-    ...parsed,
+    ...currentState,
     requirementFile: null,
-    projectId: parsed.projectId ? String(parsed.projectId) : null,
+    projectId: currentState.projectId ? String(currentState.projectId) : null,
     integrations: DEFAULT_INTEGRATIONS.map((item) => {
       const saved = integrationsById.get(item.id)
       if (!saved) return { ...item }
       const { token: _token, ...rest } = saved
       return { ...item, ...rest, token: undefined }
     }),
-    wizardLayoutVersion: typeof parsed.wizardLayoutVersion === 'number' ? parsed.wizardLayoutVersion : 0,
+    wizardLayoutVersion: typeof currentState.wizardLayoutVersion === 'number' ? currentState.wizardLayoutVersion : 0,
   }
 }
 

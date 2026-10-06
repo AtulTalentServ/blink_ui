@@ -2,7 +2,7 @@ import type { ShipSubstage, WizardStep } from './types.ts'
 
 export const SHIP_SUBSTAGES: { id: ShipSubstage; label: string }[] = [
   { id: 'workspace', label: 'Workspace' },
-  { id: 'implementation', label: 'Implementation' },
+  { id: 'implementation', label: 'Work in Cursor' },
   { id: 'review-pr', label: 'Review & PR' },
   { id: 'release', label: 'Release' },
 ]

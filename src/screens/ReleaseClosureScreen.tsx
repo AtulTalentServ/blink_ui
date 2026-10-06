@@ -9,7 +9,7 @@ interface Props {
 }
 
 function issueId(state: WizardState): string | null {
-  return state.implementationIssueId || state.sdlcStartIssueId || state.specification?.issueId || null
+  return state.sdlcStartIssueId || state.specification?.issueId || null
 }
 
 function blankRelease(issue: string): ReleaseClosureState {
@@ -40,8 +40,8 @@ export function ReleaseClosureScreen({ state, onUpdate, onNavigate }: Props) {
     return (
       <div className="screen release-screen">
         <section className="card shape-section">
-          <h2>No implementation work item is selected</h2>
-          <p className="muted">Complete Review &amp; PR evidence before recording a release or closure.</p>
+          <h2>No active SDLC work item is recorded</h2>
+          <p className="muted">Complete work in Cursor and record Review &amp; PR evidence before recording a release or closure.</p>
           <button type="button" className="secondary-btn" onClick={() => onNavigate('review-pr')}>
             Go to Review &amp; PR <ExternalLink size={14} aria-hidden />
           </button>

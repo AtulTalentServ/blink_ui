@@ -249,62 +249,6 @@ export interface TechnicalPlanState {
   issueId?: string
 }
 
-export interface ImplementationExecutionStep {
-  id: string
-  title: string
-  detail: string
-  repositoryIds: string[]
-  acceptanceCriteria: string[]
-  dependencies: string[]
-}
-
-export interface ImplementationExecutionPlan {
-  issueId: string
-  readinessDigest: string
-  stage: 'awaiting-cursor-confirmation' | 'ready-for-review' | 'accepted' | 'returned-to-work-plan'
-  source: 'approved-technical-plan'
-  steps: ImplementationExecutionStep[]
-  cursorPlanningReportedAt?: string | null
-  acceptedAt?: string | null
-}
-
-export type ImplementationStage =
-  | 'waiting-to-start'
-  | 'preparing'
-  | 'implementing'
-  | 'waiting-for-user-decision'
-  | 'blocked'
-  | 'reviewing'
-  | 'validation-reported'
-  | 'draft-pr-ready'
-  | 'complete'
-
-export interface ImplementationProgressReport {
-  id: string
-  issueId: string
-  stage: ImplementationStage
-  completedStepId?: string | null
-  currentStepId?: string | null
-  repositories: { name: string; branch?: string; commits?: string[] }[]
-  changedFiles: string[]
-  acceptanceCriteriaCovered: string[]
-  validation: string[]
-  blockers: string[]
-  deviations: string[]
-  recommendedNextAction: string
-  reportedAt: string
-  importedAt: string
-}
-
-export interface ImplementationResultReview {
-  reportId: string
-  issueId: string
-  readinessDigest: string
-  decision: 'accepted' | 'revision-requested'
-  feedback: string
-  decidedAt: string
-}
-
 export interface RegisteredPullRequest {
   id: string
   issueId: string
@@ -456,22 +400,6 @@ export interface WizardState extends SetupForm {
   scopeClarifyStatus?: string | null
   scopeQuestions?: GroomQuestion[]
   scopeAnswers?: GroomAnswer[]
-  /** Work item selected for the external implementation handoff. */
-  implementationIssueId?: string | null
-  /** Context fingerprint when implementation readiness was last reviewed. */
-  implementationReadinessDigest?: string | null
-  /** Tool selected to execute the current implementation handoff. */
-  implementationTool?: 'cursor' | null
-  /** When the user confirmed that the handoff was opened in the selected tool. */
-  implementationHandoffStartedAt?: string | null
-  /** Readiness fingerprint associated with the recorded tool handoff. */
-  implementationHandoffStartedDigest?: string | null
-  /** Reviewable implementation sequence derived from the approved technical plan. */
-  implementationExecutionPlan?: ImplementationExecutionPlan | null
-  /** Cursor-reported implementation results, retained as an append-only timeline. */
-  implementationProgressHistory?: ImplementationProgressReport[]
-  /** Human result-review decisions retained separately from Cursor reports. */
-  implementationResultReviews?: ImplementationResultReview[]
   /** Provider/draft pull requests explicitly registered for review. */
   registeredPullRequests?: RegisteredPullRequest[]
   /** Review findings retained independently from PR provider data. */
@@ -731,14 +659,6 @@ export const defaultWizardState: WizardState = {
   scopeClarifyStatus: null,
   scopeQuestions: [],
   scopeAnswers: [],
-  implementationIssueId: null,
-  implementationReadinessDigest: null,
-  implementationTool: null,
-  implementationHandoffStartedAt: null,
-  implementationHandoffStartedDigest: null,
-  implementationExecutionPlan: null,
-  implementationProgressHistory: [],
-  implementationResultReviews: [],
   registeredPullRequests: [],
   reviewFindings: [],
   qaEvidence: null,
@@ -899,14 +819,6 @@ export function clearGroomingPatch(): Partial<WizardState> {
     scopeClarifyStatus: null,
     scopeQuestions: [],
     scopeAnswers: [],
-    implementationIssueId: null,
-    implementationReadinessDigest: null,
-    implementationTool: null,
-    implementationHandoffStartedAt: null,
-    implementationHandoffStartedDigest: null,
-    implementationExecutionPlan: null,
-    implementationProgressHistory: [],
-    implementationResultReviews: [],
     registeredPullRequests: [],
     reviewFindings: [],
     qaEvidence: null,
