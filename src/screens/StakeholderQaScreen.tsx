@@ -10,7 +10,6 @@ import {
   shouldAutoRunGroomingLoop,
   validateStakeholderResponses,
 } from './StakeholderResponsesScreen'
-import { GovernedGroomingPanel } from './GovernedGroomingPanel'
 import type { QuestionResponse, StakeholderQuestion, WizardState, WizardStep } from '../wizard/types'
 
 type QaTab = 'compose' | 'inbox'
@@ -97,8 +96,6 @@ export function StakeholderQaScreen(props: Props) {
           <span>Mandatory resolved</span>
         </div>
       </div>
-
-      <GovernedGroomingPanel state={state} />
 
       <div className="tab-row qa-tabs" role="tablist" aria-label="Stakeholder Q and A">
         <button
