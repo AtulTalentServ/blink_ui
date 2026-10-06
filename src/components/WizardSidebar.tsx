@@ -301,21 +301,6 @@ export function WizardSidebar({
         </nav>
       ) : null}
 
-      {state.canonicalBlockers?.length ? (
-        <div className="sidebar-blockers" aria-label="Canonical blockers">
-          {state.canonicalBlockers.slice(0, 2).map((b) => (
-            <p key={b.code || b.message} className="quiet-hint" title={b.message}>
-              {b.code ? <code>{b.code}</code> : null}
-              {b.code ? ' · ' : null}
-              {b.message}
-            </p>
-          ))}
-          {state.canonicalBlockers.length > 2 ? (
-            <p className="quiet-hint">+{state.canonicalBlockers.length - 2} more canonical blocker(s)</p>
-          ) : null}
-        </div>
-      ) : null}
-
       {developerState.enabled ? (
         <div className="account-float is-collapsed">
           <div className="account-float-collapsed">
