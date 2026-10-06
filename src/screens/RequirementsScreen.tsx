@@ -5,7 +5,6 @@ import { GroomingPanel } from './GroomRequirementScreen'
 import { JiraScopePanel } from './JiraScopePanel'
 import { DesignOptionsPanel } from './DesignOptionsPanel'
 import { ScopeStartStatus, validateSdlcScope } from './SdlcPlanningScreen'
-import { RequirementRevisionPanel } from './RequirementRevisionPanel'
 import { extractRequirementText } from '../api/blink'
 import { unansweredRequired } from '../wizard/grooming'
 import { shouldAutoStartClarify } from '../wizard/thinking'
@@ -478,7 +477,6 @@ export function RequirementsScreen({
                 jiraPublish={jiraPublish}
               />
               <ScopeStartStatus state={state} onUpdate={onUpdate} />
-              <RequirementRevisionPanel projectId={state.projectId} />
               {!jiraConnected && onNavigate ? (
                 <p className="groom-blocker-hint">
                   Connect Atlassian to create tickets.{' '}

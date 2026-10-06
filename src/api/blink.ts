@@ -882,17 +882,6 @@ export async function recoverExecutionScope(
   if (!response.ok) throw new Error(await readError(response))
 }
 
-export async function fetchRequirementRevisionHistory(
-  projectId: string,
-  view?: string,
-): Promise<{ revisions: { id: number; revisionNo: number; viewKind: string; contentDigest: string; createdAt: string }[] }> {
-  const q = view ? `?view=${encodeURIComponent(view)}` : ''
-  const url = apiUrl(`/projects/${projectId}/canonical/requirements/history${q}`)
-  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json() as Promise<{ revisions: { id: number; revisionNo: number; viewKind: string; contentDigest: string; createdAt: string }[] }>
-}
-
 export async function fetchShipSession(projectId: string): Promise<{ session: ShipSessionDetailDto | null }> {
   const url = apiUrl(`/projects/${projectId}/canonical/ship/session`)
   const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
