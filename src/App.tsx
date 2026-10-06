@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
-import { downloadWorkspace, fetchWorkspaceStatus, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
+import { downloadWorkspace, fetchWorkspaceStatus, isNotProjectOwnerError, rehomeProject, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
@@ -13,6 +13,7 @@ import {
   ProjectShapeScreen,
   RepositoriesScreen,
   TechnologyPerRepoScreen,
+  type ShapeConfirmAction,
 } from './screens/ExtendedScreens'
 import { WorkspaceScreen } from './screens/WorkspaceScreen'
 import { ReviewPrScreen } from './screens/ReviewPrScreen'
@@ -220,6 +221,18 @@ export default function App() {
   const autoEnsureProject = useDeveloperCapability('autoEnsureProject')
   const unrestrictedNav = useDeveloperCapability('unrestrictedStepNav')
   const [chatOpen, setChatOpen] = useChatPanelOpen()
+  const shapeConfirmRef = useRef<(() => Promise<void>) | null>(null)
+  const [shapeConfirmUi, setShapeConfirmUi] = useState({ busy: false, pending: false, confirmed: false })
+  const onShapeConfirm = useCallback((action: ShapeConfirmAction | null) => {
+    shapeConfirmRef.current = action?.run ?? null
+    setShapeConfirmUi((prev) => {
+      const next = action
+        ? { busy: action.busy, pending: action.pending, confirmed: action.confirmed }
+        : { busy: false, pending: false, confirmed: false }
+      if (prev.busy === next.busy && prev.pending === next.pending && prev.confirmed === next.confirmed) return prev
+      return next
+    })
+  }, [])
 
   const patch = useCallback((updates: Partial<WizardState>) => {
     setState((prev) => ({ ...prev, ...withShapeInvalidation(prev, updates) }))
@@ -508,15 +521,21 @@ export default function App() {
     if (!session?.email || !state.projectId) return
     const timer = window.setTimeout(() => {
       const payload = withDraftProjectPayload(projectPayload())
-      void saveProject({
+      const wizardPayload = {
         ...payload,
         wizardStep: wizardBookmark(),
         wizardCompletedThrough: completedThrough,
         wizardState: serializeWizardState(state),
-      }, state.projectId).catch(() => undefined)
+      }
+      void saveProject(wizardPayload, state.projectId).catch((error) => {
+        if (!isNotProjectOwnerError(error)) return
+        void rehomeProject(wizardPayload).then((saved) => {
+          patch({ projectId: String(saved.id) })
+        }).catch(() => undefined)
+      })
     }, 900)
     return () => window.clearTimeout(timer)
-  }, [session?.email, state, step, completedThrough, projectPayload, wizardBookmark])
+  }, [session?.email, state, step, completedThrough, projectPayload, wizardBookmark, patch])
 
   // Flush draft + best-effort server save before tab close/refresh.
   useEffect(() => {
@@ -1934,6 +1953,22 @@ export default function App() {
           topology: state.topology,
           repositoryModel: state.repositoryModel,
           architectureStyle: state.architectureStyle,
+          topologyConfirmation: state.topologyConfirmation
+            ? {
+                ...state.topologyConfirmation,
+                structure: state.repositoryModel,
+                roster: repositories.map((repo) => ({
+                  repo_id: repo.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || repo.name,
+                  name: repo.name,
+                  role: repo.purpose,
+                })),
+                technologyStack: (state.repoTechnologies || [])
+                  .filter((row) => row.status === 'confirmed')
+                  .map((row) => `${row.repoId}: ${[row.language, row.framework].filter(Boolean).join(' / ')}`)
+                  .join('; '),
+                repoTechnologies: state.repoTechnologies,
+              }
+            : undefined,
           repositories,
           integrations: state.integrations
             .filter((integration) => integration.connected)
@@ -2121,7 +2156,7 @@ export default function App() {
       case 'sdlc-plan':
         return <SdlcPlanningScreen state={state} onUpdate={patch} />
       case 'project-shape':
-        return <ProjectShapeScreen state={state} onUpdate={patch} />
+        return <ProjectShapeScreen state={state} onUpdate={patch} onShapeConfirm={onShapeConfirm} />
       case 'technology-per-repo':
         return <TechnologyPerRepoScreen state={state} onUpdate={patch} />
       case 'ship':
@@ -2318,10 +2353,24 @@ export default function App() {
               <button
                 type="button"
                 className="primary-btn action-float-btn action-float-next"
-                disabled={saving || loading || grooming || creatingRepos}
-                onClick={() => void goNext()}
+                disabled={
+                  saving
+                  || loading
+                  || grooming
+                  || creatingRepos
+                  || (step === 'project-shape' && !shapeConfirmUi.confirmed && (shapeConfirmUi.busy || shapeConfirmUi.pending))
+                }
+                onClick={() => {
+                  if (step === 'project-shape' && !shapeConfirmUi.confirmed) {
+                    void shapeConfirmRef.current?.()
+                    return
+                  }
+                  void goNext()
+                }}
               >
-                {primaryContinueLabel(step, state, { saving, creatingRepos })} <ChevronRight size={14} />
+                {step === 'project-shape' && !shapeConfirmUi.confirmed
+                  ? (shapeConfirmUi.busy ? 'Confirming…' : 'Confirm structure')
+                  : <>{primaryContinueLabel(step, state, { saving, creatingRepos })} <ChevronRight size={14} /></>}
               </button>
             ) : (
               <span className="action-float-slot" aria-hidden="true" />

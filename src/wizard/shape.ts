@@ -1,6 +1,6 @@
 import { substageFromLegacyStep } from './ship.ts'
 import { STEP_ORDER } from './steps.ts'
-import type { WizardState, WizardStep } from './types.ts'
+import type { TopologyConfirmation, WizardState, WizardStep } from './types.ts'
 
 /** Saved drafts from before Ship consolidated workspace/implementation/review/release. */
 export const WIZARD_LAYOUT_VERSION = 7
@@ -116,14 +116,113 @@ export function withShapeInvalidation(
 ): Partial<WizardState> {
   const next = { ...prev, ...updates }
   if (shapeFingerprint(prev) === shapeFingerprint(next)) return updates
-  if (!prev.shapeAcknowledged && !hasWorkPlanArtifacts(prev)) return updates
-  return { ...updates, ...clearWorkPlanPatch() }
+  const structureChanged = prev.repositoryModel !== next.repositoryModel
+  const dropConfirmation = structureChanged
+    && Boolean(prev.topologyConfirmation)
+    && updates.topologyConfirmation === undefined
+  const confirmationPatch = dropConfirmation ? { topologyConfirmation: null as TopologyConfirmation | null } : {}
+  if (!prev.shapeAcknowledged && !hasWorkPlanArtifacts(prev)) {
+    return dropConfirmation ? { ...updates, ...confirmationPatch } : updates
+  }
+  return { ...updates, ...confirmationPatch, ...clearWorkPlanPatch() }
+}
+
+export function canonicalRepositoryStructure(value: string | undefined): string {
+  const normalized = (value || '').trim().toLowerCase().replace(/_/g, '-')
+  if (normalized === 'mono-repo' || normalized === 'monorepo') return 'monorepo'
+  if (normalized === 'multirepo' || normalized === 'multi-repo') return 'multi-repo'
+  if (normalized === 'singlerepo' || normalized === 'single-repo') return 'single-repo'
+  return normalized
+}
+
+export function topologyConfirmer(state: WizardState): { name: string; email: string } | null {
+  const rows = state.stakeholderAssignments || []
+  const lead = rows.find((row) => row.roleId === 'tech_lead' && row.personName.trim() && row.personEmail.trim())
+    || rows.find((row) => row.personName.trim() && row.personEmail.trim())
+  if (!lead) return null
+  return { name: lead.personName.trim(), email: lead.personEmail.trim() }
+}
+
+/** Groomed requirement plus later answers, so shape commands see the same story as earlier steps. */
+export function shapeRequirementText(state: Pick<
+  WizardState,
+  'groomDraft' | 'requirementsText' | 'description' | 'groomQuestions' | 'groomAnswers' | 'questions' | 'responses' | 'productScope'
+>): string {
+  const parts: string[] = []
+  const base = (state.groomDraft || state.requirementsText || state.description || '').trim()
+  if (base) parts.push(base)
+
+  const clarifications = (state.groomQuestions || [])
+    .map((question) => {
+      const answer = (state.groomAnswers || []).find((row) => row.questionId === question.id)
+      const text = (answer?.otherText || answer?.optionLabel || '').trim()
+      return text ? `${question.text} ${text}` : ''
+    })
+    .filter(Boolean)
+  if (clarifications.length) parts.push(clarifications.join('\n'))
+
+  const stakeholderAnswers = (state.questions || [])
+    .map((question) => {
+      const response = (state.responses || []).find((row) => row.questionId === question.id)
+      const text = response?.status === 'answered' ? response.response.trim() : ''
+      return text ? `${question.question} ${text}` : ''
+    })
+    .filter(Boolean)
+  if (stakeholderAnswers.length) parts.push(stakeholderAnswers.join('\n'))
+
+  const epics = (state.productScope?.epics || []).map((epic) => epic.title.trim()).filter(Boolean)
+  if (epics.length) parts.push(`Epics: ${epics.join('; ')}`)
+  const stories = (state.productScope?.stories || []).map((story) => story.title.trim()).filter(Boolean).slice(0, 12)
+  if (stories.length) parts.push(`Stories: ${stories.join('; ')}`)
+
+  return parts.join('\n\n')
+}
+
+export function technologyStackSummary(state: Pick<WizardState, 'repoTechnologies'>): string {
+  return (state.repoTechnologies || [])
+    .filter((row) => row.status === 'confirmed')
+    .map((row) => {
+      const piece = [row.language, row.framework].filter((part) => part && part !== '—').join(' / ')
+      return piece ? `${row.repoId}: ${piece}` : ''
+    })
+    .filter(Boolean)
+    .join('; ')
+}
+
+export function topologyRoster(state: Pick<WizardState, 'repositories'>) {
+  return (state.repositories || [])
+    .filter((repo) => repo.name.trim())
+    .map((repo) => ({
+      repo_id: repo.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || repo.id,
+      name: repo.name.trim(),
+      role: repo.purpose,
+    }))
+}
+
+export function nextTopologyConfirmation(
+  state: WizardState,
+  patch: Partial<Pick<WizardState, 'repositories' | 'repoTechnologies'>> = {},
+): TopologyConfirmation | null {
+  const current = state.topologyConfirmation
+  if (!current?.structure || !current.confirmedBy || !current.evidenceRef) return current || null
+  const next = { ...state, ...patch }
+  return {
+    ...current,
+    structure: canonicalRepositoryStructure(next.repositoryModel),
+    roster: topologyRoster(next),
+    technologyStack: technologyStackSummary(next),
+  }
 }
 
 export function validateProjectShape(state: WizardState): string | null {
   if (!state.topology) return 'Pick an application topology before continuing.'
   if (!state.repositoryModel) return 'Pick a repository model before continuing.'
   if (!state.architectureStyle) return 'Pick an architecture style before continuing.'
+  const confirmed = canonicalRepositoryStructure(state.topologyConfirmation?.structure)
+  const selected = canonicalRepositoryStructure(state.repositoryModel)
+  if (!confirmed || confirmed !== selected) {
+    return 'Confirm the repository structure before continuing.'
+  }
   return null
 }
 

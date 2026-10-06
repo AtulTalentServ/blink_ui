@@ -707,6 +707,92 @@ export async function saveCanonicalArchitecture(
   return response.json() as Promise<{ digest: string }>
 }
 
+export interface ShapeProposalDto {
+  topology: string
+  repositoryModel: string
+  architectureStyle: string
+  rationale: string
+  components?: { id: string; purpose: string; description: string }[]
+}
+
+export interface TopologyConfirmationDto {
+  structure: string
+  confirmedBy: string
+  evidenceRef: string
+  roster?: { repo_id: string; name?: string; role?: string }[]
+  technologyStack?: string
+}
+
+async function postShapeCommand(
+  projectId: string,
+  command: 'architecture-proposal' | 'confirm-topology',
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/commands/execute`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ command, payload }),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  const envelope = (await response.json()) as {
+    status?: string
+    error?: string
+    result?: Record<string, unknown>
+  }
+  if (envelope.status && envelope.status !== 'completed' && envelope.status !== 'ok') {
+    throw new Error(envelope.error || envelope.status)
+  }
+  const result =
+    envelope.result && typeof envelope.result === 'object' ? envelope.result : (envelope as Record<string, unknown>)
+  const status = String(result.status || '')
+  if (status && status !== 'ok') {
+    const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
+    throw new Error(String(result.message || errors || status))
+  }
+  return result
+}
+
+export async function proposeProjectShape(
+  projectId: string,
+  payload: { projectName?: string; requirementText?: string },
+): Promise<ShapeProposalDto> {
+  const result = await postShapeCommand(projectId, 'architecture-proposal', payload)
+  const proposal = result.architectureProposal
+  if (!proposal || typeof proposal !== 'object') {
+    throw new Error('Architecture proposal did not include a shape.')
+  }
+  const row = proposal as ShapeProposalDto
+  if (!row.repositoryModel || !row.topology || !row.architectureStyle) {
+    throw new Error('Architecture proposal is incomplete.')
+  }
+  return row
+}
+
+export async function confirmProjectTopology(
+  projectId: string,
+  payload: Record<string, unknown>,
+): Promise<TopologyConfirmationDto> {
+  const result = await postShapeCommand(projectId, 'confirm-topology', payload)
+  const confirmation = result.topologyConfirmation
+  if (!confirmation || typeof confirmation !== 'object') {
+    throw new Error('Topology confirmation was not recorded.')
+  }
+  const row = confirmation as TopologyConfirmationDto
+  if (!row.structure || !row.confirmedBy || !row.evidenceRef) {
+    throw new Error('Topology confirmation is incomplete.')
+  }
+  return row
+}
+
+export async function invalidateCanonicalArchitecture(projectId: string, reason: string): Promise<void> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/architecture`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ invalidate: true, reason }),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+}
+
 export async function confirmCanonicalArchitecture(projectId: string, digest: string): Promise<void> {
   const response = await fetch(apiUrl(`/projects/${projectId}/canonical/architecture`), {
     method: 'POST',
@@ -854,6 +940,23 @@ export async function fetchMyProject(): Promise<ProjectDto | null> {
   if (response.status === 204) return null
   if (!response.ok) throw new Error(await readError(response))
   return response.json() as Promise<ProjectDto>
+}
+
+export function isNotProjectOwnerError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return /not project owner/i.test(message)
+}
+
+let rehomeInFlight: Promise<ProjectDto> | null = null
+
+/** Create a project for the signed-in user when the wizard still points at someone else's id. */
+export function rehomeProject(payload: ProjectPayload): Promise<ProjectDto> {
+  if (!rehomeInFlight) {
+    rehomeInFlight = saveProject(payload).finally(() => {
+      rehomeInFlight = null
+    })
+  }
+  return rehomeInFlight
 }
 
 export async function saveProject(payload: ProjectPayload, projectId?: string | null): Promise<ProjectDto> {

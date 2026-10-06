@@ -366,6 +366,29 @@ export interface ReleaseClosureState {
   } | null
 }
 
+export interface ShapeComponent {
+  id: string
+  purpose: string
+  description: string
+}
+
+export interface ShapeProposal {
+  topology: string
+  repositoryModel: string
+  architectureStyle: string
+  rationale: string
+  /** Surfaces and named services taken from the requirement. Unconfirmed. */
+  components?: ShapeComponent[]
+}
+
+export interface TopologyConfirmation {
+  structure: string
+  confirmedBy: string
+  evidenceRef: string
+  roster?: { repo_id: string; name?: string; role?: string }[]
+  technologyStack?: string
+}
+
 export interface WizardState extends SetupForm {
   applicationType: string
   javaVersion: string
@@ -480,6 +503,10 @@ export interface WizardState extends SetupForm {
   shapeAcknowledged?: boolean
   /** Fingerprint of the reviewed shape; plan is cleared when it changes. */
   shapeDigest?: string | null
+  /** Unconfirmed suggestion from architecture-proposal. */
+  shapeProposal?: ShapeProposal | null
+  /** Human /confirm-topology record. Setup copies this onto canonical intake. */
+  topologyConfirmation?: TopologyConfirmation | null
   /** Wizard sidebar order version. 2 = Shape before Work plan. */
   wizardLayoutVersion?: number
   /** Active substage when `wizardStep` is `ship`. */
@@ -733,6 +760,8 @@ export const defaultWizardState: WizardState = {
   groomAcknowledged: false,
   shapeAcknowledged: false,
   shapeDigest: null,
+  shapeProposal: null,
+  topologyConfirmation: null,
   shipSubstage: 'workspace',
   wizardLayoutVersion: 7,
   canonicalRevision: null,
