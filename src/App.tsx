@@ -2183,12 +2183,6 @@ export default function App() {
             implementation={
               <ImplementationReadinessScreen
                 state={state}
-                onUpdate={patch}
-                onNavigate={(next) => {
-                  setStatus(null)
-                  if (next === 'ship') goToShipSubstage('implementation')
-                  else goToStep(next)
-                }}
               />
             }
             reviewPr={

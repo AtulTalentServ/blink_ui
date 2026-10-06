@@ -10,7 +10,7 @@ interface Props {
 }
 
 function issueId(state: WizardState): string | null {
-  return state.implementationIssueId || state.sdlcStartIssueId || state.specification?.issueId || null
+  return state.sdlcStartIssueId || state.specification?.issueId || null
 }
 
 function makeId(prefix: string) {
@@ -27,9 +27,6 @@ export function ReviewPrScreen({ state, onUpdate, onNavigate }: Props) {
   })
   const [mergeAuthorizer, setMergeAuthorizer] = useState('')
   const selectedIssueId = issueId(state)
-  const acceptedResult = (state.implementationResultReviews || [])
-    .filter((review) => review.issueId === selectedIssueId && review.decision === 'accepted')
-    .at(-1)
   const pullRequests = (state.registeredPullRequests || []).filter((item) => item.issueId === selectedIssueId)
   const findings = (state.reviewFindings || []).filter((item) => item.issueId === selectedIssueId)
   const openMustFix = findings.filter((item) => item.severity === 'must-fix' && item.status === 'open')
@@ -121,20 +118,10 @@ export function ReviewPrScreen({ state, onUpdate, onNavigate }: Props) {
 
       {!selectedIssueId ? (
         <section className="card shape-section">
-          <h3>No implementation work item is selected</h3>
-          <p className="muted">Return to Implementation and prepare a complete Cursor handoff first.</p>
+          <h3>No active SDLC work item is recorded</h3>
+          <p className="muted">Start work on a ticket in Cursor before recording pull-request or review evidence.</p>
           <button type="button" className="secondary-btn" onClick={() => onNavigate('implementation')}>
-            Go to Implementation <ExternalLink size={14} aria-hidden />
-          </button>
-        </section>
-      ) : !acceptedResult ? (
-        <section className="card shape-section">
-          <h3>Review the implementation result first</h3>
-          <p className="muted">
-            Import and accept a Cursor-reported result in Implementation before registering a pull request or review evidence.
-          </p>
-          <button type="button" className="secondary-btn" onClick={() => onNavigate('implementation')}>
-            Review implementation result <ExternalLink size={14} aria-hidden />
+            Go to Work in Cursor <ExternalLink size={14} aria-hidden />
           </button>
         </section>
       ) : (

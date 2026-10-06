@@ -21,81 +21,6 @@ const JOURNEY: { id: JourneyStage; label: string }[] = [
   { id: 'release', label: 'Release' },
 ]
 
-function selectedIssueId(state: WizardState): string | null {
-  return (
-    state.implementationIssueId ||
-    state.sdlcStartIssueId ||
-    state.specification?.issueId ||
-    state.workClassification?.issueId ||
-    state.productScope?.stories?.[0]?.id ||
-    state.productScope?.storyIds?.[0] ||
-    null
-  )
-}
-
-function readinessGap(state: WizardState): { target: WizardStep; action: string; detail: string } | null {
-  if (!((state.groomDraft || state.requirementsText || '').trim() && state.groomConfirmed)) {
-    return {
-      target: 'requirements',
-      action: 'Finalize the requirement',
-      detail: 'Blink needs the approved requirement wording before it can prepare a Cursor handoff.',
-    }
-  }
-  if (!(state.productScope?.status === 'confirmed' || state.productScope?.confirmationDigest)) {
-    return {
-      target: 'requirements',
-      action: 'Confirm product scope',
-      detail: 'The selected work must be bounded before implementation starts.',
-    }
-  }
-  if (!selectedIssueId(state)) {
-    return {
-      target: 'requirements',
-      action: 'Select a work item',
-      detail: 'Blink needs one story or started SDLC work item to hand off to Cursor.',
-    }
-  }
-  if (!state.groomAcknowledged) {
-    return {
-      target: 'stakeholder-qa',
-      action: 'Acknowledge grooming',
-      detail: 'Resolve and carry forward the stakeholder context first.',
-    }
-  }
-  if (!state.shapeAcknowledged || state.repoTechnologies.some((item) => item.status !== 'confirmed')) {
-    return {
-      target: state.shapeAcknowledged ? 'technology-per-repo' : 'project-shape',
-      action: 'Confirm project shape and technology',
-      detail: 'Cursor needs confirmed repositories and technology choices.',
-    }
-  }
-  if (!state.specification?.markdown || !state.acceptanceCriteriaAcknowledged) {
-    return {
-      target: 'sdlc-plan',
-      action: 'Confirm specification and acceptance criteria',
-      detail: 'Cursor needs a reviewed definition of done.',
-    }
-  }
-  if (
-    !(state.technicalPlan?.markdown || state.technicalPlan?.steps?.length) ||
-    !(state.planAcknowledged || state.shipPlanAcknowledged)
-  ) {
-    return {
-      target: 'sdlc-plan',
-      action: 'Review and acknowledge the technical plan',
-      detail: 'Implementation cannot start without an approved plan.',
-    }
-  }
-  if (!state.gitWritten) {
-    return {
-      target: 'generation',
-      action: 'Prepare the workspace',
-      detail: 'Commit the workspace guidance before handing work to Cursor.',
-    }
-  }
-  return null
-}
-
 function journeyStep(step: WizardStep, state: WizardState): WizardStep {
   if (step !== 'ship') return step
   const sub = state.shipSubstage || 'workspace'
@@ -144,91 +69,18 @@ function guidanceFor(state: WizardState, step: WizardStep): Guidance | null {
     }
     return {
       stage: 'implementation',
-      title: 'Prepare the Cursor handoff',
-      detail: 'The workspace is ready. Blink can now assemble the selected work for Cursor.',
-      actionLabel: 'Go to Implementation',
+      title: 'Open the workspace in Cursor',
+      detail: 'The workspace is ready. Download it once, then use the AI-SDLC commands in Cursor to work eligible tickets.',
+      actionLabel: 'Go to Work in Cursor',
       target: 'implementation',
     }
   }
   if (step === 'implementation') {
-    const gap = readinessGap(state)
-    if (gap) {
-      return {
-        stage: 'implementation',
-        title: gap.action,
-        detail: gap.detail,
-        actionLabel: `Go to ${gap.target === 'generation' ? 'Workspace' : 'the required step'}`,
-        target: gap.target,
-        blocked: true,
-      }
-    }
-    if (!state.implementationReadinessDigest) {
-      return {
-        stage: 'implementation',
-        title: 'Confirm the current handoff context',
-        detail: 'Review the carried-forward requirement, plan, repositories, and workspace before sharing it with Cursor.',
-        actionLabel: 'Confirm readiness below',
-      }
-    }
-    if (!state.implementationHandoffStartedAt) {
-      return {
-        stage: 'implementation',
-        title: 'Start the Cursor handoff',
-        detail: 'Use the prepared Cursor instruction, open the listed repositories, then confirm the handoff is open.',
-        actionLabel: 'Use Cursor below',
-        returnInstruction: 'After Cursor confirms the execution steps, return here to review and accept them.',
-      }
-    }
-    if (state.implementationExecutionPlan?.stage !== 'accepted') {
-      return {
-        stage: 'implementation',
-        title: 'Review Cursor’s execution steps',
-        detail: 'Confirm that the proposed steps, repositories, and acceptance criteria match the approved plan.',
-        actionLabel: 'Review the implementation step plan below',
-        returnInstruction: 'After accepting the step plan, Cursor can start source changes.',
-      }
-    }
-    const latest = (state.implementationProgressHistory || []).at(-1)
-    if (!latest) {
-      return {
-        stage: 'implementation',
-        title: 'Implement in Cursor',
-        detail: 'The handoff and execution plan are ready. Cursor can now implement the approved work on its feature branch.',
-        actionLabel: 'Work in Cursor, then import its result below',
-        returnInstruction: 'Use the result template in Blink to import factual Cursor progress.',
-      }
-    }
-    if (latest.stage === 'blocked' || latest.stage === 'waiting-for-user-decision') {
-      return {
-        stage: 'implementation',
-        title: latest.stage === 'blocked' ? 'Resolve the reported blocker' : 'Make the requested decision',
-        detail: latest.recommendedNextAction,
-        actionLabel: 'Review the blocker and return to Cursor',
-        returnInstruction: 'Import the next Cursor result after the blocker or decision is resolved.',
-        blocked: true,
-      }
-    }
-    if (latest.stage === 'complete' || latest.stage === 'draft-pr-ready') {
-      const resultAccepted = (state.implementationResultReviews || []).some(
-        (review) => review.reportId === latest.id && review.decision === 'accepted',
-      )
-      return {
-        stage: 'review',
-        title: resultAccepted ? 'Track Review & PR evidence' : 'Review the reported implementation result',
-        detail: resultAccepted
-          ? 'The implementation result is accepted. Register review, QA, PR, and human merge-readiness evidence.'
-          : 'Check files, branches, validation, acceptance-criteria coverage, and deviations before PR handling.',
-        actionLabel: resultAccepted ? 'Go to Review & PR' : 'Review the result below',
-        target: resultAccepted ? 'review-pr' : undefined,
-        returnInstruction: resultAccepted ? undefined : 'After accepting the result, Blink will guide the Review & PR path.',
-      }
-    }
     return {
       stage: 'implementation',
-      title: 'Import Cursor’s latest progress',
-      detail: latest.recommendedNextAction,
-      actionLabel: 'Import the next Cursor result below',
-      returnInstruction: 'Blink preserves each report so progress and blockers remain visible.',
+      title: 'Work tickets in Cursor',
+      detail: 'Open the downloaded workspace in Cursor. The AI-SDLC commands choose eligible tickets, load their context, and guide implementation.',
+      actionLabel: 'Continue in Cursor',
     }
   }
   if (step === 'review-pr') {
