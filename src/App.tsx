@@ -2387,7 +2387,7 @@ export default function App() {
               >
                 {step === 'project-shape' && !shapeConfirmUi.confirmed
                   ? (shapeConfirmUi.busy ? 'Confirming…' : 'Confirm structure')
-                  : <>{primaryContinueLabel(step, state, { saving, creatingRepos })} <ChevronRight size={14} /></>}
+                  : <>{primaryContinueLabel(step, { saving, creatingRepos })} <ChevronRight size={14} /></>}
               </button>
             ) : (
               <span className="action-float-slot" aria-hidden="true" />
