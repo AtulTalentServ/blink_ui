@@ -31,12 +31,14 @@ function suggestionsForStep(step: string): string[] {
       return ['Which integrations do I need next?', 'How do I connect Jira?', 'Is GitHub required for repos?']
     case 'requirements':
       return [
-        'What should I paste for clarify?',
-        'When can I mark Jira later?',
-        'Does this start the SDLC automatically?',
+        'What makes a good requirement source?',
+        'Can I upload a document instead?',
+        'What happens in Stakeholder Q&A?',
       ]
     case 'stakeholder-qa':
       return [
+        'How do I clarify this requirement?',
+        'When can I create Jira tickets?',
         'Which questions are still pending?',
         'How do Jira comments get posted?',
         'What is still waiting on replies?',

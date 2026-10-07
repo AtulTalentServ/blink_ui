@@ -223,14 +223,12 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         }
         const draftPrs = res.draftPullRequests || []
         setPrs(draftPrs)
-        const resolvedIssue = res.implementStep?.issueId || res.issueId || issueId
+        const impl = res.implementStep
+        const resolvedIssue = impl?.issueId || res.issueId || issueId
         onUpdate({
-          implementStep: res.implementStep || {
+          implementStep: impl || {
             issueId: resolvedIssue,
-            commitMessage: res.implementStep?.commitMessage,
             summary: res.message,
-            files: res.implementStep?.files,
-            notes: res.implementStep?.notes,
           },
           sdlcStartIssueId: resolvedIssue,
           implementationAuthorized: true,

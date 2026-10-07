@@ -55,9 +55,9 @@ export function buildReviewIssues(state: WizardState): ReviewIssue[] {
         : unsentQuestions.length || pendingMandatory.length
           ? 'stakeholder-qa'
           : state.requirementsText.trim() && !state.groomConfirmed
-              ? 'requirements'
+              ? 'stakeholder-qa'
               : !state.requirementsAnalyzed
-                ? 'requirements'
+                ? 'stakeholder-qa'
                 : 'integrations',
       details: missingDetails,
     })

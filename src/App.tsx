@@ -909,25 +909,6 @@ export default function App() {
     } else if (step === 'technology-per-repo') {
       patch(acknowledgeShapePatch(state))
       setStatus(null)
-    } else if (step === 'requirements') {
-      // Continue confirms wording (replaces the old in-page "Use this wording" CTA).
-      if (!state.groomConfirmed) {
-        const ok = await handleGroomLooksGoodRef.current()
-        if (!ok) return
-      }
-      setStatus(null)
-      const wording =
-        (stateRef.current.groomDraft || stateRef.current.requirementsText).trim() ||
-        state.requirementsText
-      const nextState = { ...stateRef.current, requirementsText: wording }
-      const questions = carryClarifyQuestionsForward(nextState)
-      patch({
-        requirementsText: wording,
-        questions,
-        requirementsAnalyzed: true,
-        responses: responsesForStakeholderQuestions(questions, stateRef.current.responses),
-        questionsSent: false,
-      })
     } else {
       setStatus(null)
     }
@@ -2161,13 +2142,6 @@ export default function App() {
                 'requirementsText' in updates || 'requirementFileName' in updates || 'requirementFile' in updates
               patch(resetGroom ? { ...clearGroomingPatch(), ...updates } : updates)
             }}
-            grooming={grooming || saving}
-            onAsk={() => void handleGroomAsk()}
-            onPick={handleGroomPick}
-            onOther={handleGroomOther}
-            onToggleOther={handleGroomToggleOther}
-            onUseWording={() => void handleGroomLooksGood()}
-            onStartOver={handleGroomStartOver}
             onNavigate={(s) => {
               setStatus(null)
               goToStep(s)
@@ -2179,7 +2153,14 @@ export default function App() {
           <StakeholderQaScreen
             state={state}
             onUpdate={patch}
+            grooming={grooming || saving}
             jiraPublish={jiraPublish}
+            onAsk={() => void handleGroomAsk()}
+            onPick={handleGroomPick}
+            onOther={handleGroomOther}
+            onToggleOther={handleGroomToggleOther}
+            onUseWording={() => void handleGroomLooksGood()}
+            onStartOver={handleGroomStartOver}
             onSendOne={handleSendOne}
             onSendAll={handleSendAll}
             onPostJira={handlePostJiraOne}
