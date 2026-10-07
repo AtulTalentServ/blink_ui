@@ -1,4 +1,5 @@
 import type { GroomAnswer, GroomQuestion, WizardState } from './types'
+import { hasRequirementSource } from './groomingEligibility'
 
 export type GroomPriority = 'need_clarification' | 'important' | 'suggestion'
 
@@ -85,7 +86,5 @@ export function unansweredRequired(state: Pick<WizardState, 'groomQuestions' | '
 }
 
 export function groomingComplete(state: WizardState): boolean {
-  if (!state.requirementsText.trim() && state.requirementFileName) return true
-  if (!state.requirementsText.trim()) return false
-  return state.groomConfirmed
+  return hasRequirementSource(state)
 }

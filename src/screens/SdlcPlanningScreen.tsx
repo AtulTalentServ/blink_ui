@@ -89,7 +89,7 @@ function stepDone(id: StepId, state: WizardState): boolean {
   }
 }
 
-/** Scope already locked on Requirements — nothing left to pick. */
+/** Scope is locked in Stakeholder Q&A before the work-plan stage. */
 export function shouldAutoRunScopeStart(_state: WizardState): boolean {
   return false
 }
@@ -121,7 +121,7 @@ function requirementTextOf(state: WizardState): string {
   )
 }
 
-/** Compact status on Requirements — confirm + /sdlc-start, no extra tab. */
+/** Compact status in Stakeholder Q&A — confirm + /sdlc-start, no extra tab. */
 export function ScopeStartStatus({
   state,
   onUpdate,
@@ -805,10 +805,10 @@ export function validateSdlcScope(state: WizardState): string | null {
     if (!state.productScope?.epics?.length && !state.productScope?.stories?.length) {
       return 'Propose epics and stories, then confirm product scope explicitly.'
     }
-    return 'Confirm product scope on Requirements before Stakeholder Q&A.'
+    return 'Confirm product scope on Stakeholder Q&A before continuing.'
   }
   if (!state.sdlcStartIssueId) {
-    return 'Start the SDLC chain on Requirements before Stakeholder Q&A.'
+    return 'Start the SDLC chain on Stakeholder Q&A before continuing.'
   }
   return null
 }

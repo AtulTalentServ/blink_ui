@@ -51,7 +51,7 @@ export function carryClarifyQuestionsForward(state: WizardState): StakeholderQue
     const queueJira = Boolean(q.queueJira)
     const queueEmail = Boolean(q.queueEmail)
     const queued = queueEmail || queueJira
-    // Required answered in Blink with no outbound queue → done on Requirements
+    // Required answered in Blink with no outbound queue → complete in Stakeholder Q&A.
     if (mandatory && answered && !queued) continue
     // Required unanswered without Jira later should be blocked by wording gate
     if (mandatory && !answered && !queueJira) continue

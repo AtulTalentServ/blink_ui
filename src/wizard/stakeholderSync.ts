@@ -45,7 +45,7 @@ export function mandatoryStakeholderQuestionsResolved(state: WizardState): boole
   })
 }
 
-/** Pre-fill responses when MCQ answers were captured on Requirements (including Jira later + in-app choice). */
+/** Pre-fill responses when clarification answers were captured in Stakeholder Q&A. */
 export function responsesForStakeholderQuestions(
   questions: StakeholderQuestion[],
   previous: QuestionResponse[] = [],
