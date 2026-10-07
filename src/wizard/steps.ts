@@ -177,12 +177,10 @@ export function stepAttention(
 
 /** Floating footer only — in-page actions must not reuse this word. */
 export function primaryContinueLabel(
-  step: WizardStep,
-  state: Pick<WizardState, 'questions' | 'groomConfirmed' | 'repositories' | 'responses'>,
+  _step: WizardStep,
   busy: { saving?: boolean; creatingRepos?: boolean },
 ): string {
   if (busy.creatingRepos) return 'Creating on GitHub…'
   if (busy.saving) return 'Saving…'
-  if (step === 'project-stakeholders') return 'Continue'
   return 'Continue'
 }
