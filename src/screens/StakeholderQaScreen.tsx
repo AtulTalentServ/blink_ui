@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Inbox, Send, Sparkles } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { GroomingPanel } from './GroomRequirementScreen'
 import { DesignOptionsPanel } from './DesignOptionsPanel'
 import { JiraScopePanel } from './JiraScopePanel'
-import { ScopeStartStatus, validateSdlcScope } from './SdlcPlanningScreen'
+import { ScopeStartStatus, validateSdlcScope, scopeConfirmed } from './SdlcPlanningScreen'
 import {
   StakeholderQuestionsScreen,
   jiraCommentForQuestion,
@@ -17,7 +16,34 @@ import {
 import type { QuestionResponse, StakeholderQuestion, WizardState, WizardStep } from '../wizard/types'
 import { shouldAutoStartClarify, type JiraPublishState } from '../wizard/thinking'
 
-type QaTab = 'clarify' | 'compose' | 'inbox'
+type QaTab = 'clarify' | 'compose' | 'inbox' | 'tickets'
+
+const QA_STEPS: { id: QaTab; label: string; title: string; detail: string }[] = [
+  {
+    id: 'clarify',
+    label: 'Clarify',
+    title: 'Clarify',
+    detail: 'Work with the agent on clearer requirement wording, then confirm it.',
+  },
+  {
+    id: 'compose',
+    label: 'Compose & send',
+    title: 'Compose & send',
+    detail: 'Send clarification questions to stakeholders by email or Jira.',
+  },
+  {
+    id: 'inbox',
+    label: 'Inbox & G-GROOM',
+    title: 'Inbox & G-GROOM',
+    detail: 'Resolve stakeholder answers, then acknowledge G-GROOM.',
+  },
+  {
+    id: 'tickets',
+    label: 'Scope & tickets',
+    title: 'Scope & tickets',
+    detail: 'Propose epics and stories from the confirmed requirement, then start the SDLC.',
+  },
+]
 
 interface Props {
   state: WizardState
@@ -48,8 +74,16 @@ interface Props {
   resetting?: boolean
 }
 
+/**
+ Ideal SDLC order for this step:
+ 1) Clarify wording with the agent
+ 2) Compose & send questions to stakeholders
+ 3) Inbox — resolve answers and acknowledge G-GROOM
+ 4) Scope & tickets — propose epics/stories from confirmed requirement
+*/
 function defaultTab(state: WizardState): QaTab {
   if (state.requirementsText.trim() && !state.groomConfirmed) return 'clarify'
+  if (state.groomAcknowledged && !scopeConfirmed(state)) return 'tickets'
   if (shouldAutoRunGroomingLoop(state)) return 'inbox'
   const hasOutbound = state.questions.some(
     (q) =>
@@ -59,10 +93,10 @@ function defaultTab(state: WizardState): QaTab {
   )
   const hasAnswers = state.responses.some((r) => r.status === 'answered' && r.response.trim())
   if (hasOutbound || hasAnswers || state.questionsSent) return 'inbox'
-  return 'compose'
+  if (state.groomConfirmed) return 'compose'
+  return 'clarify'
 }
 
-/** Single wizard step: compose/send clarifications and resolve answers + grooming. */
 export function StakeholderQaScreen(props: Props) {
   const { state } = props
   const [tab, setTab] = useState<QaTab>(() => defaultTab(state))
@@ -73,14 +107,20 @@ export function StakeholderQaScreen(props: Props) {
     hasTextSource &&
     Boolean(props.onAsk && props.onPick && props.onOther && props.onToggleOther && props.onUseWording && props.onStartOver)
   const canUseStakeholderWorkflow = wordingConfirmed
+  /** Tickets only after stakeholders confirmed (G-GROOM). */
+  const canPlanTickets = wordingConfirmed && Boolean(state.groomAcknowledged)
 
   useEffect(() => {
-    if (shouldAutoRunGroomingLoop(state)) setTab('inbox')
-  }, [state.questions, state.responses, state.groomRejectPending])
+    if (shouldAutoRunGroomingLoop(state) && !state.groomAcknowledged) setTab('inbox')
+  }, [state.questions, state.responses, state.groomRejectPending, state.groomAcknowledged])
 
   useEffect(() => {
     if (hasTextSource && !state.groomConfirmed) setTab('clarify')
   }, [hasTextSource, state.groomConfirmed])
+
+  useEffect(() => {
+    if (state.groomAcknowledged && !scopeConfirmed(state)) setTab('tickets')
+  }, [state.groomAcknowledged, state.productScope?.confirmationDigest, state.sdlcStartIssueId])
 
   useEffect(() => {
     if (tab !== 'clarify' || !canClarify || props.grooming) return
@@ -95,152 +135,167 @@ export function StakeholderQaScreen(props: Props) {
     }
   }, [tab, canClarify, props.grooming, props.onAsk, hasTextSource, state.groomQuestions.length, state.groomStatus])
 
-  const stats = useMemo(() => {
-    const total = state.questions.length
-    const outbound = state.questions.filter((q) => {
-      const emailed = q.sent
-      const jiraDone =
-        (q.jiraCommentStatus === 'posted' || q.jiraCommentStatus === 'replied') && Boolean(q.jiraCommentId)
-      const answered = state.responses.find((r) => r.questionId === q.id)?.status === 'answered'
-      return emailed || jiraDone || answered
-    }).length
-    const mandatory = state.questions.filter((q) => q.mandatory)
-    const resolved = mandatory.filter((q) => {
-      const response = state.responses.find((r) => r.questionId === q.id)
-      const text = response?.response?.trim() || q.jiraReplyBody?.trim()
-      return response?.status === 'answered' && Boolean(text)
-    }).length
-    return { total, outbound, mandatory: mandatory.length, resolved }
-  }, [state.questions, state.responses])
+  const activeIndex = QA_STEPS.findIndex((step) => step.id === tab)
+  const copy = QA_STEPS[activeIndex] || QA_STEPS[0]
+  const stepEnabled = (id: QaTab) => {
+    if (id === 'clarify') return true
+    if (id === 'compose' || id === 'inbox') return canUseStakeholderWorkflow
+    return canPlanTickets
+  }
+  const stepDone = (id: QaTab) => {
+    if (id === 'clarify') return wordingConfirmed
+    if (id === 'compose') {
+      return state.questions.length === 0 || !validateStakeholderQuestions(state)
+    }
+    if (id === 'inbox') return Boolean(state.groomAcknowledged)
+    return scopeConfirmed(state) && Boolean(state.sdlcStartIssueId)
+  }
 
   return (
     <div className="screen stakeholder-qa">
       <div className="screen-header">
-        <h2>Stakeholder Q&amp;A</h2>
-        <p>Clarify the requirement, plan tickets, and resolve stakeholder answers.</p>
+        <h2>{copy.title}</h2>
+        <p>{copy.detail}</p>
       </div>
 
-      <div className="qa-summary-strip">
-        <div>
-          <strong>
-            {stats.outbound}/{stats.total || 0}
-          </strong>
-          <span>Sent / handled</span>
-        </div>
-        <div>
-          <strong>
-            {stats.resolved}/{stats.mandatory || 0}
-          </strong>
-          <span>Mandatory resolved</span>
-        </div>
-      </div>
+      <ol className="ship-stepper" aria-label="Stakeholder Q and A phases">
+        {QA_STEPS.map((step, index) => {
+          const enabled = stepEnabled(step.id)
+          const active = step.id === tab
+          const done = !active && (index < activeIndex || stepDone(step.id))
+          return (
+            <li key={step.id} className={active ? 'is-active' : done ? 'is-done' : ''}>
+              <button
+                type="button"
+                aria-current={active ? 'step' : undefined}
+                disabled={!enabled}
+                title={
+                  enabled
+                    ? undefined
+                    : step.id === 'tickets'
+                      ? 'Acknowledge G-GROOM on Inbox first'
+                      : 'Confirm wording on Clarify first'
+                }
+                onClick={() => enabled && setTab(step.id)}
+              >
+                <span className="ship-step-index">{index + 1}</span>
+                <span className="ship-step-label">{step.label}</span>
+              </button>
+            </li>
+          )
+        })}
+      </ol>
 
-      <div className="tab-row qa-tabs" role="tablist" aria-label="Stakeholder Q and A">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'clarify'}
-          className={`tab-btn ${tab === 'clarify' ? 'active' : ''}`}
-          onClick={() => setTab('clarify')}
-        >
-          <Sparkles size={14} /> Clarify &amp; plan
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'compose'}
-          className={`tab-btn ${tab === 'compose' ? 'active' : ''}`}
-          disabled={!canUseStakeholderWorkflow}
-          onClick={() => setTab('compose')}
-        >
-          <Send size={14} /> Compose &amp; send
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'inbox'}
-          className={`tab-btn ${tab === 'inbox' ? 'active' : ''}`}
-          disabled={!canUseStakeholderWorkflow}
-          onClick={() => setTab('inbox')}
-        >
-          <Inbox size={14} /> Inbox &amp; grooming
-        </button>
-      </div>
+      <div className="ship-substage-panel">
+        {tab === 'clarify' ? (
+          <div className="req-tickets">
+            {canClarify ? (
+              <section className="card shape-section">
+                <GroomingPanel
+                  state={state}
+                  loading={Boolean(props.grooming)}
+                  onPick={props.onPick!}
+                  onOther={props.onOther!}
+                  onToggleOther={props.onToggleOther!}
+                  onUseWording={props.onUseWording!}
+                  onStartOver={props.onStartOver!}
+                  onUpdate={props.onUpdate}
+                  onNavigate={props.onNavigate}
+                  showJiraPanel={false}
+                />
+              </section>
+            ) : (
+              <section className="card shape-section">
+                <div className="empty-state-block">
+                  <h3>No requirement text yet</h3>
+                  <p className="muted">Add a requirement on the Requirements step before clarifying it.</p>
+                  {props.onNavigate ? (
+                    <button type="button" className="secondary-btn" onClick={() => props.onNavigate?.('requirements')}>
+                      Open Requirements
+                    </button>
+                  ) : null}
+                </div>
+              </section>
+            )}
+            {wordingConfirmed ? (
+              <p className="status-banner info">
+                Wording confirmed. Continue to Compose &amp; send, then Inbox &amp; G-GROOM, then Scope &amp; tickets.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
-      {tab === 'clarify' ? (
-        <div className="req-tickets">
-          {canClarify ? (
-            <section className="card ref-card req-clarify-card">
-              <GroomingPanel
-                state={state}
-                loading={Boolean(props.grooming)}
-                onPick={props.onPick!}
-                onOther={props.onOther!}
-                onToggleOther={props.onToggleOther!}
-                onUseWording={props.onUseWording!}
-                onStartOver={props.onStartOver!}
-                onUpdate={props.onUpdate}
-                onNavigate={props.onNavigate}
-                showJiraPanel={false}
-              />
-            </section>
-          ) : (
-            <section className="card ref-card">
-              <div className="empty-state-block">
-                <h3>No requirement text yet</h3>
-                <p>Add a requirement on the Requirements step before clarifying it with stakeholders.</p>
-                {props.onNavigate ? (
-                  <button type="button" className="secondary-btn" onClick={() => props.onNavigate?.('requirements')}>
-                    Open Requirements
+        {tab === 'compose' ? (
+          <StakeholderQuestionsScreen
+            embedded
+            state={props.state}
+            onUpdate={props.onUpdate}
+            onSendOne={props.onSendOne}
+            onSendAll={props.onSendAll}
+            onPostJira={props.onPostJira}
+            onPostAllJira={props.onPostAllJira}
+            onRefreshJira={props.onRefreshJira}
+            onNavigate={props.onNavigate}
+            sending={props.sending}
+            posting={props.posting}
+            refreshing={props.refreshing}
+          />
+        ) : null}
+
+        {tab === 'inbox' ? (
+          <StakeholderResponsesScreen
+            embedded
+            state={props.state}
+            onUpdate={props.onUpdate}
+            onSimulateResponses={props.onSimulateResponses}
+            onResetSimulatedReplies={props.onResetSimulatedReplies}
+            onRefreshJira={() => void props.onRefreshJira()}
+            onUpdateResponse={props.onUpdateResponse}
+            onResolveAllLatest={props.onResolveAllLatest}
+            onPatchQuestion={props.onPatchQuestion}
+            refreshing={props.refreshing}
+            simulating={props.simulating}
+            resetting={props.resetting}
+            onOpenTickets={() => {
+              if (canPlanTickets) setTab('tickets')
+            }}
+          />
+        ) : null}
+
+        {tab === 'tickets' ? (
+          <div className="req-tickets">
+            {canPlanTickets ? (
+              <>
+                <DesignOptionsPanel state={state} onUpdate={props.onUpdate} onNavigate={props.onNavigate} />
+                <JiraScopePanel
+                  state={state}
+                  onUpdate={props.onUpdate}
+                  sourceText={state.groomDraft || state.requirementsText}
+                  jiraPublish={props.jiraPublish}
+                />
+                <ScopeStartStatus state={state} onUpdate={props.onUpdate} />
+              </>
+            ) : (
+              <section className="card shape-section">
+                <div className="empty-state-block">
+                  <h3>Tickets unlock after G-GROOM</h3>
+                  <p className="muted">
+                    Finish Compose &amp; send and Inbox first, then acknowledge G-GROOM so epics match stakeholder
+                    answers.
+                  </p>
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => setTab(wordingConfirmed ? 'inbox' : 'clarify')}
+                  >
+                    {wordingConfirmed ? 'Go to Inbox & G-GROOM' : 'Go to Clarify'}
                   </button>
-                ) : null}
-              </div>
-            </section>
-          )}
-          {wordingConfirmed ? (
-            <>
-              <DesignOptionsPanel state={state} onUpdate={props.onUpdate} onNavigate={props.onNavigate} />
-              <JiraScopePanel
-                state={state}
-                onUpdate={props.onUpdate}
-                sourceText={state.groomDraft || state.requirementsText}
-                jiraPublish={props.jiraPublish}
-              />
-              <ScopeStartStatus state={state} onUpdate={props.onUpdate} />
-            </>
-          ) : null}
-        </div>
-      ) : tab === 'compose' ? (
-        <StakeholderQuestionsScreen
-          embedded
-          state={props.state}
-          onUpdate={props.onUpdate}
-          onSendOne={props.onSendOne}
-          onSendAll={props.onSendAll}
-          onPostJira={props.onPostJira}
-          onPostAllJira={props.onPostAllJira}
-          onRefreshJira={props.onRefreshJira}
-          onNavigate={props.onNavigate}
-          sending={props.sending}
-          posting={props.posting}
-          refreshing={props.refreshing}
-        />
-      ) : (
-        <StakeholderResponsesScreen
-          embedded
-          state={props.state}
-          onUpdate={props.onUpdate}
-          onSimulateResponses={props.onSimulateResponses}
-          onResetSimulatedReplies={props.onResetSimulatedReplies}
-          onRefreshJira={() => void props.onRefreshJira()}
-          onUpdateResponse={props.onUpdateResponse}
-          onResolveAllLatest={props.onResolveAllLatest}
-          onPatchQuestion={props.onPatchQuestion}
-          refreshing={props.refreshing}
-          simulating={props.simulating}
-          resetting={props.resetting}
-        />
-      )}
+                </div>
+              </section>
+            )}
+          </div>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -249,13 +304,12 @@ export function validateStakeholderQa(state: WizardState): string | null {
   const hasTextSource = Boolean(state.requirementsText.trim())
   const fileOnlySource = Boolean(state.requirementFileName && !hasTextSource)
   if (hasTextSource && !state.groomConfirmed) {
-    return 'Confirm the clearer wording on Clarify & plan before continuing.'
+    return 'Confirm the clearer wording on Clarify before continuing.'
   }
   if (!hasTextSource && !fileOnlySource) {
     return 'Add a requirement before continuing.'
   }
-  const scope = validateSdlcScope(state)
-  if (scope) return scope
+  // Stakeholders confirm first — then tickets.
   const outbound = validateStakeholderQuestions(state)
   if (outbound) return outbound
   const responses = validateStakeholderResponses(state)
@@ -264,8 +318,10 @@ export function validateStakeholderQa(state: WizardState): string | null {
     return 'G-GROOM was rejected — wait for grooming to refresh, then acknowledge again.'
   }
   if (!state.groomAcknowledged) {
-    return 'Acknowledge G-GROOM before continuing to Project Shape.'
+    return 'Acknowledge G-GROOM on Inbox before Scope & tickets.'
   }
+  const scope = validateSdlcScope(state)
+  if (scope) return scope
   return null
 }
 

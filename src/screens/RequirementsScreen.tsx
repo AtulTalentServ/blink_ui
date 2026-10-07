@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { CloudUpload, FileText, X } from 'lucide-react'
-import type { WizardState, WizardStep } from '../wizard/types'
+import type { WizardState } from '../wizard/types'
 import { extractRequirementText } from '../api/blink'
 
 const REQ_FILE_TYPES = ['.pdf', '.doc', '.docx', '.txt', '.md']
@@ -8,7 +8,6 @@ const REQ_FILE_TYPES = ['.pdf', '.doc', '.docx', '.txt', '.md']
 interface Props {
   state: WizardState
   onUpdate: (patch: Partial<WizardState>) => void
-  onNavigate?: (step: WizardStep) => void
 }
 
 function isAllowedRequirementFile(name: string) {
@@ -30,7 +29,6 @@ function sourceMode(gitUrl: string, zipName: string | null): WizardState['existi
 export function RequirementsScreen({
   state,
   onUpdate,
-  onNavigate,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const zipInputRef = useRef<HTMLInputElement>(null)
@@ -84,7 +82,7 @@ export function RequirementsScreen({
               <FileText size={18} aria-hidden />
               <div className="req-file-meta">
                 <strong>{state.requirementFileName}</strong>
-                <span>Text extracted. Review it below, then continue to Stakeholder Q&amp;A.</span>
+                <span>Text extracted. Review it below, then click Continue.</span>
               </div>
               {!extracting && (
                 <button
@@ -263,13 +261,6 @@ export function RequirementsScreen({
             </div>
           </div>
 
-          {(hasPaste || hasUploadedFile) && (
-            <div className="card-footer-actions right">
-              <button type="button" className="primary-btn" onClick={() => onNavigate?.('stakeholder-qa')}>
-                Continue to Stakeholder Q&amp;A
-              </button>
-            </div>
-          )}
         </section>
     </div>
   )

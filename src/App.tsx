@@ -2142,10 +2142,6 @@ export default function App() {
                 'requirementsText' in updates || 'requirementFileName' in updates || 'requirementFile' in updates
               patch(resetGroom ? { ...clearGroomingPatch(), ...updates } : updates)
             }}
-            onNavigate={(s) => {
-              setStatus(null)
-              goToStep(s)
-            }}
           />
         )
       case 'stakeholder-qa':

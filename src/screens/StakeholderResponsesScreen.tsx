@@ -41,6 +41,8 @@ interface Props {
   resetting?: boolean
   /** When true, omit outer page header (used inside Stakeholder Q&A). */
   embedded?: boolean
+  /** Jump to Scope & tickets after G-GROOM (parent tab). */
+  onOpenTickets?: () => void
 }
 
 type Filter = 'all' | 'responded' | 'discussion' | 'pending'
@@ -117,6 +119,7 @@ export function StakeholderResponsesScreen({
   simulating,
   resetting,
   embedded,
+  onOpenTickets,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -612,23 +615,30 @@ export function StakeholderResponsesScreen({
                 <>
                   <p className="muted small">
                     <CheckCircle2 size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-                    G-GROOM acknowledged (human) — not an approve-gate; classify can proceed.
+                    G-GROOM acknowledged. Next: plan tickets from the confirmed requirement.
                   </p>
-                  <button
-                    type="button"
-                    className="secondary-btn"
-                    disabled={!onUpdate}
-                    onClick={() => {
-                      onUpdate?.({
-                        groomAcknowledged: false,
-                        groomRejectPending: true,
-                        groomingSignOff: null,
-                        groomingLoopFeedbackAt: null,
-                      })
-                    }}
-                  >
-                    Reject G-GROOM
-                  </button>
+                  <div className="ship-actions">
+                    {onOpenTickets ? (
+                      <button type="button" className="primary-btn" onClick={onOpenTickets}>
+                        Open Scope &amp; tickets
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      disabled={!onUpdate}
+                      onClick={() => {
+                        onUpdate?.({
+                          groomAcknowledged: false,
+                          groomRejectPending: true,
+                          groomingSignOff: null,
+                          groomingLoopFeedbackAt: null,
+                        })
+                      }}
+                    >
+                      Reject G-GROOM
+                    </button>
+                  </div>
                 </>
               ) : rejectBlocks ? (
                 <p className="muted small">
@@ -639,9 +649,9 @@ export function StakeholderResponsesScreen({
                 <>
                   <p className="muted small" style={{ marginBottom: '0.5rem' }}>
                     {emptyQa
-                      ? 'No leftover clarifications. Acknowledge G-GROOM before classify and planning. This is not an approve-gate.'
+                      ? 'No leftover clarifications. Acknowledge G-GROOM, then plan tickets. This is not an approve-gate.'
                       : loopSettled
-                        ? 'Acknowledge G-GROOM before continuing to Project Shape and classify. This is not an approve-gate.'
+                        ? 'Acknowledge G-GROOM after stakeholder answers, then plan tickets. This is not an approve-gate.'
                         : 'Finish resolving clarifications (or wait for grooming to finish), then acknowledge G-GROOM.'}
                   </p>
                   <button
@@ -679,7 +689,9 @@ export function StakeholderResponsesScreen({
             <p>
               {groomBusy
                 ? 'Grooming is running in the background. Acknowledge G-GROOM when you are ready.'
-                : 'Acknowledge G-GROOM above, then open Scope & tickets to propose epics.'}
+                : state.groomAcknowledged
+                  ? 'G-GROOM acknowledged. Open Scope & tickets to propose epics from the confirmed requirement.'
+                  : 'Resolve answers, acknowledge G-GROOM above, then open Scope & tickets.'}
             </p>
           </div>
         </section>

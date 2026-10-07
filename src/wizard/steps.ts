@@ -183,7 +183,6 @@ export function primaryContinueLabel(
 ): string {
   if (busy.creatingRepos) return 'Creating on GitHub…'
   if (busy.saving) return 'Saving…'
-  if (step === 'requirements' && !state.groomConfirmed) return 'Save wording & continue'
   if (step === 'project-stakeholders') return 'Continue'
   return 'Continue'
 }

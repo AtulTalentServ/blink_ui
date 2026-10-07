@@ -11005,7 +11005,8 @@ textarea::placeholder {
   color: var(--primary);
 }
 
-.ship-screen > .screen-header h2 {
+.ship-screen > .screen-header h2,
+.stakeholder-qa > .screen-header h2 {
   font-family: var(--font-display);
   font-size: 1.35rem;
   font-weight: 700;
@@ -11013,12 +11014,38 @@ textarea::placeholder {
   color: var(--text-navy);
 }
 
-.ship-screen > .screen-header p {
+.ship-screen > .screen-header p,
+.stakeholder-qa > .screen-header p {
   font-family: var(--font-ui);
   font-size: 0.88rem;
   font-weight: 500;
   line-height: 1.45;
   color: var(--muted);
+}
+
+.stakeholder-qa {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.stakeholder-qa .ship-stepper {
+  margin-bottom: 0.15rem;
+}
+
+@media (max-width: 900px) {
+  .stakeholder-qa .ship-stepper {
+    flex-wrap: wrap;
+    gap: 0.55rem 0.75rem;
+  }
+
+  .stakeholder-qa .ship-stepper li:not(:last-child) {
+    flex: 0 1 auto;
+  }
+
+  .stakeholder-qa .ship-stepper li:not(:last-child)::after {
+    display: none;
+  }
 }
 
 .ship-substage-panel {

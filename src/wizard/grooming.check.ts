@@ -1,5 +1,6 @@
 /**
- * Requirement capture unlocks Stakeholder Q&A; wording confirmation controls tickets.
+ * Requirement capture unlocks Stakeholder Q&A.
+ * Wording confirm unlocks compose/send; G-GROOM unlocks Scope & tickets.
  * Run: node --experimental-strip-types src/wizard/grooming.check.ts
  */
 import assert from 'node:assert/strict'

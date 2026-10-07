@@ -67,7 +67,7 @@ const WORK_PLAN_STEPS: PlanStep[] = [
   },
 ]
 
-function scopeConfirmed(state: WizardState): boolean {
+export function scopeConfirmed(state: WizardState): boolean {
   return Boolean(state.productScope?.status === 'confirmed' || state.productScope?.confirmationDigest)
 }
 
@@ -783,14 +783,17 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
 }
 
 export function validateSdlcScope(state: WizardState): string | null {
+  if (!state.groomAcknowledged) {
+    return 'Acknowledge G-GROOM on Stakeholder Q&A → Inbox before Scope & tickets.'
+  }
   if (!scopeConfirmed(state)) {
     if (!state.productScope?.epics?.length && !state.productScope?.stories?.length) {
       return 'Open Scope & tickets after G-GROOM, propose epics and stories, then confirm product scope.'
     }
-    return 'Confirm product scope on Stakeholder Q&A before continuing.'
+    return 'Confirm product scope on Stakeholder Q&A → Scope & tickets before continuing.'
   }
   if (!state.sdlcStartIssueId) {
-    return 'Start the SDLC chain on Stakeholder Q&A before continuing.'
+    return 'Start the SDLC chain on Stakeholder Q&A → Scope & tickets before continuing.'
   }
   return null
 }
