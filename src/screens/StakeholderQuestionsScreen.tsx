@@ -175,11 +175,11 @@ export function StakeholderQuestionsScreen({
       {!jiraReady && state.questions.some((q) => q.queueJira || !q.sent) ? (
         <div className="ux-blocker">
           <strong>Jira tickets needed for comments</strong>
-          <span>Create epics/stories on Requirements → Tickets, or connect Atlassian first.</span>
+          <span>Create epics and stories on Stakeholder Q&amp;A → Clarify &amp; plan, or connect Atlassian first.</span>
           {onNavigate ? (
             <div className="ux-blocker-actions">
-              <button type="button" className="secondary-btn" onClick={() => onNavigate('requirements')}>
-                Open Requirements
+              <button type="button" className="secondary-btn" onClick={() => onNavigate('stakeholder-qa')}>
+                Open Clarify &amp; plan
               </button>
               <button type="button" className="ghost-btn" onClick={() => onNavigate('integrations')}>
                 Open Integrations
@@ -204,7 +204,7 @@ export function StakeholderQuestionsScreen({
         {state.questions.length === 0 ? (
           <div className="empty-state-block">
             <h3>Nothing left to ask</h3>
-            <p>All clarify items were resolved on Requirements. Open Inbox &amp; grooming, or go back if you need to queue more.</p>
+            <p>All clarification items are resolved. Open Inbox &amp; grooming, or return to Clarify &amp; plan if you need to queue more.</p>
           </div>
         ) : (
           <div className="person-groups">

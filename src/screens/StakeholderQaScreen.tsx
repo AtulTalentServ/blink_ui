@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Inbox, Send } from 'lucide-react'
+import { Inbox, Send, Sparkles } from 'lucide-react'
+import { GroomingPanel } from './GroomRequirementScreen'
+import { DesignOptionsPanel } from './DesignOptionsPanel'
+import { JiraScopePanel } from './JiraScopePanel'
+import { ScopeStartStatus, validateSdlcScope } from './SdlcPlanningScreen'
 import {
   StakeholderQuestionsScreen,
   jiraCommentForQuestion,
@@ -11,12 +15,21 @@ import {
   validateStakeholderResponses,
 } from './StakeholderResponsesScreen'
 import type { QuestionResponse, StakeholderQuestion, WizardState, WizardStep } from '../wizard/types'
+import { shouldAutoStartClarify, type JiraPublishState } from '../wizard/thinking'
 
-type QaTab = 'compose' | 'inbox'
+type QaTab = 'clarify' | 'compose' | 'inbox'
 
 interface Props {
   state: WizardState
   onUpdate: (patch: Partial<WizardState>) => void
+  onAsk?: () => void
+  onPick?: (questionId: string, optionId: string, optionLabel: string) => void
+  onOther?: (questionId: string, text: string) => void
+  onToggleOther?: (questionId: string, checked: boolean) => void
+  onUseWording?: () => void
+  onStartOver?: () => void
+  grooming?: boolean
+  jiraPublish?: JiraPublishState | null
   onSendOne: (questionId: string) => Promise<void>
   onSendAll: () => Promise<void>
   onPostJira: (questionId: string) => Promise<boolean | void>
@@ -36,6 +49,7 @@ interface Props {
 }
 
 function defaultTab(state: WizardState): QaTab {
+  if (state.requirementsText.trim() && !state.groomConfirmed) return 'clarify'
   if (shouldAutoRunGroomingLoop(state)) return 'inbox'
   const hasOutbound = state.questions.some(
     (q) =>
@@ -52,10 +66,34 @@ function defaultTab(state: WizardState): QaTab {
 export function StakeholderQaScreen(props: Props) {
   const { state } = props
   const [tab, setTab] = useState<QaTab>(() => defaultTab(state))
+  const hasTextSource = Boolean(state.requirementsText.trim())
+  const fileOnlySource = Boolean(state.requirementFileName && !hasTextSource)
+  const wordingConfirmed = state.groomConfirmed || fileOnlySource
+  const canClarify =
+    hasTextSource &&
+    Boolean(props.onAsk && props.onPick && props.onOther && props.onToggleOther && props.onUseWording && props.onStartOver)
+  const canUseStakeholderWorkflow = wordingConfirmed
 
   useEffect(() => {
     if (shouldAutoRunGroomingLoop(state)) setTab('inbox')
   }, [state.questions, state.responses, state.groomRejectPending])
+
+  useEffect(() => {
+    if (hasTextSource && !state.groomConfirmed) setTab('clarify')
+  }, [hasTextSource, state.groomConfirmed])
+
+  useEffect(() => {
+    if (tab !== 'clarify' || !canClarify || props.grooming) return
+    if (
+      shouldAutoStartClarify({
+        hasPaste: hasTextSource,
+        questionCount: state.groomQuestions.length,
+        groomStatus: state.groomStatus,
+      })
+    ) {
+      props.onAsk?.()
+    }
+  }, [tab, canClarify, props.grooming, props.onAsk, hasTextSource, state.groomQuestions.length, state.groomStatus])
 
   const stats = useMemo(() => {
     const total = state.questions.length
@@ -79,7 +117,7 @@ export function StakeholderQaScreen(props: Props) {
     <div className="screen stakeholder-qa">
       <div className="screen-header">
         <h2>Stakeholder Q&amp;A</h2>
-        <p>Send questions, collect replies, and resolve answers.</p>
+        <p>Clarify the requirement, plan tickets, and resolve stakeholder answers.</p>
       </div>
 
       <div className="qa-summary-strip">
@@ -101,8 +139,18 @@ export function StakeholderQaScreen(props: Props) {
         <button
           type="button"
           role="tab"
+          aria-selected={tab === 'clarify'}
+          className={`tab-btn ${tab === 'clarify' ? 'active' : ''}`}
+          onClick={() => setTab('clarify')}
+        >
+          <Sparkles size={14} /> Clarify &amp; plan
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === 'compose'}
           className={`tab-btn ${tab === 'compose' ? 'active' : ''}`}
+          disabled={!canUseStakeholderWorkflow}
           onClick={() => setTab('compose')}
         >
           <Send size={14} /> Compose &amp; send
@@ -112,13 +160,57 @@ export function StakeholderQaScreen(props: Props) {
           role="tab"
           aria-selected={tab === 'inbox'}
           className={`tab-btn ${tab === 'inbox' ? 'active' : ''}`}
+          disabled={!canUseStakeholderWorkflow}
           onClick={() => setTab('inbox')}
         >
           <Inbox size={14} /> Inbox &amp; grooming
         </button>
       </div>
 
-      {tab === 'compose' ? (
+      {tab === 'clarify' ? (
+        <div className="req-tickets">
+          {canClarify ? (
+            <section className="card ref-card req-clarify-card">
+              <GroomingPanel
+                state={state}
+                loading={Boolean(props.grooming)}
+                onPick={props.onPick!}
+                onOther={props.onOther!}
+                onToggleOther={props.onToggleOther!}
+                onUseWording={props.onUseWording!}
+                onStartOver={props.onStartOver!}
+                onUpdate={props.onUpdate}
+                onNavigate={props.onNavigate}
+                showJiraPanel={false}
+              />
+            </section>
+          ) : (
+            <section className="card ref-card">
+              <div className="empty-state-block">
+                <h3>No requirement text yet</h3>
+                <p>Add a requirement on the Requirements step before clarifying it with stakeholders.</p>
+                {props.onNavigate ? (
+                  <button type="button" className="secondary-btn" onClick={() => props.onNavigate?.('requirements')}>
+                    Open Requirements
+                  </button>
+                ) : null}
+              </div>
+            </section>
+          )}
+          {wordingConfirmed ? (
+            <>
+              <DesignOptionsPanel state={state} onUpdate={props.onUpdate} onNavigate={props.onNavigate} />
+              <JiraScopePanel
+                state={state}
+                onUpdate={props.onUpdate}
+                sourceText={state.groomDraft || state.requirementsText}
+                jiraPublish={props.jiraPublish}
+              />
+              <ScopeStartStatus state={state} onUpdate={props.onUpdate} />
+            </>
+          ) : null}
+        </div>
+      ) : tab === 'compose' ? (
         <StakeholderQuestionsScreen
           embedded
           state={props.state}
@@ -154,6 +246,16 @@ export function StakeholderQaScreen(props: Props) {
 }
 
 export function validateStakeholderQa(state: WizardState): string | null {
+  const hasTextSource = Boolean(state.requirementsText.trim())
+  const fileOnlySource = Boolean(state.requirementFileName && !hasTextSource)
+  if (hasTextSource && !state.groomConfirmed) {
+    return 'Confirm the clearer wording on Clarify & plan before continuing.'
+  }
+  if (!hasTextSource && !fileOnlySource) {
+    return 'Add a requirement before continuing.'
+  }
+  const scope = validateSdlcScope(state)
+  if (scope) return scope
   const outbound = validateStakeholderQuestions(state)
   if (outbound) return outbound
   const responses = validateStakeholderResponses(state)

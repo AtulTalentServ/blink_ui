@@ -1,31 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, CloudUpload, FileText, X } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { CloudUpload, FileText, X } from 'lucide-react'
 import type { WizardState, WizardStep } from '../wizard/types'
-import { GroomingPanel } from './GroomRequirementScreen'
-import { JiraScopePanel } from './JiraScopePanel'
-import { DesignOptionsPanel } from './DesignOptionsPanel'
-import { ScopeStartStatus, validateSdlcScope } from './SdlcPlanningScreen'
-import { RequirementRevisionPanel } from './RequirementRevisionPanel'
 import { extractRequirementText } from '../api/blink'
-import { unansweredRequired } from '../wizard/grooming'
-import { shouldAutoStartClarify } from '../wizard/thinking'
-import type { JiraPublishState } from '../wizard/thinking'
-
-type ReqStage = 'capture' | 'clarify' | 'tickets'
 
 const REQ_FILE_TYPES = ['.pdf', '.doc', '.docx', '.txt', '.md']
 
 interface Props {
   state: WizardState
   onUpdate: (patch: Partial<WizardState>) => void
-  grooming?: boolean
-  jiraPublish?: JiraPublishState | null
-  onAsk?: () => void
-  onPick?: (questionId: string, optionId: string, optionLabel: string) => void
-  onOther?: (questionId: string, text: string) => void
-  onToggleOther?: (questionId: string, checked: boolean) => void
-  onUseWording?: () => void
-  onStartOver?: () => void
   onNavigate?: (step: WizardStep) => void
 }
 
@@ -39,19 +21,6 @@ function clearFile(onUpdate: Props['onUpdate'], fileInputRef: React.RefObject<HT
   if (fileInputRef.current) fileInputRef.current.value = ''
 }
 
-function deriveStage(state: WizardState): ReqStage {
-  if (state.groomConfirmed) return 'tickets'
-  if (
-    state.groomQuestions.length > 0 ||
-    state.groomStatus === 'draft_ready' ||
-    state.groomStatus === 'need_choices' ||
-    state.groomStatus === 'error'
-  ) {
-    return 'clarify'
-  }
-  return 'capture'
-}
-
 function sourceMode(gitUrl: string, zipName: string | null): WizardState['existingSourceMode'] {
   if (gitUrl.trim()) return 'git'
   if (zipName) return 'zip'
@@ -61,14 +30,6 @@ function sourceMode(gitUrl: string, zipName: string | null): WizardState['existi
 export function RequirementsScreen({
   state,
   onUpdate,
-  grooming,
-  jiraPublish,
-  onAsk,
-  onPick,
-  onOther,
-  onToggleOther,
-  onUseWording,
-  onStartOver,
   onNavigate,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -77,37 +38,11 @@ export function RequirementsScreen({
   const [dragging, setDragging] = useState(false)
   const [extracting, setExtracting] = useState(false)
   const [fileError, setFileError] = useState<string | null>(null)
-  const [wordingOpen, setWordingOpen] = useState(false)
   const hasUploadedFile = Boolean(state.requirementFileName)
   const hasPaste = Boolean(state.requirementsText.trim())
-  const pasteLocked =
-    !state.groomConfirmed &&
-    (state.groomQuestions.length > 0 || state.groomStatus === 'draft_ready' || state.groomStatus === 'need_choices')
-
-  const autoStage = useMemo(() => deriveStage(state), [state])
-  const [stage, setStage] = useState<ReqStage>(autoStage)
-
-  useEffect(() => {
-    setStage(autoStage)
-  }, [autoStage])
-
-  useEffect(() => {
-    if (stage !== 'clarify') return
-    if (!onAsk || grooming) return
-    if (
-      !shouldAutoStartClarify({
-        hasPaste,
-        questionCount: state.groomQuestions.length,
-        groomStatus: state.groomStatus,
-      })
-    ) {
-      return
-    }
-    onAsk()
-  }, [stage, hasPaste, grooming, onAsk, state.groomQuestions.length, state.groomStatus])
 
   async function acceptFile(file: File | undefined) {
-    if (!file || extractInFlight.current || pasteLocked) return
+    if (!file || extractInFlight.current) return
     if (fileInputRef.current) fileInputRef.current.value = ''
     if (!isAllowedRequirementFile(file.name)) {
       setFileError('Use a PDF, Word, TXT, or Markdown file.')
@@ -131,73 +66,17 @@ export function RequirementsScreen({
     }
   }
 
-  const stages: { id: ReqStage; label: string; enabled: boolean; done: boolean }[] = [
-    { id: 'capture', label: 'Capture', enabled: true, done: hasPaste || hasUploadedFile },
-    {
-      id: 'clarify',
-      label: 'Clarify',
-      enabled: hasPaste || state.groomQuestions.length > 0,
-      done: state.groomConfirmed,
-    },
-    {
-      id: 'tickets',
-      label: 'Tickets',
-      enabled: state.groomConfirmed || Boolean(state.requirementFileName && !hasPaste),
-      done: Boolean(state.jiraCreatedIssues?.some((item) => item.status === 'created')),
-    },
-  ]
-
-  function goToClarify() {
-    setStage('clarify')
-    if (
-      shouldAutoStartClarify({
-        hasPaste,
-        questionCount: state.groomQuestions.length,
-        groomStatus: state.groomStatus,
-      })
-    ) {
-      onAsk?.()
-    }
-  }
-
-  const canGroom =
-    hasPaste && onAsk && onPick && onOther && onToggleOther && onUseWording && onStartOver
-  const jiraConnected = Boolean(state.integrations.find((item) => item.id === 'jira')?.connected)
-  const confirmedText = state.groomDraft || state.requirementsText
-
   return (
     <div className="screen screen-ref screen-requirements">
       <div className="screen-header">
         <h2>Requirements</h2>
-        <p>Add the requirement, clarify gaps, then create Jira tickets.</p>
+        <p>Add the source requirement. Clarify it with stakeholders in the next step.</p>
       </div>
 
-      <ol className="req-stepper" aria-label="Requirements steps">
-        {stages.map((item, index) => {
-          const active = stage === item.id
-          return (
-            <li key={item.id} className={active ? 'is-active' : item.done ? 'is-done' : ''}>
-              <button
-                type="button"
-                aria-current={active ? 'step' : undefined}
-                disabled={!item.enabled}
-                onClick={() => item.enabled && setStage(item.id)}
-              >
-                <span className="req-step-index" aria-hidden="true">
-                  {item.done && !active ? <Check size={12} strokeWidth={2.5} /> : index + 1}
-                </span>
-                <span className="req-step-label">{item.label}</span>
-              </button>
-            </li>
-          )
-        })}
-      </ol>
-
-      {stage === 'capture' && (
-        <section className="card ref-card req-capture-card">
+      <section className="card ref-card req-capture-card">
           <div className="req-section-head">
             <h3>Requirement</h3>
-            <p>Upload a document or paste the text. A document is read into text, then clarified like a paste.</p>
+            <p>Upload a document or paste the text. You will clarify it with stakeholders in the next step.</p>
           </div>
 
           {hasUploadedFile ? (
@@ -205,9 +84,9 @@ export function RequirementsScreen({
               <FileText size={18} aria-hidden />
               <div className="req-file-meta">
                 <strong>{state.requirementFileName}</strong>
-                <span>Text extracted. Review it below, then continue to clarify.</span>
+                <span>Text extracted. Review it below, then continue to Stakeholder Q&amp;A.</span>
               </div>
-              {!pasteLocked && (
+              {!extracting && (
                 <button
                   type="button"
                   className="ghost-btn req-file-remove"
@@ -282,21 +161,13 @@ export function RequirementsScreen({
               <label htmlFor="requirementsText">
                 {hasUploadedFile ? 'Requirement text' : 'Paste requirements'}
               </label>
-              {hasUploadedFile && !pasteLocked ? (
-                <p className="field-hint">Read from the file. Edit anything that looks wrong before clarifying.</p>
-              ) : null}
-              {pasteLocked ? (
-                <p className="field-hint">
-                  Text is locked while you answer questions. Start over on Clarify if you need to change it.
-                </p>
-              ) : null}
+              {hasUploadedFile ? <p className="field-hint">Read from the file. Edit anything that looks wrong before continuing.</p> : null}
               <textarea
                 id="requirementsText"
-                className={`req-textarea${pasteLocked ? ' locked' : ''}`}
+                className="req-textarea"
                 rows={hasUploadedFile ? 10 : 6}
                 placeholder="Describe what you are building…"
                 value={state.requirementsText}
-                readOnly={pasteLocked}
                 onChange={(event) =>
                   onUpdate(
                     hasUploadedFile
@@ -312,7 +183,7 @@ export function RequirementsScreen({
             </div>
           ) : null}
 
-          {hasUploadedFile && !pasteLocked && (
+          {hasUploadedFile && !extracting && (
             <button type="button" className="text-btn" onClick={() => {
               setFileError(null)
               clearFile(onUpdate, fileInputRef)
@@ -394,113 +265,12 @@ export function RequirementsScreen({
 
           {(hasPaste || hasUploadedFile) && (
             <div className="card-footer-actions right">
-              {hasUploadedFile && !hasPaste ? (
-                <button type="button" className="primary-btn" onClick={() => setStage('tickets')}>
-                  Continue to tickets
-                </button>
-              ) : (
-                <button type="button" className="primary-btn" onClick={goToClarify} disabled={!hasPaste}>
-                  Continue to clarify
-                </button>
-              )}
+              <button type="button" className="primary-btn" onClick={() => onNavigate?.('stakeholder-qa')}>
+                Continue to Stakeholder Q&amp;A
+              </button>
             </div>
           )}
         </section>
-      )}
-
-      {stage === 'clarify' && canGroom && (
-        <section className="card ref-card req-clarify-card">
-          <GroomingPanel
-            state={state}
-            loading={Boolean(grooming)}
-            onPick={onPick}
-            onOther={onOther}
-            onToggleOther={onToggleOther}
-            onUseWording={onUseWording}
-            onStartOver={onStartOver}
-            onUpdate={onUpdate}
-            onNavigate={onNavigate}
-            showJiraPanel={false}
-          />
-        </section>
-      )}
-
-      {stage === 'clarify' && !canGroom && (
-        <section className="card ref-card">
-          <div className="empty-state-block">
-            <h3>No requirement text yet</h3>
-            <p>Paste a description on Capture first. Blink uses that text to ask clarifying questions.</p>
-            <button type="button" className="secondary-btn" onClick={() => setStage('capture')}>
-              Back to Capture
-            </button>
-          </div>
-        </section>
-      )}
-
-      {stage === 'tickets' && (
-        <div className="req-tickets">
-          {state.groomConfirmed || state.requirementFileName ? (
-            <>
-              {confirmedText ? (
-                <section className={`card ref-card req-wording-card${wordingOpen ? ' is-open' : ''}`}>
-                  <button
-                    type="button"
-                    className="groom-band-header"
-                    aria-expanded={wordingOpen}
-                    onClick={() => setWordingOpen((open) => !open)}
-                  >
-                    <div className="req-section-head">
-                      <h3>Confirmed wording</h3>
-                      <p>{wordingOpen ? 'Click to hide the saved requirement' : 'Click to view the saved requirement'}</p>
-                    </div>
-                    <span className="groom-band-meta">
-                      {wordingOpen ? 'Hide' : 'Show'}
-                      <span className="groom-band-chevron" aria-hidden>
-                        <ChevronDown size={16} className={wordingOpen ? 'chevron open' : 'chevron'} />
-                      </span>
-                    </span>
-                  </button>
-                  {wordingOpen ? <pre className="groom-draft">{confirmedText}</pre> : null}
-                </section>
-              ) : (
-                <section className="card ref-card req-wording-card">
-                  <div className="req-section-head">
-                    <h3>Uploaded document</h3>
-                    <p>{state.requirementFileName} will be used as the requirement source.</p>
-                  </div>
-                </section>
-              )}
-              <DesignOptionsPanel state={state} onUpdate={onUpdate} onNavigate={onNavigate} />
-              <JiraScopePanel
-                state={state}
-                onUpdate={onUpdate}
-                sourceText={confirmedText}
-                jiraPublish={jiraPublish}
-              />
-              <ScopeStartStatus state={state} onUpdate={onUpdate} />
-              <RequirementRevisionPanel projectId={state.projectId} />
-              {!jiraConnected && onNavigate ? (
-                <p className="groom-blocker-hint">
-                  Connect Atlassian to create tickets.{' '}
-                  <button type="button" className="text-btn" onClick={() => onNavigate('integrations')}>
-                    Open Integrations
-                  </button>
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <section className="card ref-card">
-              <div className="empty-state-block">
-                <h3>Finish clarifying first</h3>
-                <p>Answer the required questions, then use the cleared wording so tickets can be planned.</p>
-                <button type="button" className="secondary-btn" onClick={() => setStage('clarify')}>
-                  Go to Clarify
-                </button>
-              </div>
-            </section>
-          )}
-        </div>
-      )}
     </div>
   )
 }
@@ -509,18 +279,5 @@ export function validateRequirements(state: WizardState): string | null {
   if (!state.requirementsText.trim() && !state.requirementFileName) {
     return 'Upload a document or paste requirements.'
   }
-  if (!state.requirementsText.trim() && state.requirementFileName) {
-    return null
-  }
-  if (!state.groomConfirmed) {
-    if (!state.groomQuestions.length && state.groomStatus !== 'draft_ready' && state.groomStatus !== 'error') {
-      return 'Continue to Clarify so Blink can start the questions, then answer the required ones.'
-    }
-    const missing = unansweredRequired(state)
-    if (missing.length) {
-      return `Answer or mark Jira later on the ${missing.length} required question${missing.length === 1 ? '' : 's'} under Need clarification.`
-    }
-    return 'Click Use this wording so Blink can rewrite from your answers.'
-  }
-  return validateSdlcScope(state)
+  return null
 }

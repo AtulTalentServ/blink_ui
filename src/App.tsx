@@ -64,10 +64,6 @@ import {
   type WizardStep,
 } from './wizard/types'
 import { assignQuestionBands, groomingComplete, unansweredRequired } from './wizard/grooming'
-import {
-  isTicketsPipelineBusy,
-  planScopeFromWording,
-} from './wizard/jiraTickets'
 import { type JiraPublishState } from './wizard/thinking'
 import { autoMapQuestionsToJira } from './wizard/jiraMatch'
 import {
@@ -860,33 +856,6 @@ export default function App() {
     } else if (step === 'technology-per-repo') {
       patch(acknowledgeShapePatch(state))
       setStatus(null)
-    } else if (step === 'requirements') {
-      setStatus(null)
-      const wording = (state.groomDraft || state.requirementsText).trim() || state.requirementsText
-      const nextState = { ...state, requirementsText: wording }
-      const questions = carryClarifyQuestionsForward(nextState)
-      const baseReqPatch = {
-        requirementsText: wording,
-        questions,
-        requirementsAnalyzed: true,
-        responses: responsesForStakeholderQuestions(questions, state.responses),
-        questionsSent: false,
-      }
-      const alreadyPlanned = Boolean(state.productScope?.epics?.length)
-      if (!alreadyPlanned && wording.trim() && !isTicketsPipelineBusy()) {
-        setSaving(true)
-        try {
-          const scopePatch = await planScopeFromWording(state, wording)
-          patch({ ...baseReqPatch, ...scopePatch })
-        } catch (err) {
-          console.warn('Product scope planning note:', err)
-          patch(baseReqPatch)
-        } finally {
-          setSaving(false)
-        }
-      } else {
-        patch(baseReqPatch)
-      }
     } else {
       setStatus(null)
     }
@@ -1095,7 +1064,7 @@ export default function App() {
           lastRevisionFeedbackRef.current = ''
         })
     }
-    setStatus({ type: 'success', message: 'Requirement wording saved. Tickets will plan next.' })
+    setStatus({ type: 'success', message: 'Requirement wording saved. You can plan tickets in this step.' })
   }, [state, patch])
 
   const handleGroomStartOver = useCallback(() => {
@@ -2108,14 +2077,6 @@ export default function App() {
                 'requirementsText' in updates || 'requirementFileName' in updates || 'requirementFile' in updates
               patch(resetGroom ? { ...clearGroomingPatch(), ...updates } : updates)
             }}
-            grooming={grooming || saving}
-            jiraPublish={jiraPublish}
-            onAsk={() => void handleGroomAsk()}
-            onPick={handleGroomPick}
-            onOther={handleGroomOther}
-            onToggleOther={handleGroomToggleOther}
-            onUseWording={() => void handleGroomLooksGood()}
-            onStartOver={handleGroomStartOver}
             onNavigate={(s) => {
               setStatus(null)
               goToStep(s)
@@ -2127,6 +2088,14 @@ export default function App() {
           <StakeholderQaScreen
             state={state}
             onUpdate={patch}
+            grooming={grooming || saving}
+            jiraPublish={jiraPublish}
+            onAsk={() => void handleGroomAsk()}
+            onPick={handleGroomPick}
+            onOther={handleGroomOther}
+            onToggleOther={handleGroomToggleOther}
+            onUseWording={() => void handleGroomLooksGood()}
+            onStartOver={handleGroomStartOver}
             onSendOne={handleSendOne}
             onSendAll={handleSendAll}
             onPostJira={handlePostJiraOne}
