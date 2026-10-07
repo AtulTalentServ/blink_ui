@@ -108,14 +108,6 @@ export function ReviewPrScreen({ state, onUpdate, onNavigate }: Props) {
 
   return (
     <div className="screen review-pr-screen">
-      <div className="screen-header">
-        <div>
-          <p className="shape-kicker">Review &amp; PR</p>
-          <h2>Track review evidence before a human merge</h2>
-          <p>Blink records the workflow’s next action, review evidence, and human authorization. It never merges code.</p>
-        </div>
-      </div>
-
       {!selectedIssueId ? (
         <section className="card shape-section">
           <h3>No active SDLC work item is recorded</h3>

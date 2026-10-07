@@ -916,15 +916,16 @@ export async function shipCheckpoint(
 
 export async function syncCanonicalWizardDraft(
   projectId: string,
-  expectedRevision?: number | null,
+  _expectedRevision?: number | null,
 ): Promise<CanonicalSnapshotDto> {
+  // Do not send expectedRevision: autosave / RefreshEligibility often bumps the
+  // aggregate between the UI snapshot and this call. Sync is catch-up, not a mutate race.
   const url = apiUrl(`/projects/${projectId}/canonical/commands/execute`)
   const response = await fetch(url, {
     method: 'POST',
     headers: authHeaders(true),
     body: JSON.stringify({
       command: 'sync-wizard-draft',
-      expectedRevision: expectedRevision ?? undefined,
       idempotencyKey: '',
       payload: {},
     }),
@@ -964,7 +965,7 @@ export async function saveProject(payload: ProjectPayload, projectId?: string | 
   const method = projectId ? 'PUT' : 'POST'
   console.info(`[blink] ${method} ${url}`, payload)
   const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 90_000)
+  const timer = window.setTimeout(() => controller.abort(), 45_000)
   try {
     const response = await fetch(url, {
       method,
@@ -1141,7 +1142,7 @@ export async function fetchJiraOAuthUrl(): Promise<JiraOAuthUrlResult> {
   const redirectUri = oauthCallbackUrl('jira')
   const url = apiUrl(`/integrations/jira/oauth/url?redirectUri=${encodeURIComponent(redirectUri)}`)
   console.info(`[blink] GET ${url}`)
-  const response = await fetch(url, { headers: authHeaders() })
+  const response = await timedFetch(url, { headers: authHeaders() }, 20_000)
   if (!response.ok) throw new ApiRequestError(await readError(response), response.status)
   return response.json() as Promise<JiraOAuthUrlResult>
 }
@@ -1153,11 +1154,15 @@ export async function exchangeJiraOAuth(
 ): Promise<IntegrationConnectResult> {
   const url = apiUrl('/integrations/jira/oauth/exchange')
   console.info(`[blink] POST ${url}`)
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify({ code, redirectUri, projectId: projectId || undefined }),
-  })
+  const response = await timedFetch(
+    url,
+    {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ code, redirectUri, projectId: projectId || undefined }),
+    },
+    45_000,
+  )
   if (!response.ok) throw new ApiRequestError(await readError(response), response.status)
   return response.json() as Promise<IntegrationConnectResult>
 }
@@ -1801,11 +1806,24 @@ export interface CreateRepositoriesResult {
 export async function createRepositories(payload: CreateRepositoriesPayload): Promise<CreateRepositoriesResult> {
   const url = apiUrl('/integrations/repositories')
   console.info(`[blink] POST ${url}`, { provider: payload.provider, count: payload.repositories.length })
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify(payload),
-  })
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 60_000)
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    })
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Creating GitHub repositories timed out. Retry — any already-created remotes are kept.')
+    }
+    throw err
+  } finally {
+    window.clearTimeout(timer)
+  }
   if (!response.ok) throw new ApiRequestError(await readError(response), response.status)
   const raw = (await response.json()) as {
     provider?: string
@@ -2270,18 +2288,50 @@ export interface TechnicalPlanData {
   issueId?: string
 }
 
+function advisoryTimeoutMs(pathSuffix: string): number {
+  // SDLC / scope commands routinely exceed a short JSON timeout when Neon + agent are cold.
+  if (
+    pathSuffix.startsWith('sdlc-') ||
+    pathSuffix === 'confirm-product-scope' ||
+    pathSuffix === 'classify-work' ||
+    pathSuffix === 'create-spec' ||
+    pathSuffix === 'technical-plan' ||
+    pathSuffix.startsWith('grooming-')
+  ) {
+    return 180_000
+  }
+  return 60_000
+}
+
 async function postAdvisory(
   projectId: string,
   pathSuffix: string,
   body: Record<string, unknown>,
+  timeoutMs = advisoryTimeoutMs(pathSuffix),
 ): Promise<AdvisoryAgentResponse> {
-  const response = await fetch(apiUrl(`/projects/${projectId}/${pathSuffix}`), {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json() as Promise<AdvisoryAgentResponse>
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(apiUrl(`/projects/${projectId}/${pathSuffix}`), {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    return response.json() as Promise<AdvisoryAgentResponse>
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(
+        pathSuffix.startsWith('sdlc-') || pathSuffix === 'confirm-product-scope'
+          ? `Could not finish ${pathSuffix} in time. The API or agent is slow — retry in a moment.`
+          : 'Grooming agent timed out. Retry when the API is responsive.',
+      )
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 export function confirmProductScope(

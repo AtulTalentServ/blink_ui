@@ -172,15 +172,15 @@ export function StakeholderQuestionsScreen({
         </div>
       ) : null}
 
-      {!jiraReady && state.questions.some((q) => q.queueJira || !q.sent) ? (
+      {!jiraReady && state.questions.some((q) => q.queueJira) ? (
         <div className="ux-blocker">
-          <strong>Jira tickets needed for comments</strong>
-          <span>Create epics/stories on Requirements → Tickets, or connect Atlassian first.</span>
+          <strong>Jira comments need tickets</strong>
+          <span>
+            Email works now. After G-GROOM, open Scope &amp; tickets to propose epics, then post Jira comments
+            there — or connect Atlassian first.
+          </span>
           {onNavigate ? (
             <div className="ux-blocker-actions">
-              <button type="button" className="secondary-btn" onClick={() => onNavigate('requirements')}>
-                Open Requirements
-              </button>
               <button type="button" className="ghost-btn" onClick={() => onNavigate('integrations')}>
                 Open Integrations
               </button>
@@ -204,7 +204,10 @@ export function StakeholderQuestionsScreen({
         {state.questions.length === 0 ? (
           <div className="empty-state-block">
             <h3>Nothing left to ask</h3>
-            <p>All clarify items were resolved on Requirements. Open Inbox &amp; grooming, or go back if you need to queue more.</p>
+            <p>
+              All clarify items were resolved on Requirements. Open Inbox &amp; grooming to acknowledge G-GROOM,
+              then Scope &amp; tickets for epics.
+            </p>
           </div>
         ) : (
           <div className="person-groups">

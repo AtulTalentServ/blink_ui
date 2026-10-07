@@ -1,7 +1,16 @@
-import { confirmCanonicalGate, type CanonicalGateKind } from '../api/blink.ts'
+import {
+  confirmCanonicalGate,
+  fetchCanonicalSnapshot,
+  type CanonicalGateKind,
+} from '../api/blink.ts'
 import { patchFromCanonicalSnapshot } from './canonical.ts'
 import type { WizardState } from './types.ts'
 import { acknowledgeShapePatch, shapeFingerprint } from './shape.ts'
+
+function isStaleRevisionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return /stale revision/i.test(message)
+}
 
 export function groomSessionDigest(state: Pick<WizardState, 'questions' | 'responses' | 'groomDraft'>): string {
   const payload = {
@@ -61,8 +70,25 @@ export async function persistCanonicalGate(
   digest: string,
   expectedRevision?: number | null,
 ) {
-  const res = await confirmCanonicalGate(projectId, kind, digest, expectedRevision ?? undefined)
-  return patchFromCanonicalSnapshot(res.snapshot)
+  // Omit expectedRevision on first try when unknown — gate writes are idempotent enough
+  // that a concurrent wizard.synced bump should not block confirmation.
+  const attempt = async (revision?: number | null) => {
+    const res = await confirmCanonicalGate(projectId, kind, digest, revision ?? undefined)
+    return patchFromCanonicalSnapshot(res.snapshot)
+  }
+  try {
+    return await attempt(expectedRevision)
+  } catch (error) {
+    if (!isStaleRevisionError(error)) throw error
+    const snap = await fetchCanonicalSnapshot(projectId)
+    try {
+      return await attempt(snap.revision)
+    } catch (retryError) {
+      if (!isStaleRevisionError(retryError)) throw retryError
+      // Last resort: confirm without a revision pin after two races.
+      return await attempt(undefined)
+    }
+  }
 }
 
 export async function confirmRepositoryRoster(projectId: string, expectedRevision?: number | null) {

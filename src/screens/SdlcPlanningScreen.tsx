@@ -20,6 +20,7 @@ import {
   pinCanonicalArchitecture,
   type ArchitectureViewDto,
   type GraphViewDto,
+  confirmStakeholders,
   sdlcStart,
   technicalPlan,
 } from '../api/blink'
@@ -121,7 +122,7 @@ function requirementTextOf(state: WizardState): string {
   )
 }
 
-/** Compact status on Requirements — confirm + /sdlc-start, no extra tab. */
+/** Compact status after stakeholder confirmation — confirm + /sdlc-start. */
 export function ScopeStartStatus({
   state,
   onUpdate,
@@ -146,6 +147,17 @@ export function ScopeStartStatus({
     const expectedDigest = state.scopeDigest || state.productScope?.proposalDigest || ''
     setError(null)
     try {
+      // Ensure the durable stakeholders-confirmed gate exists (UI can look confirmed while Neon lag skipped the write).
+      setBusy('confirm')
+      const stake = await confirmStakeholders(projectId)
+      if (stake.status !== 'ok') {
+        throw new Error(stake.message || stake.errors?.join('; ') || 'Confirm stakeholders failed')
+      }
+      onUpdate({
+        stakeholdersConfirmed: true,
+        stakeholdersConfirmationDigest: stake.confirmationDigest || state.stakeholdersConfirmationDigest || null,
+      })
+
       if (!scopeConfirmed({ ...state, productScope })) {
         setBusy('confirm')
         const res = await confirmProductScope(projectId, {
@@ -565,16 +577,10 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
   }, [autoPlanTech, complete, state.projectId])
 
   return (
-    <div className="sdlc-plan">
+    <div className="screen screen-sdlc-plan sdlc-plan">
       <div className="screen-header">
         <h2>Work plan</h2>
-        <p>
-          {autoPlanDraft
-            ? 'Drafting the spec. Confirm acceptance criteria when it is ready.'
-            : autoPlanTech
-              ? 'Writing the technical plan. Review it when it is ready.'
-              : 'Review the spec and technical plan, then continue to Ship.'}
-        </p>
+        <p>Agents draft the plan; you confirm acceptance criteria and acknowledge before Ship.</p>
       </div>
 
       {blockedMsg && !busy ? (
@@ -585,10 +591,9 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
       ) : null}
       {error ? <p className="status-banner error">{error}</p> : null}
       {lastChange && !error ? <p className="status-banner success">{lastChange}</p> : null}
-      {complete ? (
+      {complete && (state.planAcknowledged || state.shipPlanAcknowledged) ? (
         <p className="status-banner success">
-          Work plan drafted. Acknowledge G-PLAN, then continue to <strong>Ship</strong>. Remotes are
-          created on Ship after <code>G-BOOTSTRAP</code>.
+          Plan acknowledged. Click <strong>Continue</strong> for Ship (Workspace → Implementation).
         </p>
       ) : null}
 
@@ -622,19 +627,17 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
                   <div>
                     <h3>{step.title}</h3>
                     <p className="muted small">
-                      <code>{step.command}</code>
                       <span className={`sdlc-chip sdlc-chip--${status}`}>{status}</span>
                     </p>
                   </div>
                 </div>
-                <p className="sdlc-timeline__plain">{step.plain}</p>
                 {done ? <p className="sdlc-timeline__outcome">{outcomeFor(step.id, state)}</p> : null}
                 {status === 'running' ? (
-                  <p className="sdlc-timeline__outcome is-running">Calling hosted agent…</p>
+                  <p className="sdlc-timeline__outcome is-running">Running…</p>
                 ) : null}
                 {status === 'current' && !blockedMsg ? (
                   <p className="sdlc-timeline__outcome is-next">
-                    {autoRun ? 'This runs in the background.' : 'Waiting on the step above.'}
+                    {autoRun ? 'Running automatically…' : 'Waiting on the step above.'}
                   </p>
                 ) : null}
                 {status === 'blocked' && blockedMsg ? (
@@ -646,93 +649,16 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
         })}
       </ol>
 
-      {graph || graphError ? (
-        <section className="card shape-section" style={{ marginTop: '1rem' }}>
-          <div className="sdlc-panel__head">
-            <Map size={18} />
-            <div>
-              <h3>Dependency graph</h3>
-              <p className="muted">
-                Derived from stories and the technical plan. Resolve cycles before acknowledging G-PLAN.
-              </p>
-            </div>
-          </div>
-          {graphError && !graph ? <p className="sdlc-timeline__outcome is-blocked">{graphError}</p> : null}
-          {graph ? (
-            <>
-              {graph.cycles?.length ? (
-                <p className="sdlc-timeline__outcome is-blocked">
-                  {graph.cycles.length} cycle(s):{' '}
-                  {graph.cycles.map((c) => c.join(' → ')).join('; ')}
-                </p>
-              ) : (
-                <p className="sdlc-timeline__outcome">No dependency cycles detected.</p>
-              )}
-              {graph.frontier?.length ? (
-                <p className="muted small">
-                  Frontier: <code>{graph.frontier.join(', ')}</code>
-                </p>
-              ) : null}
-              {graph.executionOrder?.length ? (
-                <p className="muted small">
-                  Suggested order: <code>{graph.executionOrder.join(' → ')}</code>
-                </p>
-              ) : null}
-              {graph.effectiveEdges?.length ? (
-                <ul className="ship-step-list">
-                  {graph.effectiveEdges.map((edge) => (
-                    <li key={`${edge.from}-${edge.to}-${edge.kind}`}>
-                      <code>{edge.from} → {edge.to}</code>
-                      <span className="muted small">
-                        {edge.kind || 'dependency'} · {edge.accepted ? 'accepted' : 'pending disposition'}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              <p className={graphBlockers.length ? 'sdlc-timeline__outcome is-blocked' : 'muted small'}>
-                Enforcement: {graphBlockers.length
-                  ? graphBlockers.map((blocker) => blocker.message).join('; ')
-                  : 'No canonical graph enforcement blocker is currently reported.'}
-              </p>
-            </>
-          ) : null}
-        </section>
-      ) : null}
-
-      {(architecture || architectureError) ? (
-        <section className="card shape-section" style={{ marginTop: '1rem' }}>
-          <div className="sdlc-panel__head">
-            <Layers size={18} />
-            <div>
-              <h3>Architecture readiness</h3>
-              <p className="muted">G-PLAN is pinned to a confirmed architecture revision when available.</p>
-            </div>
-          </div>
-          {architecture ? (
-            <p className={architectureStale ? 'sdlc-timeline__outcome is-blocked' : 'sdlc-timeline__outcome'}>
-              {architectureStale
-                ? 'Architecture is unconfirmed or stale. Return to Project Shape, refresh the baseline, and confirm it.'
-                : `Confirmed architecture revision ${architecture.revision}; package pin will be recorded with G-PLAN.`}
-            </p>
-          ) : null}
-          {architectureError ? <p className="muted small">Compatibility mode: {architectureError}</p> : null}
-        </section>
-      ) : null}
-
       {needsAcAck ? (
-        <section className="card shape-section" style={{ marginTop: '1rem' }}>
+        <section className="card shape-section work-plan-gate" style={{ marginTop: '1rem' }}>
           <div className="sdlc-panel__head">
             <CheckCircle2 size={18} />
             <div>
-              <h3>Confirm acceptance criteria (human)</h3>
-              <p className="muted">
-                Human confirmation that the spec&apos;s acceptance criteria were reviewed — not an LLM step and
-                not an approve-gate. Required before <code>/technical-plan</code>.
-              </p>
+              <h3>Your turn · Confirm acceptance criteria</h3>
+              <p className="muted">Required before the technical-plan agent runs.</p>
             </div>
           </div>
-          <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <input
               type="checkbox"
               checked={Boolean(state.acceptanceCriteriaAcknowledged)}
@@ -744,17 +670,19 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
       ) : null}
 
       {complete && needsPlanAck ? (
-        <section className="card shape-section" style={{ marginTop: '1rem' }}>
+        <section className="card shape-section work-plan-gate" style={{ marginTop: '1rem' }}>
           <div className="sdlc-panel__head">
             <CheckCircle2 size={18} />
             <div>
-              <h3>Acknowledge G-PLAN (human)</h3>
-              <p className="muted">
-                Human acknowledgement that the technical plan was reviewed — not an approve-gate. Required
-                before continuing past Work plan.
-              </p>
+              <h3>Your turn · Acknowledge the plan</h3>
+              <p className="muted">Locks the technical plan so Ship can start (Workspace → Implementation).</p>
             </div>
           </div>
+          {architectureStale ? (
+            <p className="sdlc-timeline__outcome is-blocked">
+              Architecture looks stale. You can still acknowledge the plan, or return to Project Shape to refresh it.
+            </p>
+          ) : null}
           <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <input
               type="checkbox"
@@ -763,21 +691,75 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
                 if (e.target.checked) acknowledgePlan()
               }}
             />
-            I have reviewed the technical plan (G-PLAN)
+            I have reviewed the technical plan
           </label>
           <div className="ship-actions">
-            <button type="button" className="primary-btn" onClick={acknowledgePlan} disabled={architectureStale}>
-              Acknowledge G-PLAN (human)
+            <button type="button" className="primary-btn" onClick={acknowledgePlan}>
+              Acknowledge plan &amp; unlock Ship
             </button>
             <button type="button" className="secondary-btn" onClick={rejectPlan}>
-              Reject G-PLAN
+              Reject &amp; re-plan
             </button>
           </div>
         </section>
       ) : null}
 
-      {complete && (state.planAcknowledged || state.shipPlanAcknowledged) ? (
-        <p className="status-banner success">G-PLAN acknowledged. You can continue to Ship.</p>
+      {(graph || graphError || architecture || architectureError) ? (
+        <details className="work-plan-advanced">
+          <summary>Advanced details (dependency graph &amp; architecture)</summary>
+          {graph || graphError ? (
+            <section className="card shape-section" style={{ marginTop: '0.75rem' }}>
+              <div className="sdlc-panel__head">
+                <Map size={18} />
+                <div>
+                  <h3>Dependency graph</h3>
+                  <p className="muted">Derived from stories and the technical plan.</p>
+                </div>
+              </div>
+              {graphError && !graph ? <p className="sdlc-timeline__outcome is-blocked">{graphError}</p> : null}
+              {graph ? (
+                <>
+                  {graph.cycles?.length ? (
+                    <p className="sdlc-timeline__outcome is-blocked">
+                      {graph.cycles.length} cycle(s): {graph.cycles.map((c) => c.join(' → ')).join('; ')}
+                    </p>
+                  ) : (
+                    <p className="sdlc-timeline__outcome">No dependency cycles detected.</p>
+                  )}
+                  {graph.executionOrder?.length ? (
+                    <p className="muted small">
+                      Suggested order: <code>{graph.executionOrder.join(' → ')}</code>
+                    </p>
+                  ) : null}
+                  <p className={graphBlockers.length ? 'sdlc-timeline__outcome is-blocked' : 'muted small'}>
+                    {graphBlockers.length
+                      ? graphBlockers.map((blocker) => blocker.message).join('; ')
+                      : 'No graph enforcement blocker.'}
+                  </p>
+                </>
+              ) : null}
+            </section>
+          ) : null}
+          {(architecture || architectureError) ? (
+            <section className="card shape-section" style={{ marginTop: '0.75rem' }}>
+              <div className="sdlc-panel__head">
+                <Layers size={18} />
+                <div>
+                  <h3>Architecture</h3>
+                  <p className="muted">Pinned with the plan when a confirmed baseline exists.</p>
+                </div>
+              </div>
+              {architecture ? (
+                <p className={architectureStale ? 'sdlc-timeline__outcome is-blocked' : 'sdlc-timeline__outcome'}>
+                  {architectureStale
+                    ? 'Unconfirmed or stale — refresh on Project Shape if needed.'
+                    : `Confirmed revision ${architecture.revision}.`}
+                </p>
+              ) : null}
+              {architectureError ? <p className="muted small">{architectureError}</p> : null}
+            </section>
+          ) : null}
+        </details>
       ) : null}
 
       {error && !busy ? (
@@ -789,10 +771,10 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
             onClick={() => void (autoPlanDraft ? runAutoWorkDraft() : runAutoTechPlan())}
           >
             {nextId === 'spec'
-              ? 'Create specification'
+              ? 'Retry specification'
               : nextId === 'plan'
-                ? 'Create technical plan'
-                : 'Classify work'}
+                ? 'Retry technical plan'
+                : 'Retry classify'}
           </button>
         </div>
       ) : null}
@@ -803,12 +785,12 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
 export function validateSdlcScope(state: WizardState): string | null {
   if (!scopeConfirmed(state)) {
     if (!state.productScope?.epics?.length && !state.productScope?.stories?.length) {
-      return 'Propose epics and stories, then confirm product scope explicitly.'
+      return 'Open Scope & tickets after G-GROOM, propose epics and stories, then confirm product scope.'
     }
-    return 'Confirm product scope on Requirements before Stakeholder Q&A.'
+    return 'Confirm product scope on Stakeholder Q&A → Scope & tickets before continuing.'
   }
   if (!state.sdlcStartIssueId) {
-    return 'Start the SDLC chain on Requirements before Stakeholder Q&A.'
+    return 'Start the SDLC chain on Stakeholder Q&A → Scope & tickets before continuing.'
   }
   return null
 }

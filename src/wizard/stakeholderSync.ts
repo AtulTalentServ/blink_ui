@@ -235,6 +235,10 @@ export function invalidateGroomingLoopPatch(): Pick<
 /** True when background pack / revision / sign-off match the current resolved Q&A. */
 export function groomingLoopSettled(state: WizardState): boolean {
   const feedback = stakeholderFeedbackFromState(state)
+  // Nothing to send/answer — no agent loop required; operator can acknowledge G-GROOM.
+  if (!state.questions.length && !feedback.trim()) {
+    return state.groomingLoopFeedbackAt === '' || state.groomingLoopFeedbackAt === feedback
+  }
   if (!state.stakeholderPack || !state.groomingSignOff) return false
   const revisionNeeded = Boolean(feedback.trim())
   if (revisionNeeded && !state.groomingRevision) return false

@@ -53,6 +53,7 @@ import {
   syncCanonicalWizardDraft,
   type ProjectPayload,
 } from '../api/blink'
+import { patchFromCanonicalSnapshot } from '../wizard/canonical'
 import {
   applyShapeAcknowledgement,
   confirmAllRepoTechnologies,
@@ -638,13 +639,18 @@ export function RepositoriesScreen({
     setRosterBusy(true)
     setRosterError(null)
     try {
-      await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
-      const canonicalPatch = await confirmRepositoryRoster(projectId, state.canonicalRevision)
+      const synced = await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
+      const canonicalPatch = await confirmRepositoryRoster(projectId, synced.revision)
       const topologyConfirmation = nextTopologyConfirmation(
         { ...state, repositoriesTouched: true },
         { repositories },
       )
-      onUpdate({ repositoriesTouched: true, ...canonicalPatch, ...(topologyConfirmation ? { topologyConfirmation } : {}) })
+      onUpdate({
+        repositoriesTouched: true,
+        ...patchFromCanonicalSnapshot(synced),
+        ...canonicalPatch,
+        ...(topologyConfirmation ? { topologyConfirmation } : {}),
+      })
       if (topologyConfirmation) {
         void confirmProjectTopology(projectId, {
           projectName: state.projectName,
@@ -857,10 +863,14 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     setTechBusy(true)
     setTechError(null)
     try {
-      await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
-      const canonicalPatch = await confirmAllRepoTechnologies(projectId, state.canonicalRevision)
+      const synced = await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
+      const canonicalPatch = await confirmAllRepoTechnologies(projectId, synced.revision)
       const topologyConfirmation = nextTopologyConfirmation(state, { repoTechnologies: nextRows })
-      onUpdate({ ...canonicalPatch, ...(topologyConfirmation ? { topologyConfirmation } : {}) })
+      onUpdate({
+        ...patchFromCanonicalSnapshot(synced),
+        ...canonicalPatch,
+        ...(topologyConfirmation ? { topologyConfirmation } : {}),
+      })
       if (topologyConfirmation) {
         void confirmProjectTopology(projectId, {
           projectName: state.projectName,

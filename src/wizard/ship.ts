@@ -1,10 +1,10 @@
 import type { ShipSubstage, WizardStep } from './types.ts'
 
 export const SHIP_SUBSTAGES: { id: ShipSubstage; label: string }[] = [
-  { id: 'workspace', label: 'Workspace' },
-  { id: 'implementation', label: 'Work in Cursor' },
-  { id: 'review-pr', label: 'Review & PR' },
-  { id: 'release', label: 'Release' },
+  { id: 'workspace', label: '1 · Workspace' },
+  { id: 'implementation', label: '2 · Implementation' },
+  { id: 'review-pr', label: '3 · Review & PR' },
+  { id: 'release', label: '4 · Release' },
 ]
 
 const LEGACY_SHIP_STEPS = new Set<WizardStep>([

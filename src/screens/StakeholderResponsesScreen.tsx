@@ -62,7 +62,8 @@ function outboundHandled(q: StakeholderQuestion, state: WizardState): boolean {
 /** Nothing left for the human to pick: no leftover send/resolve work, no G-GROOM reject. */
 export function shouldAutoRunGroomingLoop(state: WizardState): boolean {
   if (state.groomRejectPending) return false
-  if (state.questions.length === 0) return true
+  // Empty queue: skip agent pack/sign-off — settle locally so the UI does not spin forever.
+  if (state.questions.length === 0) return false
   if (state.questions.some((q) => !outboundHandled(q, state))) return false
   if (
     state.questions.some((q) => {
@@ -257,6 +258,7 @@ export function StakeholderResponsesScreen({
   const loopSettled = groomingLoopSettled(state)
   const { state: developerState } = useDeveloperMode()
   const groomRunInFlightRef = useRef(false)
+  const groomFailedForFeedbackRef = useRef<string | null>(null)
 
   const runPack = async () => {
     if (!state.projectId || !onUpdate) return
@@ -407,6 +409,7 @@ export function StakeholderResponsesScreen({
           } else {
             onUpdate({ groomingLoopFeedbackAt: feedback })
           }
+        groomFailedForFeedbackRef.current = null
         return
       }
 
@@ -447,21 +450,33 @@ export function StakeholderResponsesScreen({
         nextSdlcCommand: signRes?.nextCommand || packRes?.nextCommand || '/sdlc-next',
         groomingLoopFeedbackAt: feedback,
       })
+      groomFailedForFeedbackRef.current = null
     } catch (e) {
+      groomFailedForFeedbackRef.current = feedback
       setGroomError(e instanceof Error ? e.message : 'Could not run the grooming loop.')
     } finally {
       setGroomBusy(null)
     }
   }
 
+  // Empty inbox: mark loop settled locally so we never spin on pack/sign-off agents.
+  useEffect(() => {
+    if (!onUpdate || state.questions.length > 0) return
+    if (state.groomingLoopFeedbackAt === '') return
+    onUpdate({ groomingLoopFeedbackAt: '' })
+  }, [onUpdate, state.questions.length, state.groomingLoopFeedbackAt])
+
   useEffect(() => {
     if (!autoReady || loopSettled || !state.projectId || !onUpdate || !requirementText || groomBusy) {
       return
     }
     if (groomRunInFlightRef.current) return
+    // Do not auto-retry the same feedback fingerprint after a failure (stops endless "Finishing…").
+    if (groomFailedForFeedbackRef.current === stakeholderFeedback) return
 
     const timer = window.setTimeout(() => {
       if (groomRunInFlightRef.current || groomingLoopSettled(state)) return
+      if (groomFailedForFeedbackRef.current === stakeholderFeedback) return
       groomRunInFlightRef.current = true
       setGroomError(null)
       void runAutoGroom().finally(() => {
@@ -541,6 +556,7 @@ export function StakeholderResponsesScreen({
                 disabled={!state.projectId || !requirementText || !!groomBusy}
                 onClick={() => {
                   setGroomError(null)
+                  groomFailedForFeedbackRef.current = null
                   void runAutoGroom()
                 }}
               >
@@ -663,7 +679,7 @@ export function StakeholderResponsesScreen({
             <p>
               {groomBusy
                 ? 'Grooming is running in the background. Acknowledge G-GROOM when you are ready.'
-                : 'Acknowledge G-GROOM above, then continue to Project Shape.'}
+                : 'Acknowledge G-GROOM above, then open Scope & tickets to propose epics.'}
             </p>
           </div>
         </section>

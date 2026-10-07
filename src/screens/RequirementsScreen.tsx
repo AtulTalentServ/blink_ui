@@ -1,17 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, CloudUpload, FileText, X } from 'lucide-react'
+import { Check, CloudUpload, FileText, X } from 'lucide-react'
 import type { WizardState, WizardStep } from '../wizard/types'
 import { GroomingPanel } from './GroomRequirementScreen'
-import { JiraScopePanel } from './JiraScopePanel'
-import { DesignOptionsPanel } from './DesignOptionsPanel'
-import { ScopeStartStatus, validateSdlcScope } from './SdlcPlanningScreen'
-import { RequirementRevisionPanel } from './RequirementRevisionPanel'
 import { extractRequirementText } from '../api/blink'
 import { unansweredRequired } from '../wizard/grooming'
 import { shouldAutoStartClarify } from '../wizard/thinking'
-import type { JiraPublishState } from '../wizard/thinking'
 
-type ReqStage = 'capture' | 'clarify' | 'tickets'
+type ReqStage = 'capture' | 'clarify'
 
 const REQ_FILE_TYPES = ['.pdf', '.doc', '.docx', '.txt', '.md']
 
@@ -19,7 +14,6 @@ interface Props {
   state: WizardState
   onUpdate: (patch: Partial<WizardState>) => void
   grooming?: boolean
-  jiraPublish?: JiraPublishState | null
   onAsk?: () => void
   onPick?: (questionId: string, optionId: string, optionLabel: string) => void
   onOther?: (questionId: string, text: string) => void
@@ -40,8 +34,8 @@ function clearFile(onUpdate: Props['onUpdate'], fileInputRef: React.RefObject<HT
 }
 
 function deriveStage(state: WizardState): ReqStage {
-  if (state.groomConfirmed) return 'tickets'
   if (
+    state.groomConfirmed ||
     state.groomQuestions.length > 0 ||
     state.groomStatus === 'draft_ready' ||
     state.groomStatus === 'need_choices' ||
@@ -62,7 +56,6 @@ export function RequirementsScreen({
   state,
   onUpdate,
   grooming,
-  jiraPublish,
   onAsk,
   onPick,
   onOther,
@@ -77,7 +70,6 @@ export function RequirementsScreen({
   const [dragging, setDragging] = useState(false)
   const [extracting, setExtracting] = useState(false)
   const [fileError, setFileError] = useState<string | null>(null)
-  const [wordingOpen, setWordingOpen] = useState(false)
   const hasUploadedFile = Boolean(state.requirementFileName)
   const hasPaste = Boolean(state.requirementsText.trim())
   const pasteLocked =
@@ -132,18 +124,12 @@ export function RequirementsScreen({
   }
 
   const stages: { id: ReqStage; label: string; enabled: boolean; done: boolean }[] = [
-    { id: 'capture', label: 'Capture', enabled: true, done: hasPaste || hasUploadedFile },
+    { id: 'capture', label: 'Write', enabled: true, done: hasPaste || hasUploadedFile },
     {
       id: 'clarify',
       label: 'Clarify',
-      enabled: hasPaste || state.groomQuestions.length > 0,
+      enabled: hasPaste || state.groomQuestions.length > 0 || state.groomConfirmed,
       done: state.groomConfirmed,
-    },
-    {
-      id: 'tickets',
-      label: 'Tickets',
-      enabled: state.groomConfirmed || Boolean(state.requirementFileName && !hasPaste),
-      done: Boolean(state.jiraCreatedIssues?.some((item) => item.status === 'created')),
     },
   ]
 
@@ -162,15 +148,19 @@ export function RequirementsScreen({
 
   const canGroom =
     hasPaste && onAsk && onPick && onOther && onToggleOther && onUseWording && onStartOver
-  const jiraConnected = Boolean(state.integrations.find((item) => item.id === 'jira')?.connected)
-  const confirmedText = state.groomDraft || state.requirementsText
 
   return (
     <div className="screen screen-ref screen-requirements">
       <div className="screen-header">
         <h2>Requirements</h2>
-        <p>Add the requirement, clarify gaps, then create Jira tickets.</p>
+        <p>Capture and clarify the wording. Stakeholders confirm next; epics and Jira tickets come after that.</p>
       </div>
+
+      {state.groomConfirmed ? (
+        <p className="status-banner success">
+          <Check size={16} aria-hidden /> Wording ready. Continue to Stakeholder Q&amp;A for confirmation, then propose epics.
+        </p>
+      ) : null}
 
       <ol className="req-stepper" aria-label="Requirements steps">
         {stages.map((item, index) => {
@@ -392,19 +382,13 @@ export function RequirementsScreen({
             </div>
           </div>
 
-          {(hasPaste || hasUploadedFile) && (
+          {(hasPaste || hasUploadedFile) && !state.groomConfirmed ? (
             <div className="card-footer-actions right">
-              {hasUploadedFile && !hasPaste ? (
-                <button type="button" className="primary-btn" onClick={() => setStage('tickets')}>
-                  Continue to tickets
-                </button>
-              ) : (
-                <button type="button" className="primary-btn" onClick={goToClarify} disabled={!hasPaste}>
-                  Continue to clarify
-                </button>
-              )}
+              <button type="button" className="primary-btn" onClick={goToClarify} disabled={!hasPaste}>
+                Clarify with Blink
+              </button>
             </div>
-          )}
+          ) : null}
         </section>
       )}
 
@@ -429,77 +413,12 @@ export function RequirementsScreen({
         <section className="card ref-card">
           <div className="empty-state-block">
             <h3>No requirement text yet</h3>
-            <p>Paste a description on Capture first. Blink uses that text to ask clarifying questions.</p>
+            <p>Paste a description on Write first. Blink uses that text to ask clarifying questions.</p>
             <button type="button" className="secondary-btn" onClick={() => setStage('capture')}>
-              Back to Capture
+              Back to Write
             </button>
           </div>
         </section>
-      )}
-
-      {stage === 'tickets' && (
-        <div className="req-tickets">
-          {state.groomConfirmed || state.requirementFileName ? (
-            <>
-              {confirmedText ? (
-                <section className={`card ref-card req-wording-card${wordingOpen ? ' is-open' : ''}`}>
-                  <button
-                    type="button"
-                    className="groom-band-header"
-                    aria-expanded={wordingOpen}
-                    onClick={() => setWordingOpen((open) => !open)}
-                  >
-                    <div className="req-section-head">
-                      <h3>Confirmed wording</h3>
-                      <p>{wordingOpen ? 'Click to hide the saved requirement' : 'Click to view the saved requirement'}</p>
-                    </div>
-                    <span className="groom-band-meta">
-                      {wordingOpen ? 'Hide' : 'Show'}
-                      <span className="groom-band-chevron" aria-hidden>
-                        <ChevronDown size={16} className={wordingOpen ? 'chevron open' : 'chevron'} />
-                      </span>
-                    </span>
-                  </button>
-                  {wordingOpen ? <pre className="groom-draft">{confirmedText}</pre> : null}
-                </section>
-              ) : (
-                <section className="card ref-card req-wording-card">
-                  <div className="req-section-head">
-                    <h3>Uploaded document</h3>
-                    <p>{state.requirementFileName} will be used as the requirement source.</p>
-                  </div>
-                </section>
-              )}
-              <DesignOptionsPanel state={state} onUpdate={onUpdate} onNavigate={onNavigate} />
-              <JiraScopePanel
-                state={state}
-                onUpdate={onUpdate}
-                sourceText={confirmedText}
-                jiraPublish={jiraPublish}
-              />
-              <ScopeStartStatus state={state} onUpdate={onUpdate} />
-              <RequirementRevisionPanel projectId={state.projectId} />
-              {!jiraConnected && onNavigate ? (
-                <p className="groom-blocker-hint">
-                  Connect Atlassian to create tickets.{' '}
-                  <button type="button" className="text-btn" onClick={() => onNavigate('integrations')}>
-                    Open Integrations
-                  </button>
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <section className="card ref-card">
-              <div className="empty-state-block">
-                <h3>Finish clarifying first</h3>
-                <p>Answer the required questions, then use the cleared wording so tickets can be planned.</p>
-                <button type="button" className="secondary-btn" onClick={() => setStage('clarify')}>
-                  Go to Clarify
-                </button>
-              </div>
-            </section>
-          )}
-        </div>
       )}
     </div>
   )
@@ -514,13 +433,13 @@ export function validateRequirements(state: WizardState): string | null {
   }
   if (!state.groomConfirmed) {
     if (!state.groomQuestions.length && state.groomStatus !== 'draft_ready' && state.groomStatus !== 'error') {
-      return 'Continue to Clarify so Blink can start the questions, then answer the required ones.'
+      return 'Clarify with Blink, answer the required questions, then Continue.'
     }
     const missing = unansweredRequired(state)
     if (missing.length) {
-      return `Answer or mark Jira later on the ${missing.length} required question${missing.length === 1 ? '' : 's'} under Need clarification.`
+      return `Answer or mark for stakeholders later on the ${missing.length} required question${missing.length === 1 ? '' : 's'} under Need clarification.`
     }
-    return 'Click Use this wording so Blink can rewrite from your answers.'
+    // Ready to save wording via Continue — do not block.
   }
-  return validateSdlcScope(state)
+  return null
 }

@@ -47,12 +47,12 @@ export const WIZARD_PHASES: PhaseDefinition[] = [
   },
   {
     id: 'scope',
-    label: 'Scope',
+    label: 'Write & clarify',
     stepIds: ['requirements'],
   },
   {
     id: 'groom',
-    label: 'Groom',
+    label: 'Ask & tickets',
     stepIds: ['stakeholder-qa'],
   },
   {
@@ -177,11 +177,13 @@ export function stepAttention(
 
 /** Floating footer only — in-page actions must not reuse this word. */
 export function primaryContinueLabel(
-  _step: WizardStep,
-  _state: Pick<WizardState, 'questions' | 'groomConfirmed' | 'repositories' | 'responses'>,
+  step: WizardStep,
+  state: Pick<WizardState, 'questions' | 'groomConfirmed' | 'repositories' | 'responses'>,
   busy: { saving?: boolean; creatingRepos?: boolean },
 ): string {
   if (busy.creatingRepos) return 'Creating on GitHub…'
   if (busy.saving) return 'Saving…'
+  if (step === 'requirements' && !state.groomConfirmed) return 'Save wording & continue'
+  if (step === 'project-stakeholders') return 'Continue'
   return 'Continue'
 }

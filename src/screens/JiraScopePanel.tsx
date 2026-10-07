@@ -37,6 +37,8 @@ interface Props {
   onUpdate: (patch: Partial<WizardState>) => void
   sourceText: string
   jiraPublish?: JiraPublishState | null
+  /** Only auto-plan after stakeholder confirmation unlocks Scope & tickets. */
+  allowAutoPlan?: boolean
 }
 
 function jiraBrowseUrl(
@@ -214,7 +216,7 @@ export function JiraPublishStatus({
   return null
 }
 
-export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null }: Props) {
+export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null, allowAutoPlan = false }: Props) {
   const [planningScope, setPlanningScope] = useState(false)
   const [scopeError, setScopeError] = useState<string | null>(null)
   const [creatingIssues, setCreatingIssues] = useState(false)
@@ -241,11 +243,15 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
   const createdOk = createdOnScreen.length
   const pendingCount = pendingJiraTicketCount(state)
   const wording = sourceText.trim()
-  const autoPlan = shouldAutoStartTickets({
-    hasWording: Boolean(wording),
-    epicCount: epics.length,
-    failed: Boolean(scopeError),
-  })
+  const autoPlan =
+    allowAutoPlan &&
+    Boolean(state.stakeholdersConfirmed) &&
+    Boolean(state.groomAcknowledged) &&
+    shouldAutoStartTickets({
+      hasWording: Boolean(wording),
+      epicCount: epics.length,
+      failed: Boolean(scopeError),
+    })
   const ticketsBusy = planningScope || creatingIssues || autoPlan || Boolean(jiraPublish?.active)
   const issueKeySig = createdOnScreen.map((item) => item.jiraKey).filter(Boolean).join(',')
 
