@@ -1,10 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { SHIP_SUBSTAGES } from '../wizard/ship.ts'
 import type { ShipSubstage, WizardState } from '../wizard/types.ts'
-import {
-  fetchShipSession,
-  type ShipSessionDetailDto,
-} from '../api/blink.ts'
 
 interface ShipScreenProps {
   state: WizardState
@@ -16,11 +12,36 @@ interface ShipScreenProps {
   release: ReactNode
 }
 
+const SUBSTAGE_COPY: Record<ShipSubstage, { title: string; detail: string }> = {
+  workspace: {
+    title: 'Workspace',
+    detail: 'Link GitHub remotes if needed, refresh guidance, then mark ready for Implementation.',
+  },
+  implementation: {
+    title: 'Implementation',
+    detail: 'Pick a story, run the agent, then continue to Review & PR.',
+  },
+  'review-pr': {
+    title: 'Review & PR',
+    detail: 'Register the draft PR, record QA evidence, then authorize a human merge. Blink never merges.',
+  },
+  release: {
+    title: 'Release',
+    detail: 'Record merge, deployment, and closure evidence. Blink performs none of these actions.',
+  },
+}
+
 function allowedSubstages(state: WizardState): ShipSubstage[] {
-  if (state.canonicalAllowedShipSubstages?.length) {
-    return state.canonicalAllowedShipSubstages
+  const fromCanonical = state.canonicalAllowedShipSubstages?.length
+    ? [...state.canonicalAllowedShipSubstages]
+    : (['workspace'] as ShipSubstage[])
+  if (state.gitWritten && !fromCanonical.includes('implementation')) {
+    fromCanonical.push('implementation')
   }
-  return ['workspace']
+  if (state.implementStep && !fromCanonical.includes('review-pr')) {
+    fromCanonical.push('review-pr')
+  }
+  return fromCanonical as ShipSubstage[]
 }
 
 export function ShipScreen({
@@ -32,91 +53,53 @@ export function ShipScreen({
   reviewPr,
   release,
 }: ShipScreenProps) {
-  const [session, setSession] = useState<ShipSessionDetailDto | null>(null)
-  const [sessionError, setSessionError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!state.projectId) {
-      setSession(null)
-      return
-    }
-    let cancelled = false
-    void fetchShipSession(state.projectId)
-      .then((res) => {
-        if (!cancelled) {
-          setSession(res.session)
-          setSessionError(null)
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setSession(null)
-          setSessionError(err instanceof Error ? err.message : 'Could not load ship session.')
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [state.projectId, state.canonicalRevision, substage])
-
-  const permitted = useMemo(() => new Set(allowedSubstages(state)), [state.canonicalAllowedShipSubstages])
+  const permitted = useMemo(
+    () => new Set(allowedSubstages(state)),
+    [state.canonicalAllowedShipSubstages, state.gitWritten, state.implementStep],
+  )
   const shipHints = (state.canonicalBlockers || []).filter(
     (b) => b.step === 'ship' || (b.code || '').startsWith('ship-'),
   )
+  const copy = SUBSTAGE_COPY[substage]
+  const activeIndex = SHIP_SUBSTAGES.findIndex((item) => item.id === substage)
 
   return (
-    <div className="ship-screen">
-      <section className="card shape-section ship-session-panel">
-        <div className="shape-section-head">
-          <h3 className="card-title">Ship session</h3>
-          <span className="shape-section-meta">
-            Scope {session?.scopeRef || '—'} · max {state.canonicalMaxShipSubstage || session?.maxSubstage || 'workspace'}
-          </span>
-        </div>
-        {sessionError ? <p className="muted small">{sessionError}</p> : null}
-        {session?.recentSteps?.length ? (
-          <ul className="ship-step-list">
-            {session.recentSteps.slice(0, 8).map((step) => (
-              <li key={step.id}>
-                <code>{step.stepKind}</code>
-                <span className="muted small">{step.status}</span>
-                {step.finishedAt ? (
-                  <span className="muted small">{new Date(step.finishedAt).toLocaleString()}</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="muted small">Delivery steps (Git apply, implement, QA) will appear here as you run them.</p>
-        )}
-        {shipHints.length > 0 ? (
-          <ul className="ship-hint-list">
-            {shipHints.map((b) => (
-              <li key={b.code || b.message}>{b.message}</li>
-            ))}
-          </ul>
-        ) : null}
-      </section>
+    <div className="screen ship-screen">
+      <div className="screen-header">
+        <h2>{copy.title}</h2>
+        <p>{copy.detail}</p>
+      </div>
 
-      {/* TODO: Restore execution controls only after an end-to-end delivery orchestrator performs real work, not merely lease/audit bookkeeping. */}
-
-      <nav className="ship-subnav" aria-label="Ship phases">
-        {SHIP_SUBSTAGES.map((item) => {
+      <ol className="ship-stepper" aria-label="Ship phases">
+        {SHIP_SUBSTAGES.map((item, index) => {
           const enabled = permitted.has(item.id)
+          const active = item.id === substage
+          const done = index < activeIndex
           return (
-            <button
-              key={item.id}
-              type="button"
-              className={item.id === substage ? 'ship-subnav-item active' : 'ship-subnav-item'}
-              disabled={!enabled}
-              title={enabled ? undefined : 'Complete the prior Ship phase first'}
-              onClick={() => enabled && onSubstage(item.id)}
-            >
-              {item.label}
-            </button>
+            <li key={item.id} className={active ? 'is-active' : done ? 'is-done' : ''}>
+              <button
+                type="button"
+                aria-current={active ? 'step' : undefined}
+                disabled={!enabled}
+                title={enabled ? undefined : 'Complete the prior Ship phase first'}
+                onClick={() => enabled && onSubstage(item.id)}
+              >
+                <span className="ship-step-index">{index + 1}</span>
+                <span className="ship-step-label">{item.label.replace(/^\d+\s·\s/, '')}</span>
+              </button>
+            </li>
           )
         })}
-      </nav>
+      </ol>
+
+      {shipHints.length > 0 ? (
+        <ul className="ship-hint-list">
+          {shipHints.map((b) => (
+            <li key={b.code || b.message}>{b.message}</li>
+          ))}
+        </ul>
+      ) : null}
+
       <div className="ship-substage-panel">
         {substage === 'workspace' ? workspace : null}
         {substage === 'implementation' ? implementation : null}

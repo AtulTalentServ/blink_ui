@@ -39,11 +39,16 @@ export async function fetchLoginConfig(): Promise<AuthLoginConfig> {
 }
 
 export async function requestLoginOtp(email: string, accessCode?: string): Promise<OtpRequestResponse> {
-  const response = await timedFetch(apiUrl('/auth/otp/request'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, accessCode: accessCode || undefined }),
-  })
+  // Login must tolerate Neon pool recovery after wizard autosave storms (default timedFetch is 15s).
+  const response = await timedFetch(
+    apiUrl('/auth/otp/request'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, accessCode: accessCode || undefined }),
+    },
+    45_000,
+  )
   if (!response.ok) {
     throw new Error(await readError(response))
   }
@@ -51,11 +56,15 @@ export async function requestLoginOtp(email: string, accessCode?: string): Promi
 }
 
 export async function verifyLoginOtp(email: string, otp: string, accessCode?: string): Promise<AuthSessionResponse> {
-  const response = await timedFetch(apiUrl('/auth/otp/verify'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, otp, accessCode: accessCode || undefined }),
-  })
+  const response = await timedFetch(
+    apiUrl('/auth/otp/verify'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp, accessCode: accessCode || undefined }),
+    },
+    45_000,
+  )
   if (!response.ok) {
     throw new Error(await readError(response))
   }

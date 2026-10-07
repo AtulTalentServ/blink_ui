@@ -21,15 +21,40 @@ function localBackendUp(ms = 250): Promise<boolean> {
   })
 }
 
+function proxyTimeoutMs(url: string | undefined): number {
+  const path = url ?? ''
+  // Uploads / workspace zip / long agent streams need more than a short JSON probe.
+  if (
+    path.includes('/requirements/extract') ||
+    path.includes('/download') ||
+    path.includes('/grooming') ||
+    path.includes('/clarify') ||
+    path.includes('/plan-product-scope') ||
+    path.includes('/confirm-product-scope') ||
+    path.includes('/sdlc-') ||
+    path.includes('/classify-work') ||
+    path.includes('/create-spec') ||
+    path.includes('/technical-plan') ||
+    path.includes('/chat')
+  ) {
+    return 200_000
+  }
+  return 60_000
+}
+
 function forward(base: string, req: IncomingMessage, res: ServerResponse) {
   const dest = new URL(req.url ?? '/', base)
   const lib = http
   const headers = { ...req.headers, host: dest.host }
   delete headers.connection
-  const upstream = lib.request(dest, { method: req.method, headers, timeout: 240_000 }, (up: IncomingMessage) => {
-    res.writeHead(up.statusCode ?? 502, up.headers)
-    up.pipe(res)
-  })
+  const upstream = lib.request(
+    dest,
+    { method: req.method, headers, timeout: proxyTimeoutMs(req.url) },
+    (up: IncomingMessage) => {
+      res.writeHead(up.statusCode ?? 502, up.headers)
+      up.pipe(res)
+    },
+  )
   upstream.on('error', (err: Error) => {
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'text/plain' })

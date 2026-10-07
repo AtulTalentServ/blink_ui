@@ -66,15 +66,6 @@ export function ReleaseClosureScreen({ state, onUpdate, onNavigate }: Props) {
 
   return (
     <div className="screen release-screen">
-      <div className="screen-header">
-        <div>
-          <p className="shape-kicker">Release</p>
-          <h2>Record release evidence and closure</h2>
-          <p>Merge, deployment, verification, and closure are separate human-recorded events. Blink performs none of them.</p>
-        </div>
-        <Rocket size={28} aria-hidden />
-      </div>
-
       <section className={`release-screen__summary ${current.closure ? 'is-closed' : ''}`}>
         {current.closure ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
         <div>

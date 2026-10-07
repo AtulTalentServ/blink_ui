@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, ChevronDown, Mail, MessageSquare, Sparkles } from 'lucide-react'
+import { Check, ChevronDown, Mail, MessageSquare } from 'lucide-react'
 import { JiraScopePanel } from './JiraScopePanel'
 import { assigneeForQuestion } from '../wizard/questions'
 import { roleLabel, STAKEHOLDER_ROLES } from '../wizard/stakeholders'
@@ -21,7 +21,7 @@ interface Props {
   onPick: (questionId: string, optionId: string, optionLabel: string) => void
   onOther: (questionId: string, text: string) => void
   onToggleOther: (questionId: string, checked: boolean) => void
-  onUseWording: () => void
+  onUseWording?: () => void
   onStartOver: () => void
   onUpdate: (patch: Partial<WizardState>) => void
   onNavigate?: (step: WizardStep) => void
@@ -280,7 +280,6 @@ export function GroomingPanel({
   onPick,
   onOther,
   onToggleOther,
-  onUseWording,
   onStartOver,
   onUpdate,
   onNavigate,
@@ -383,22 +382,22 @@ export function GroomingPanel({
             Start over
           </button>
           <span className="action-spacer" />
-          <button
-            type="button"
-            className="primary-btn"
-            disabled={loading || state.groomConfirmed || !canSave}
-            onClick={onUseWording}
-          >
-            {loading ? 'Updating wording…' : state.groomConfirmed ? 'Wording saved' : 'Use this wording'}
-            {state.groomConfirmed ? <Check size={16} /> : <Sparkles size={16} />}
-          </button>
+          {state.groomConfirmed ? (
+            <p className="quiet-hint groom-continue-hint">
+              <Check size={14} aria-hidden /> Wording saved — click Continue below.
+            </p>
+          ) : (
+            <p className="quiet-hint groom-continue-hint">
+              {loading
+                ? 'Updating wording…'
+                : canSave
+                  ? 'Answer the questions, then click Continue to save the wording.'
+                  : `Answer or mark Jira later on ${missingRequired.length} required question${
+                      missingRequired.length === 1 ? '' : 's'
+                    }.`}
+            </p>
+          )}
         </div>
-      )}
-      {asked && !state.groomConfirmed && missingRequired.length > 0 && (
-        <p className="field-hint">
-          Answer or mark Jira later on {missingRequired.length} required question
-          {missingRequired.length === 1 ? '' : 's'} under Need clarification.
-        </p>
       )}
 
       {showJiraPanel && state.groomConfirmed && (

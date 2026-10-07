@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
-import { downloadWorkspace, fetchWorkspaceStatus, isNotProjectOwnerError, rehomeProject, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
+import { downloadWorkspace, fetchWorkspaceStatus, isNotProjectOwnerError, rehomeProject, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
@@ -8,7 +8,6 @@ import { WizardSidebar, STEP_ORDER } from './components/WizardSidebar'
 import { SessionControls } from './components/SessionControls'
 import { ChatPanel, useChatPanelOpen } from './components/ChatPanel'
 import { ThemeBackground } from './components/ThemeBackground'
-import { JourneyGuide } from './components/JourneyGuide'
 import {
   ProjectShapeScreen,
   RepositoriesScreen,
@@ -218,6 +217,7 @@ export default function App() {
   const unrestrictedNav = useDeveloperCapability('unrestrictedStepNav')
   const [chatOpen, setChatOpen] = useChatPanelOpen()
   const shapeConfirmRef = useRef<(() => Promise<void>) | null>(null)
+  const handleGroomLooksGoodRef = useRef<() => Promise<boolean>>(async () => false)
   const [shapeConfirmUi, setShapeConfirmUi] = useState({ busy: false, pending: false, confirmed: false })
   const onShapeConfirm = useCallback((action: ShapeConfirmAction | null) => {
     shapeConfirmRef.current = action?.run ?? null
@@ -404,10 +404,14 @@ export default function App() {
   const goToShipSubstage = useCallback(
     (substage: ShipSubstage) => {
       const current = stateRef.current
-      const allowed = current.canonicalAllowedShipSubstages?.length
-        ? current.canonicalAllowedShipSubstages
-        : (['workspace'] as ShipSubstage[])
-      if (!allowed.includes(substage)) {
+      const allowed = new Set(
+        current.canonicalAllowedShipSubstages?.length
+          ? current.canonicalAllowedShipSubstages
+          : (['workspace'] as ShipSubstage[]),
+      )
+      if (current.gitWritten) allowed.add('implementation')
+      if (current.implementStep) allowed.add('review-pr')
+      if (!allowed.has(substage)) {
         setStatus({ type: 'info', message: `Complete the prior Ship phase before opening ${substage}.` })
         return
       }
@@ -752,6 +756,12 @@ export default function App() {
     creatingReposRef.current = true
     setCreatingRepos(true)
     setStatus(null)
+    const clearBusy = () => {
+      creatingReposRef.current = false
+      setCreatingRepos(false)
+    }
+    // Hard unlock if the request hangs past the client abort — button must not stay disabled forever.
+    const stuckTimer = window.setTimeout(clearBusy, 65_000)
     try {
       const result = await createRepositories({
         provider: 'github',
@@ -770,7 +780,7 @@ export default function App() {
           if (!created) return repository
           return {
             ...repository,
-            htmlUrl: created.htmlUrl ?? repository.htmlUrl,
+            htmlUrl: created.htmlUrl || repository.htmlUrl,
             createStatus: created.status as 'created' | 'exists' | 'failed',
             createMessage: created.message,
           }
@@ -801,17 +811,24 @@ export default function App() {
           }).catch(() => undefined)
         }
       }
-      setStatus({
-        type: failed ? 'info' : 'success',
-        message: `GitHub: ${created} created, ${exists} already existed, ${failed} failed.`,
-      })
+      if (failed) {
+        setStatus({
+          type: 'info',
+          message: `GitHub: ${created} created, ${exists} already existed, ${failed} failed. Use Reconcile to retry only the failed ones.`,
+        })
+      } else {
+        setStatus({
+          type: 'success',
+          message: `GitHub: ${created} created, ${exists} already existed.`,
+        })
+      }
       return failed === 0
     } catch (err) {
       setStatus({ type: 'error', message: err instanceof Error ? err.message : 'Could not create GitHub repositories.' })
       return false
     } finally {
-      creatingReposRef.current = false
-      setCreatingRepos(false)
+      window.clearTimeout(stuckTimer)
+      clearBusy()
     }
   }, [patch, state.bootstrapAcknowledged, state.integrations, state.jiraCreatedIssues, state.productScope, state.projectId, state.repositories, state.sdlcStartIssueId, state.specification, state.workClassification])
 
@@ -822,27 +839,63 @@ export default function App() {
       return
     }
     if (step === 'project-stakeholders') {
-      const payload = projectPayload()
-      const payloadStr = JSON.stringify(payload)
-      const alreadyPersisted = Boolean(state.projectId && lastSavedPayloadRef.current === payloadStr)
-
-      if (!alreadyPersisted) {
-        setSaving(true)
-        setStatus(null)
-      }
       const draft =
         skipStepValidation && (!state.projectName.trim() || !state.description.trim())
-      try {
-        const saved = await persistProject({ draft })
-        setStatus(null)
-        if (!draft && saved.id) {
-          scheduleStakeholderGovernance(saved.id, { draft })
+      setStatus(null)
+
+      const runStakeholderSideEffects = (projectId: string) => {
+        void configureStakeholders(projectId).catch(() => undefined)
+        if (!stateRef.current.stakeholdersConfirmed) {
+          patch({ stakeholdersConfirmed: true, governanceStatus: 'ready' })
+          void confirmStakeholders(projectId)
+            .then((confirmed) => {
+              if (confirmed.status !== 'ok') {
+                throw new Error(confirmed.message || confirmed.errors?.join('; ') || 'Confirm stakeholders failed')
+              }
+              patch({
+                stakeholdersConfirmed: true,
+                stakeholdersConfirmationDigest: confirmed.confirmationDigest || null,
+                nextSdlcCommand: confirmed.nextCommand || stateRef.current.nextSdlcCommand,
+                governanceStatus: 'ready',
+              })
+            })
+            .catch(() => {
+              patch({
+                stakeholdersConfirmed: false,
+                stakeholdersConfirmationDigest: null,
+                governanceStatus: 'failed',
+              })
+            })
+        } else {
+          scheduleStakeholderGovernance(projectId, { draft })
         }
-      } catch (e) {
-        setStatus({ type: 'error', message: e instanceof Error ? e.message : 'Could not save project.' })
-        return
-      } finally {
-        if (!alreadyPersisted) {
+      }
+
+      // Existing projects: never block Continue on Neon save (was leaving the UI on "Saving…").
+      if (state.projectId) {
+        const existingId = state.projectId
+        void persistProject({ draft })
+          .then((saved) => {
+            if (!draft && saved.id) runStakeholderSideEffects(saved.id)
+          })
+          .catch(() => {
+            // Neon can be slow; Continue already advanced. Keep a soft note, not a hard block.
+            setStatus({
+              type: 'info',
+              message: 'Project save is still catching up in the background. You can keep going.',
+            })
+          })
+        if (!draft) runStakeholderSideEffects(existingId)
+      } else {
+        setSaving(true)
+        try {
+          const saved = await persistProject({ draft })
+          if (!draft && saved.id) runStakeholderSideEffects(saved.id)
+        } catch (e) {
+          setStatus({ type: 'error', message: e instanceof Error ? e.message : 'Could not save project.' })
+          setSaving(false)
+          return
+        } finally {
           setSaving(false)
         }
       }
@@ -863,7 +916,17 @@ export default function App() {
     setCompletedThrough((prev) => Math.max(prev, idx))
     const nextStep = STEP_ORDER[idx + 1]
     if (nextStep) goToStep(nextStep)
-  }, [step, validateCurrentStep, persistProject, scheduleStakeholderGovernance, state, patch, skipStepValidation, goToStep])
+  }, [
+    step,
+    validateCurrentStep,
+    persistProject,
+    scheduleStakeholderGovernance,
+    state,
+    patch,
+    skipStepValidation,
+    goToStep,
+    projectPayload,
+  ])
 
   const retryStakeholderGovernance = useCallback(() => {
     const id = stateRef.current.projectId
@@ -920,7 +983,7 @@ export default function App() {
         type: 'info',
         message:
           result.status === 'draft_ready'
-            ? 'This is already clear enough. Use this wording, or Start over to change the paste.'
+            ? 'This is already clear enough. Continue to save the wording, or Start over to change the paste.'
             : 'Answer the required questions. Important and suggestions are optional.',
       })
     } catch (e) {
@@ -999,14 +1062,14 @@ export default function App() {
     })
   }, [])
 
-  const handleGroomLooksGood = useCallback(async () => {
-    if (state.groomConfirmed) return
+  const handleGroomLooksGood = useCallback(async (): Promise<boolean> => {
+    if (state.groomConfirmed) return true
     if (unansweredRequired(state).length && state.groomStatus !== 'error') {
       setStatus({
         type: 'error',
         message: 'Answer every required question under Need clarification, or mark Jira later to ask on a ticket.',
       })
-      return
+      return false
     }
     const original = (state.groomOriginal || state.requirementsText).trim()
     const answers = state.groomAnswers.filter(
@@ -1026,17 +1089,17 @@ export default function App() {
         if (result.status === 'error' || result.status === 'invalid_request') {
           setStatus({ type: 'error', message: result.message })
           patch({ groomStatus: result.status, groomMessage: result.message })
-          return
+          return false
         }
         draft = (result.requirementDraft || draft).trim()
       } catch (e) {
         setStatus({ type: 'error', message: e instanceof Error ? e.message : 'Could not update the wording.' })
-        return
+        return false
       } finally {
         setGrooming(false)
       }
     }
-    if (!draft) return
+    if (!draft) return false
     const nextState = { ...state, requirementsText: draft, groomConfirmed: true, groomDraft: draft }
     const questions = carryClarifyQuestionsForward(nextState)
     const basePatch: Partial<WizardState> = {
@@ -1064,8 +1127,10 @@ export default function App() {
           lastRevisionFeedbackRef.current = ''
         })
     }
-    setStatus({ type: 'success', message: 'Requirement wording saved. You can plan tickets in this step.' })
+    setStatus({ type: 'success', message: 'Requirement wording saved.' })
+    return true
   }, [state, patch])
+  handleGroomLooksGoodRef.current = handleGroomLooksGood
 
   const handleGroomStartOver = useCallback(() => {
     groomAskInFlightRef.current = false
@@ -2077,10 +2142,6 @@ export default function App() {
                 'requirementsText' in updates || 'requirementFileName' in updates || 'requirementFile' in updates
               patch(resetGroom ? { ...clearGroomingPatch(), ...updates } : updates)
             }}
-            onNavigate={(s) => {
-              setStatus(null)
-              goToStep(s)
-            }}
           />
         )
       case 'stakeholder-qa':
@@ -2143,6 +2204,7 @@ export default function App() {
                 onExportGithub={() => void handleCreateGithubRepos()}
                 onGenerateKit={() => void runGeneration()}
                 onBack={() => goToStep('welcome')}
+                onGoImplementation={() => goToShipSubstage('implementation')}
                 onNavigate={(s) => {
                   setStatus(null)
                   goToStep(s)
@@ -2152,6 +2214,8 @@ export default function App() {
             implementation={
               <ImplementationReadinessScreen
                 state={state}
+                onUpdate={patch}
+                onContinueToReview={() => goToShipSubstage('review-pr')}
               />
             }
             reviewPr={
@@ -2290,16 +2354,6 @@ export default function App() {
 
         <div className={`content${isSuccessScreen ? ' content-fill' : ''}${isWelcome ? ' content-welcome' : ''}${currentSkipped ? ' content-skipped' : ''}`}>
           {status && !isWelcome && <div className={`status-banner ${status.type}`}>{status.message}</div>}
-          {!isWelcome ? (
-            <JourneyGuide
-              state={state}
-              step={step}
-              onNavigate={(next) => {
-                setStatus(null)
-                goToStep(next)
-              }}
-            />
-          ) : null}
           {renderScreen()}
         </div>
 

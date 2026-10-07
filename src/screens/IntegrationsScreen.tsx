@@ -583,14 +583,31 @@ export function IntegrationsScreen({
     }
   }
 
+  const cancelOauth = useCallback(() => {
+    stopWatchingOauth()
+    setOauthLoading(false)
+    setOauthResume(null)
+    setOauthNotice('Connection cancelled. Close any GitHub popup, wait a few seconds, then try again.')
+  }, [])
+
   const handleStartGithubOAuth = async () => {
     const popup = openOauthPlaceholder('github_oauth', 'GitHub')
     setError(null)
     setOauthNotice(null)
     setOauthResume(null)
     setOauthLoading(true)
+    // Soft timeout — Neon congestion can leave the button on Connecting… forever.
+    const timeout = window.setTimeout(() => {
+      setOauthLoading((busy) => {
+        if (!busy) return busy
+        setOauthNotice(
+          'GitHub connect is taking too long (API busy). Click Cancel, close the popup, wait ~30s, then try again.',
+        )
+        return false
+      })
+    }, 45_000)
     try {
-      await requireStoredProject()
+      // Fetch the OAuth URL first so the popup is not stuck on "Connecting…" behind slow project saves.
       githubOrgRef.current = form.organization.trim()
       const urlRes = await fetchGithubOAuthUrl()
       oauthRedirectUriRef.current = urlRes.redirectUri
@@ -611,15 +628,20 @@ export function IntegrationsScreen({
           setOauthResume({ provider: 'github', url: authUrl })
           setOauthLoading(false)
         }, 500)
+        // Persist project id in the background (already saved projects return immediately).
+        void requireStoredProject().catch(() => undefined)
         return
       }
       popup?.close()
       setOauthResume({ provider: 'github', url: authUrl })
       setOauthLoading(false)
+      void requireStoredProject().catch(() => undefined)
     } catch (err) {
       popup?.close()
       setError(err instanceof Error ? err.message : 'Could not initialize GitHub OAuth.')
       setOauthLoading(false)
+    } finally {
+      window.clearTimeout(timeout)
     }
   }
 
@@ -1101,14 +1123,21 @@ export function IntegrationsScreen({
                   <strong>Sign in with GitHub</strong>
                 </div>
                 <p className="oauth-card-copy">Opens a GitHub window. If your browser blocks it, use the prompt below.</p>
-                <button
-                  type="button"
-                  className="oauth-btn github"
-                  disabled={saving || oauthLoading}
-                  onClick={() => void handleStartGithubOAuth()}
-                >
-                  {oauthLoading ? 'Connecting…' : 'Continue with GitHub'}
-                </button>
+                <div className="row-actions" style={{ gap: 8 }}>
+                  <button
+                    type="button"
+                    className="oauth-btn github"
+                    disabled={saving || oauthLoading}
+                    onClick={() => void handleStartGithubOAuth()}
+                  >
+                    {oauthLoading ? 'Connecting…' : 'Continue with GitHub'}
+                  </button>
+                  {oauthLoading ? (
+                    <button type="button" className="secondary-btn" onClick={cancelOauth}>
+                      Cancel
+                    </button>
+                  ) : null}
+                </div>
                 {oauthResume?.provider === 'github' && (
                   <div className="oauth-blocked">
                     <p>Your browser blocked the GitHub window.</p>
