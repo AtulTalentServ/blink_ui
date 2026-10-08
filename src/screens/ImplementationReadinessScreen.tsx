@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, Circle, Loader2, Play } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Circle, Loader2, Play, RefreshCw } from 'lucide-react'
 import {
   fetchCanonicalSnapshot,
   fetchShipSession,
@@ -506,12 +506,18 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
                   )}
                   <button
                     type="button"
-                    className="implement-story-queue__action"
+                    className={`implement-story-queue__action${row.hasDraft ? ' is-rerun' : ' is-implement'}`}
                     disabled={busy || !readyForAgent || !workspaceReady}
                     onClick={() => void runImplement(row.id)}
                   >
-                    {isBusy ? <Loader2 className="spin" size={14} /> : <Play size={14} />}
-                    {row.hasDraft ? 'Re-run' : 'Implement'}
+                    {isBusy ? (
+                      <Loader2 className="spin" size={15} aria-hidden />
+                    ) : row.hasDraft ? (
+                      <RefreshCw size={15} aria-hidden />
+                    ) : (
+                      <Play size={15} aria-hidden />
+                    )}
+                    <span>{row.hasDraft ? 'Re-run' : 'Implement'}</span>
                   </button>
                 </li>
               )
@@ -553,8 +559,12 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
               disabled={busy || !readyForAgent || !workspaceReady}
               onClick={() => void runImplement(nextPending.id)}
             >
-              {busy && busyIssueId === nextPending.id ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-              Next pending · {shortStoryLabel(nextPending.id)}
+              {busy && busyIssueId === nextPending.id ? (
+                <Loader2 className="spin" size={16} aria-hidden />
+              ) : (
+                <Play size={16} aria-hidden />
+              )}
+              <span>Next pending · {shortStoryLabel(nextPending.id)}</span>
             </button>
           ) : selectedIssueId ? (
             <button
@@ -563,8 +573,14 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
               disabled={busy || !readyForAgent || !workspaceReady}
               onClick={() => void runImplement(selectedIssueId)}
             >
-              {busy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-              {selectedHasDraft ? 'Re-run selected' : 'Implement selected'}
+              {busy ? (
+                <Loader2 className="spin" size={16} aria-hidden />
+              ) : selectedHasDraft ? (
+                <RefreshCw size={16} aria-hidden />
+              ) : (
+                <Play size={16} aria-hidden />
+              )}
+              <span>{selectedHasDraft ? 'Re-run selected' : 'Implement selected'}</span>
             </button>
           ) : null}
           {selectedHasDraft && onContinueToReview ? (
