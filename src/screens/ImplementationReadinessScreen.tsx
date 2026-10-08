@@ -24,6 +24,8 @@ interface StoryRow {
   prCount: number
   /** GitHub draft PR URLs for this story (first one powers the Drafted badge). */
   prUrls: string[]
+  /** Why a draft PR was not opened (token missing, docs-only stub, etc.). */
+  skipReason?: string
 }
 
 function requirementTextOf(state: WizardState): string {
@@ -76,28 +78,69 @@ function payloadIssueId(step: ShipStepDto): string | null {
   return typeof issue === 'string' && issue.trim() ? issue.trim() : null
 }
 
+function urlFromRecord(item: Record<string, unknown>): string {
+  for (const key of ['url', 'html_url', 'htmlUrl', 'pr_url', 'prUrl', 'draftPrUrl']) {
+    const value = String(item[key] || '').trim()
+    if (value.startsWith('http://') || value.startsWith('https://')) return value
+  }
+  return ''
+}
+
+function prUrlsFromText(text: string | undefined): string[] {
+  if (!text) return []
+  const matches = text.match(/https?:\/\/(?:www\.)?github\.com\/[^\s)]+\/pull\/\d+/gi) || []
+  return matches.map((url) => url.replace(/[.,;]+$/, ''))
+}
+
 function prUrlsFromUnknown(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
   const urls: string[] = []
   const seen = new Set<string>()
-  for (const item of value) {
-    if (!item || typeof item !== 'object') continue
-    const url = String((item as { url?: unknown }).url || '').trim()
-    if (!url || seen.has(url)) continue
-    seen.add(url)
-    urls.push(url)
+  const push = (url: string) => {
+    const trimmed = url.trim()
+    if (!trimmed || seen.has(trimmed)) return
+    seen.add(trimmed)
+    urls.push(trimmed)
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === 'string') {
+        push(item)
+        continue
+      }
+      if (!item || typeof item !== 'object') continue
+      const url = urlFromRecord(item as Record<string, unknown>)
+      if (url) push(url)
+    }
+    return urls
+  }
+  if (value && typeof value === 'object') {
+    const url = urlFromRecord(value as Record<string, unknown>)
+    if (url) push(url)
   }
   return urls
 }
 
-function resultSummary(step: ShipStepDto): { summary?: string; prCount: number; prUrls: string[] } {
+function resultSummary(step: ShipStepDto): { summary?: string; prCount: number; prUrls: string[]; skipReason?: string } {
   const result = step.result
   if (!result || typeof result !== 'object') return { prCount: 0, prUrls: [] }
   const rec = result as Record<string, unknown>
-  const prUrls = prUrlsFromUnknown(rec.draftPullRequests)
-  const prCount = prUrls.length || (Array.isArray(rec.draftPullRequests) ? rec.draftPullRequests.length : 0)
+  const evidence = rec.evidence && typeof rec.evidence === 'object'
+    ? rec.evidence as Record<string, unknown>
+    : null
   const summary = typeof rec.summary === 'string' && rec.summary.trim() ? rec.summary.trim() : undefined
-  return { summary, prCount, prUrls }
+  const prUrls = mergePrUrls(
+    prUrlsFromUnknown(rec.draftPullRequests),
+    prUrlsFromUnknown(rec.pullRequests),
+    prUrlsFromText(summary),
+    prUrlsFromText(typeof evidence?.draftPrError === 'string' ? evidence.draftPrError : undefined),
+  )
+  const prCount = prUrls.length || (Array.isArray(rec.draftPullRequests) ? rec.draftPullRequests.length : 0)
+  const skipReason = typeof evidence?.draftPrSkipped === 'string'
+    ? evidence.draftPrSkipped
+    : typeof evidence?.draftPrError === 'string'
+      ? evidence.draftPrError
+      : undefined
+  return { summary, prCount, prUrls, skipReason }
 }
 
 function mergePrUrls(...groups: (string[] | undefined)[]): string[] {
@@ -122,16 +165,17 @@ function buildStoryRows(
   latestPrUrls: string[],
   registered: { issueId: string; url: string }[],
 ): StoryRow[] {
-  const byIssue = new Map<string, { summary?: string; prCount: number; prUrls: string[] }>()
+  const byIssue = new Map<string, { summary?: string; prCount: number; prUrls: string[]; skipReason?: string }>()
   for (const step of implementSteps) {
     const id = payloadIssueId(step)
     if (!id) continue
-    const { summary, prCount, prUrls } = resultSummary(step)
+    const { summary, prCount, prUrls, skipReason } = resultSummary(step)
     const prev = byIssue.get(id)
     byIssue.set(id, {
       summary: summary || prev?.summary,
       prCount: Math.max(prev?.prCount || 0, prCount),
       prUrls: mergePrUrls(prev?.prUrls, prUrls),
+      skipReason: prUrls.length ? undefined : (skipReason || prev?.skipReason),
     })
   }
   for (const pr of registered) {
@@ -142,6 +186,7 @@ function buildStoryRows(
       summary: prev.summary,
       prCount: Math.max(prev.prCount, prUrls.length),
       prUrls,
+      skipReason: undefined,
     })
   }
   if (latestIssueId) {
@@ -151,6 +196,7 @@ function buildStoryRows(
       summary: latestSummary || prev.summary,
       prCount: Math.max(prev.prCount, prUrls.length),
       prUrls,
+      skipReason: prUrls.length ? undefined : prev.skipReason,
     })
   }
 
@@ -164,6 +210,7 @@ function buildStoryRows(
       lastSummary: hit?.summary,
       prCount: hit?.prCount || 0,
       prUrls: hit?.prUrls || [],
+      skipReason: hit?.skipReason,
     }
   })
 
@@ -176,15 +223,27 @@ function buildStoryRows(
       lastSummary: hit.summary,
       prCount: hit.prCount,
       prUrls: hit.prUrls,
+      skipReason: hit.skipReason,
     })
   }
   return rows
 }
 
-function openDraftPr(url: string, event: { preventDefault(): void; stopPropagation(): void }) {
-  event.preventDefault()
-  event.stopPropagation()
-  window.open(url, '_blank', 'noopener,noreferrer')
+function draftedSkipMessage(reason: string | undefined): string {
+  switch (reason) {
+    case 'docs_only_stub':
+      return 'No GitHub PR — agent returned docs/stub only. Fix LLM config and re-run Implement.'
+    case 'github_token_missing':
+      return 'No GitHub PR — connect GitHub on Integrations, then re-run Implement.'
+    case 'app_repos_missing':
+      return 'No GitHub PR — create/link app repositories first, then re-run Implement.'
+    case 'patches_empty':
+      return 'No GitHub PR — implement-step returned no code patches.'
+    default:
+      return reason
+        ? `No GitHub PR URL recorded (${reason}).`
+        : 'No GitHub PR URL was recorded for this story. Re-run Implement after GitHub is connected.'
+  }
 }
 
 export function ImplementationReadinessScreen({ state, onUpdate, onContinueToReview }: Props) {
@@ -305,6 +364,14 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         setPrs(draftPrs)
         const impl = res.implementStep
         const resolvedIssue = impl?.issueId || res.issueId || issueId
+        const evidence = res.evidence && typeof res.evidence === 'object'
+          ? res.evidence as Record<string, unknown>
+          : null
+        const skipReason = typeof evidence?.draftPrSkipped === 'string'
+          ? evidence.draftPrSkipped
+          : typeof evidence?.draftPrError === 'string'
+            ? evidence.draftPrError
+            : undefined
         onUpdate({
           implementStep: impl || {
             issueId: resolvedIssue,
@@ -317,11 +384,13 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
           nextSdlcCommand: res.nextCommand || '/qa-validation',
         })
         setSelectedIssueId(resolvedIssue)
-        setMessage(
-          draftPrs.length
-            ? `${shortStoryLabel(resolvedIssue)} drafted · ${draftPrs.length} PR(s) opened`
-            : `${shortStoryLabel(resolvedIssue)} drafted`,
-        )
+        if (draftPrs.length) {
+          setError(null)
+          setMessage(`${shortStoryLabel(resolvedIssue)} drafted · ${draftPrs.length} PR(s) opened`)
+        } else {
+          setMessage(null)
+          setError(draftedSkipMessage(skipReason))
+        }
         await refreshShipProgress()
         try {
           const snap = await fetchCanonicalSnapshot(state.projectId)
@@ -407,27 +476,34 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
                       <code className="implement-story-queue__id">{shortStoryLabel(row.id)}</code>
                       <span className="implement-story-queue__title">{row.title}</span>
                     </span>
-                    {row.hasDraft && draftPrUrl ? (
-                      <span
-                        className="implement-story-queue__badge is-drafted is-link"
-                        role="link"
-                        tabIndex={0}
-                        title="Open draft PR on GitHub"
-                        onClick={(event) => openDraftPr(draftPrUrl, event)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            openDraftPr(draftPrUrl, event)
-                          }
-                        }}
-                      >
-                        Drafted
-                      </span>
-                    ) : (
-                      <span className={`implement-story-queue__badge is-${row.hasDraft ? 'drafted' : isSelected ? 'selected' : 'pending'}`}>
-                        {row.hasDraft ? 'Drafted' : isSelected ? 'Selected' : 'Pending'}
-                      </span>
-                    )}
                   </button>
+                  {row.hasDraft && draftPrUrl ? (
+                    <a
+                      className="implement-story-queue__badge is-drafted is-link"
+                      href={draftPrUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Open draft PR on GitHub"
+                    >
+                      Drafted
+                    </a>
+                  ) : row.hasDraft ? (
+                    <button
+                      type="button"
+                      className="implement-story-queue__badge is-drafted is-link"
+                      title="No PR URL — click for details"
+                      onClick={() => {
+                        setMessage(null)
+                        setError(draftedSkipMessage(row.skipReason))
+                      }}
+                    >
+                      Drafted
+                    </button>
+                  ) : (
+                    <span className={`implement-story-queue__badge is-${isSelected ? 'selected' : 'pending'}`}>
+                      {isSelected ? 'Selected' : 'Pending'}
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="implement-story-queue__action"
