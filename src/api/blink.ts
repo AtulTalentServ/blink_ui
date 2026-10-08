@@ -763,52 +763,6 @@ export interface TopologyConfirmationDto {
   technologyStack?: string
 }
 
-async function postShapeCommand(
-  projectId: string,
-  command: 'architecture-proposal' | 'confirm-topology',
-  payload: Record<string, unknown>,
-  timeoutMs = 90_000,
-): Promise<Record<string, unknown>> {
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const response = await fetch(apiUrl(`/projects/${projectId}/canonical/commands/execute`), {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify({ command, payload }),
-      signal: controller.signal,
-    })
-    if (!response.ok) throw new Error(await readError(response))
-    const envelope = (await response.json()) as {
-      status?: string
-      error?: string
-      result?: Record<string, unknown>
-    }
-    if (envelope.status && envelope.status !== 'completed' && envelope.status !== 'ok') {
-      throw new Error(envelope.error || envelope.status)
-    }
-    const result =
-      envelope.result && typeof envelope.result === 'object' ? envelope.result : (envelope as Record<string, unknown>)
-    const status = String(result.status || '')
-    if (status && status !== 'ok') {
-      const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
-      throw new Error(String(result.message || errors || status))
-    }
-    return result
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(
-        command === 'architecture-proposal'
-          ? 'Shape suggestion timed out. Keep your selections and confirm the structure.'
-          : 'Confirm structure timed out. Wait a moment and try again.',
-      )
-    }
-    throw error
-  } finally {
-    window.clearTimeout(timer)
-  }
-}
-
 export async function proposeProjectShape(
   projectId: string,
   payload: { projectName?: string; requirementText?: string },
