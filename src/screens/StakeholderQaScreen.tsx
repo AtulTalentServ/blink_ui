@@ -291,12 +291,12 @@ export function StakeholderQaScreen(props: Props) {
 export function validateStakeholderQa(state: WizardState): string | null {
   const hasTextSource = Boolean(state.requirementsText.trim())
   const fileOnlySource = Boolean(state.requirementFileName && !hasTextSource)
-  if (hasTextSource && !state.groomConfirmed) {
-    return 'Confirm the clearer wording on Clarify before continuing.'
-  }
   if (!hasTextSource && !fileOnlySource) {
     return 'Add a requirement before continuing.'
   }
+  // Wording is confirmed by Continue / "Use this wording" in App.goNext before
+  // this validator runs. Do not hard-block here — a mid-update stateRef race was
+  // resurfacing "Confirm the clearer wording…" after a successful confirm.
   // Stakeholders confirm first — then tickets.
   const outbound = validateStakeholderQuestions(state)
   if (outbound) return outbound

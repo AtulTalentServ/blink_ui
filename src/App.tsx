@@ -878,15 +878,13 @@ export default function App() {
   }, [patch, state.bootstrapAcknowledged, state.integrations, state.jiraCreatedIssues, state.productScope, state.projectId, state.repositories, state.sdlcStartIssueId, state.specification, state.workClassification])
 
   const goNext = useCallback(async () => {
-    // Clarify lives on stakeholder-qa; Continue can confirm wording (same as the in-page CTA).
-    if (
-      step === 'stakeholder-qa' &&
-      state.requirementsText.trim() &&
-      !state.groomConfirmed &&
-      !skipStepValidation
-    ) {
-      const ok = await handleGroomLooksGoodRef.current()
-      if (!ok) return
+    // Clarify lives on stakeholder-qa; Continue confirms wording (same as "Use this wording").
+    if (step === 'stakeholder-qa' && !skipStepValidation) {
+      const live = stateRef.current
+      if (live.requirementsText.trim() && !live.groomConfirmed) {
+        const ok = await handleGroomLooksGoodRef.current()
+        if (!ok) return
+      }
     }
     const err = skipStepValidation ? null : validateCurrentStep()
     if (err) {
@@ -1204,9 +1202,10 @@ export default function App() {
       responses: responsesForStakeholderQuestions(questions, current.responses),
       questionsSent: false,
     }
-    patch(basePatch)
-    const mergedState: WizardState = { ...current, ...basePatch }
+    const mergedState: WizardState = { ...stateRef.current, ...basePatch }
+    // Pin ref before patch so goNext → validateCurrentStep sees groomConfirmed.
     stateRef.current = mergedState
+    patch(basePatch)
     if (
       mergedState.projectId &&
       shouldRunGroomingRevisionAfterAnswers(mergedState) &&
