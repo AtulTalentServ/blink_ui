@@ -22,6 +22,8 @@ interface StoryRow {
   hasDraft: boolean
   lastSummary?: string
   prCount: number
+  /** GitHub draft PR URLs for this story (first one powers the Drafted badge). */
+  prUrls: string[]
 }
 
 function requirementTextOf(state: WizardState): string {
@@ -74,14 +76,42 @@ function payloadIssueId(step: ShipStepDto): string | null {
   return typeof issue === 'string' && issue.trim() ? issue.trim() : null
 }
 
-function resultSummary(step: ShipStepDto): { summary?: string; prCount: number } {
+function prUrlsFromUnknown(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const urls: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const url = String((item as { url?: unknown }).url || '').trim()
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    urls.push(url)
+  }
+  return urls
+}
+
+function resultSummary(step: ShipStepDto): { summary?: string; prCount: number; prUrls: string[] } {
   const result = step.result
-  if (!result || typeof result !== 'object') return { prCount: 0 }
+  if (!result || typeof result !== 'object') return { prCount: 0, prUrls: [] }
   const rec = result as Record<string, unknown>
-  const prs = rec.draftPullRequests
-  const prCount = Array.isArray(prs) ? prs.length : 0
+  const prUrls = prUrlsFromUnknown(rec.draftPullRequests)
+  const prCount = prUrls.length || (Array.isArray(rec.draftPullRequests) ? rec.draftPullRequests.length : 0)
   const summary = typeof rec.summary === 'string' && rec.summary.trim() ? rec.summary.trim() : undefined
-  return { summary, prCount }
+  return { summary, prCount, prUrls }
+}
+
+function mergePrUrls(...groups: (string[] | undefined)[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const group of groups) {
+    for (const url of group || []) {
+      const trimmed = url.trim()
+      if (!trimmed || seen.has(trimmed)) continue
+      seen.add(trimmed)
+      out.push(trimmed)
+    }
+  }
+  return out
 }
 
 function buildStoryRows(
@@ -89,23 +119,38 @@ function buildStoryRows(
   implementSteps: ShipStepDto[],
   latestIssueId: string | undefined,
   latestSummary: string | undefined,
+  latestPrUrls: string[],
+  registered: { issueId: string; url: string }[],
 ): StoryRow[] {
-  const byIssue = new Map<string, { summary?: string; prCount: number }>()
+  const byIssue = new Map<string, { summary?: string; prCount: number; prUrls: string[] }>()
   for (const step of implementSteps) {
     const id = payloadIssueId(step)
     if (!id) continue
-    const { summary, prCount } = resultSummary(step)
+    const { summary, prCount, prUrls } = resultSummary(step)
     const prev = byIssue.get(id)
     byIssue.set(id, {
       summary: summary || prev?.summary,
       prCount: Math.max(prev?.prCount || 0, prCount),
+      prUrls: mergePrUrls(prev?.prUrls, prUrls),
+    })
+  }
+  for (const pr of registered) {
+    if (!pr.issueId || !pr.url) continue
+    const prev = byIssue.get(pr.issueId) || { prCount: 0, prUrls: [] as string[] }
+    const prUrls = mergePrUrls(prev.prUrls, [pr.url])
+    byIssue.set(pr.issueId, {
+      summary: prev.summary,
+      prCount: Math.max(prev.prCount, prUrls.length),
+      prUrls,
     })
   }
   if (latestIssueId) {
-    const prev = byIssue.get(latestIssueId) || { prCount: 0 }
+    const prev = byIssue.get(latestIssueId) || { prCount: 0, prUrls: [] as string[] }
+    const prUrls = mergePrUrls(prev.prUrls, latestPrUrls)
     byIssue.set(latestIssueId, {
       summary: latestSummary || prev.summary,
-      prCount: prev.prCount,
+      prCount: Math.max(prev.prCount, prUrls.length),
+      prUrls,
     })
   }
 
@@ -118,6 +163,7 @@ function buildStoryRows(
       hasDraft: Boolean(hit),
       lastSummary: hit?.summary,
       prCount: hit?.prCount || 0,
+      prUrls: hit?.prUrls || [],
     }
   })
 
@@ -129,9 +175,16 @@ function buildStoryRows(
       hasDraft: true,
       lastSummary: hit.summary,
       prCount: hit.prCount,
+      prUrls: hit.prUrls,
     })
   }
   return rows
+}
+
+function openDraftPr(url: string, event: { preventDefault(): void; stopPropagation(): void }) {
+  event.preventDefault()
+  event.stopPropagation()
+  window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 export function ImplementationReadinessScreen({ state, onUpdate, onContinueToReview }: Props) {
@@ -175,15 +228,42 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     state.productScope?.stories,
   ])
 
+  const latestSessionPrUrls = useMemo(() => {
+    const fromState = prUrlsFromUnknown(state.draftPullRequests)
+    const fromLive = prs.map((pr) => String(pr.url || '').trim()).filter(Boolean)
+    return mergePrUrls(fromState, fromLive)
+  }, [state.draftPullRequests, prs])
+
   const rows = useMemo(
-    () => buildStoryRows(stories, implementSteps, state.implementStep?.issueId, state.implementStep?.summary),
-    [stories, implementSteps, state.implementStep?.issueId, state.implementStep?.summary],
+    () => buildStoryRows(
+      stories,
+      implementSteps,
+      state.implementStep?.issueId,
+      state.implementStep?.summary,
+      latestSessionPrUrls,
+      (state.registeredPullRequests || []).map((pr) => ({ issueId: pr.issueId, url: pr.url })),
+    ),
+    [
+      stories,
+      implementSteps,
+      state.implementStep?.issueId,
+      state.implementStep?.summary,
+      latestSessionPrUrls,
+      state.registeredPullRequests,
+    ],
   )
 
   const nextPending = rows.find((r) => !r.hasDraft)
   const selectedRow = rows.find((r) => r.id === selectedIssueId) || rows[0]
   const draftedCount = rows.filter((r) => r.hasDraft).length
   const selectedHasDraft = Boolean(selectedRow?.hasDraft)
+  const selectedPrUrls = useMemo(() => {
+    if (!selectedRow) return [] as string[]
+    if (selectedRow.id === state.implementStep?.issueId) {
+      return mergePrUrls(selectedRow.prUrls, latestSessionPrUrls)
+    }
+    return selectedRow.prUrls
+  }, [selectedRow, state.implementStep?.issueId, latestSessionPrUrls])
 
   const runImplement = useCallback(
     async (issueId: string) => {
@@ -230,6 +310,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
             issueId: resolvedIssue,
             summary: res.message,
           },
+          draftPullRequests: draftPrs,
           sdlcStartIssueId: resolvedIssue,
           implementationAuthorized: true,
           scopeOverlays: res.overlayFiles || state.scopeOverlays || [],
@@ -265,7 +346,6 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   const selectStory = (id: string) => {
     setSelectedIssueId(id)
     onUpdate({ sdlcStartIssueId: id })
-    setPrs([])
   }
 
   return (
@@ -277,7 +357,19 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         <p className="status-banner info">Finish Workspace first, then run stories here.</p>
       ) : null}
       {error ? <p className="status-banner error">{error}</p> : null}
-      {message && !error ? <p className="status-banner success">{message}</p> : null}
+      {message && !error ? (
+        <p className="status-banner success">
+          {message}
+          {selectedPrUrls[0] ? (
+            <>
+              {' · '}
+              <a href={selectedPrUrls[0]} target="_blank" rel="noreferrer">
+                Open PR
+              </a>
+            </>
+          ) : null}
+        </p>
+      ) : null}
 
       <section className="card shape-section implement-queue-card">
         <div className="implement-queue-card__meta">
@@ -296,6 +388,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
             {rows.map((row) => {
               const isSelected = row.id === selectedIssueId
               const isBusy = busy && busyIssueId === row.id
+              const draftPrUrl = row.prUrls[0]
               return (
                 <li
                   key={row.id}
@@ -314,9 +407,26 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
                       <code className="implement-story-queue__id">{shortStoryLabel(row.id)}</code>
                       <span className="implement-story-queue__title">{row.title}</span>
                     </span>
-                    <span className={`implement-story-queue__badge is-${row.hasDraft ? 'drafted' : isSelected ? 'selected' : 'pending'}`}>
-                      {row.hasDraft ? 'Drafted' : isSelected ? 'Selected' : 'Pending'}
-                    </span>
+                    {row.hasDraft && draftPrUrl ? (
+                      <span
+                        className="implement-story-queue__badge is-drafted is-link"
+                        role="link"
+                        tabIndex={0}
+                        title="Open draft PR on GitHub"
+                        onClick={(event) => openDraftPr(draftPrUrl, event)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            openDraftPr(draftPrUrl, event)
+                          }
+                        }}
+                      >
+                        Drafted
+                      </span>
+                    ) : (
+                      <span className={`implement-story-queue__badge is-${row.hasDraft ? 'drafted' : isSelected ? 'selected' : 'pending'}`}>
+                        {row.hasDraft ? 'Drafted' : isSelected ? 'Selected' : 'Pending'}
+                      </span>
+                    )}
                   </button>
                   <button
                     type="button"
@@ -335,7 +445,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
           <p className="muted small">Add stories in Scope &amp; tickets first.</p>
         )}
 
-        {selectedRow?.hasDraft && (selectedRow.lastSummary || prs.length > 0 || (state.implementStep?.issueId === selectedRow.id && state.implementStep?.notes?.length)) ? (
+        {selectedRow?.hasDraft && (selectedRow.lastSummary || selectedPrUrls.length > 0 || (state.implementStep?.issueId === selectedRow.id && state.implementStep?.notes?.length)) ? (
           <div className="implement-result">
             {selectedRow.lastSummary || (state.implementStep?.issueId === selectedRow.id ? state.implementStep?.summary : null) ? (
               <p className="implement-result__summary">
@@ -343,17 +453,13 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
                   || (state.implementStep?.issueId === selectedRow.id ? state.implementStep?.summary : null)}
               </p>
             ) : null}
-            {prs.length > 0 ? (
+            {selectedPrUrls.length > 0 ? (
               <ul className="implement-result__prs">
-                {prs.map((pr) => (
-                  <li key={`${pr.owner}/${pr.repo}/${pr.number}`}>
-                    {pr.url ? (
-                      <a href={pr.url} target="_blank" rel="noreferrer">
-                        Draft PR #{pr.number}
-                      </a>
-                    ) : (
-                      <span>{pr.branch}</span>
-                    )}
+                {selectedPrUrls.map((url, index) => (
+                  <li key={url}>
+                    <a href={url} target="_blank" rel="noreferrer">
+                      Draft PR{selectedPrUrls.length > 1 ? ` ${index + 1}` : ''}
+                    </a>
                   </li>
                 ))}
               </ul>

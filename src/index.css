@@ -11261,6 +11261,17 @@ textarea::placeholder {
   color: #15803d;
 }
 
+.implement-story-queue__badge.is-drafted.is-link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.implement-story-queue__badge.is-drafted.is-link:hover,
+.implement-story-queue__badge.is-drafted.is-link:focus-visible {
+  color: #166534;
+}
+
 .implement-story-queue__action {
   display: inline-flex;
   align-items: center;
