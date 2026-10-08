@@ -61,21 +61,23 @@ function outboundHandled(q: StakeholderQuestion, state: WizardState): boolean {
   return Boolean(emailed || jiraDone || answered)
 }
 
+/** Human inbox work done (mandatory answers resolved) — independent of background pack/sign-off. */
+export function mandatoryResponsesReady(state: WizardState): boolean {
+  if (state.questions.length === 0) return true
+  return !state.questions.some((q) => {
+    if (!q.mandatory) return false
+    const response = state.responses.find((r) => r.questionId === q.id)
+    return !isResolved(response, q)
+  })
+}
+
 /** Nothing left for the human to pick: no leftover send/resolve work, no G-GROOM reject. */
 export function shouldAutoRunGroomingLoop(state: WizardState): boolean {
   if (state.groomRejectPending) return false
   // Empty queue: skip agent pack/sign-off — settle locally so the UI does not spin forever.
   if (state.questions.length === 0) return false
   if (state.questions.some((q) => !outboundHandled(q, state))) return false
-  if (
-    state.questions.some((q) => {
-      if (!q.mandatory) return false
-      const response = state.responses.find((r) => r.questionId === q.id)
-      return !isResolved(response, q)
-    })
-  ) {
-    return false
-  }
+  if (!mandatoryResponsesReady(state)) return false
   return !state.questions.some((q) => {
     const response = state.responses.find((r) => r.questionId === q.id)
     return !isResolved(response, q)
@@ -607,7 +609,9 @@ export function StakeholderResponsesScreen({
         {(() => {
           const emptyQa = state.questions.length === 0
           const rejectBlocks = Boolean(state.groomRejectPending && !loopSettled)
-          const canAck = Boolean(onUpdate) && !rejectBlocks && (emptyQa || loopSettled)
+          // Don't wait on background pack/sign-off — Continue already only requires human Q&A done.
+          const humanReady = emptyQa || mandatoryResponsesReady(state)
+          const canAck = Boolean(onUpdate) && !rejectBlocks && humanReady
           if (!canAck && !state.groomAcknowledged && !state.groomRejectPending) return null
           return (
             <div style={{ marginTop: '0.75rem' }}>
@@ -650,14 +654,12 @@ export function StakeholderResponsesScreen({
                   <p className="muted small" style={{ marginBottom: '0.5rem' }}>
                     {emptyQa
                       ? 'No leftover clarifications. Acknowledge G-GROOM, then plan tickets. This is not an approve-gate.'
-                      : loopSettled
-                        ? 'Acknowledge G-GROOM after stakeholder answers, then plan tickets. This is not an approve-gate.'
-                        : 'Finish resolving clarifications (or wait for grooming to finish), then acknowledge G-GROOM.'}
+                      : 'Acknowledge G-GROOM after stakeholder answers, then plan tickets. This is not an approve-gate.'}
                   </p>
                   <button
                     type="button"
                     className="primary-btn"
-                    disabled={!onUpdate || (!emptyQa && !loopSettled)}
+                    disabled={!onUpdate || !humanReady}
                     onClick={() => {
                       onUpdate?.({ groomAcknowledged: true, groomRejectPending: false })
                       const projectId = state.projectId

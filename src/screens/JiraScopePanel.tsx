@@ -243,14 +243,16 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
   const createdOk = createdOnScreen.length
   const pendingCount = pendingJiraTicketCount(state)
   const wording = sourceText.trim()
+  const busyDbError = /database busy|deadline exceeded|timeout/i.test(scopeError || '')
   const autoPlan =
     allowAutoPlan &&
-    Boolean(state.stakeholdersConfirmed) &&
+    // Match Tickets unlock: G-GROOM ack is enough. Do not wait on Neon confirm-stakeholders.
     Boolean(state.groomAcknowledged) &&
     shouldAutoStartTickets({
       hasWording: Boolean(wording),
       epicCount: epics.length,
-      failed: Boolean(scopeError),
+      // Neon saturation is transient — keep auto-retrying; other errors stay manual.
+      failed: Boolean(scopeError) && !busyDbError,
     })
   const ticketsBusy = planningScope || creatingIssues || autoPlan || Boolean(jiraPublish?.active)
   const issueKeySig = createdOnScreen.map((item) => item.jiraKey).filter(Boolean).join(',')
@@ -499,8 +501,14 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
 
   useEffect(() => {
     if (!autoPlan || planningScope || planInFlight.current) return
+    if (busyDbError) {
+      const timer = window.setTimeout(() => {
+        void runProductScope()
+      }, 4000)
+      return () => window.clearTimeout(timer)
+    }
     void runProductScope()
-  }, [autoPlan, planningScope, runProductScope])
+  }, [autoPlan, busyDbError, planningScope, runProductScope])
 
   const canCreate = jiraReady && pendingCount > 0 && !creatingIssues && !planningScope && !jiraPublish?.active
   const itemCount = epics.length + stories.length

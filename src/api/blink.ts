@@ -107,6 +107,15 @@ export function apiUrl(path: string): string {
   return `${base}${suffix}`
 }
 
+/** Pause wizard autosave so confirm/start SDLC is not starved by Neon PUTs. */
+let autosavePausedUntil = 0
+export function pauseAutosave(ms = 120_000) {
+  autosavePausedUntil = Date.now() + ms
+}
+export function isAutosavePaused() {
+  return Date.now() < autosavePausedUntil
+}
+
 /** Short JSON calls (login, email). Long agent/download calls must keep their own timeouts. */
 export async function timedFetch(url: string, init: RequestInit = {}, timeoutMs = 15000): Promise<Response> {
   const controller = new AbortController()
@@ -505,11 +514,29 @@ export interface CanonicalSnapshotDto {
   updatedAt?: string
 }
 
-export async function fetchCanonicalSnapshot(projectId: string): Promise<CanonicalSnapshotDto> {
+export async function fetchCanonicalSnapshot(
+  projectId: string,
+  timeoutMs = 15_000,
+): Promise<CanonicalSnapshotDto> {
   const url = apiUrl(`/projects/${projectId}/canonical/snapshot`)
-  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json() as Promise<CanonicalSnapshotDto>
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      cache: 'no-store',
+      headers: authHeaders(),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    return response.json() as Promise<CanonicalSnapshotDto>
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Canonical snapshot timed out. Neon is slow — continue with local state.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 export type CanonicalGateKind =
@@ -524,19 +551,32 @@ export async function confirmCanonicalGate(
   kind: CanonicalGateKind,
   digest: string,
   expectedRevision?: number | null,
-): Promise<{ status: string; snapshot: CanonicalSnapshotDto }> {
+  timeoutMs = 25_000,
+): Promise<{ status: string; snapshot?: CanonicalSnapshotDto }> {
   const url = apiUrl(`/projects/${projectId}/canonical/gates/confirm`)
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify({
-      kind,
-      digest,
-      expectedRevision: expectedRevision ?? undefined,
-    }),
-  })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json() as Promise<{ status: string; snapshot: CanonicalSnapshotDto }>
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({
+        kind,
+        digest,
+        expectedRevision: expectedRevision ?? undefined,
+      }),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    return response.json() as Promise<{ status: string; snapshot?: CanonicalSnapshotDto }>
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Gate confirm timed out. Neon is slow — your local confirmation was kept.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 export interface GraphViewDto {
@@ -727,61 +767,131 @@ async function postShapeCommand(
   projectId: string,
   command: 'architecture-proposal' | 'confirm-topology',
   payload: Record<string, unknown>,
+  timeoutMs = 90_000,
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(apiUrl(`/projects/${projectId}/canonical/commands/execute`), {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify({ command, payload }),
-  })
-  if (!response.ok) throw new Error(await readError(response))
-  const envelope = (await response.json()) as {
-    status?: string
-    error?: string
-    result?: Record<string, unknown>
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(apiUrl(`/projects/${projectId}/canonical/commands/execute`), {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ command, payload }),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    const envelope = (await response.json()) as {
+      status?: string
+      error?: string
+      result?: Record<string, unknown>
+    }
+    if (envelope.status && envelope.status !== 'completed' && envelope.status !== 'ok') {
+      throw new Error(envelope.error || envelope.status)
+    }
+    const result =
+      envelope.result && typeof envelope.result === 'object' ? envelope.result : (envelope as Record<string, unknown>)
+    const status = String(result.status || '')
+    if (status && status !== 'ok') {
+      const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
+      throw new Error(String(result.message || errors || status))
+    }
+    return result
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(
+        command === 'architecture-proposal'
+          ? 'Shape suggestion timed out. Keep your selections and confirm the structure.'
+          : 'Confirm structure timed out. Wait a moment and try again.',
+      )
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
   }
-  if (envelope.status && envelope.status !== 'completed' && envelope.status !== 'ok') {
-    throw new Error(envelope.error || envelope.status)
-  }
-  const result =
-    envelope.result && typeof envelope.result === 'object' ? envelope.result : (envelope as Record<string, unknown>)
-  const status = String(result.status || '')
-  if (status && status !== 'ok') {
-    const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
-    throw new Error(String(result.message || errors || status))
-  }
-  return result
 }
 
 export async function proposeProjectShape(
   projectId: string,
   payload: { projectName?: string; requirementText?: string },
 ): Promise<ShapeProposalDto> {
-  const result = await postShapeCommand(projectId, 'architecture-proposal', payload)
-  const proposal = result.architectureProposal
-  if (!proposal || typeof proposal !== 'object') {
-    throw new Error('Architecture proposal did not include a shape.')
+  // Agent-first route — does not wait on Neon canonical command bookkeeping.
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 90_000)
+  try {
+    const response = await fetch(apiUrl(`/projects/${projectId}/architecture-proposal`), {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({
+        projectId,
+        projectName: payload.projectName,
+        requirementText: payload.requirementText,
+      }),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    const result = (await response.json()) as Record<string, unknown>
+    const status = String(result.status || '')
+    if (status && status !== 'ok') {
+      const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
+      throw new Error(String(result.message || errors || status))
+    }
+    const proposal = result.architectureProposal
+    if (!proposal || typeof proposal !== 'object') {
+      throw new Error('Architecture proposal did not include a shape.')
+    }
+    const row = proposal as ShapeProposalDto
+    if (!row.repositoryModel || !row.topology || !row.architectureStyle) {
+      throw new Error('Architecture proposal is incomplete.')
+    }
+    return row
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Shape suggestion timed out. Keep your selections and confirm the structure.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
   }
-  const row = proposal as ShapeProposalDto
-  if (!row.repositoryModel || !row.topology || !row.architectureStyle) {
-    throw new Error('Architecture proposal is incomplete.')
-  }
-  return row
 }
 
 export async function confirmProjectTopology(
   projectId: string,
   payload: Record<string, unknown>,
 ): Promise<TopologyConfirmationDto> {
-  const result = await postShapeCommand(projectId, 'confirm-topology', payload)
-  const confirmation = result.topologyConfirmation
-  if (!confirmation || typeof confirmation !== 'object') {
-    throw new Error('Topology confirmation was not recorded.')
+  // Agent-first — Neon shape gate is recorded in the background by the API.
+  pauseAutosave(120_000)
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 90_000)
+  try {
+    const response = await fetch(apiUrl(`/projects/${projectId}/confirm-topology`), {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ projectId, ...payload }),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    const result = (await response.json()) as Record<string, unknown>
+    const status = String(result.status || '')
+    if (status && status !== 'ok') {
+      const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
+      throw new Error(String(result.message || errors || status))
+    }
+    const confirmation = result.topologyConfirmation
+    if (!confirmation || typeof confirmation !== 'object') {
+      throw new Error('Topology confirmation was not recorded.')
+    }
+    const row = confirmation as TopologyConfirmationDto
+    if (!row.structure || !row.confirmedBy || !row.evidenceRef) {
+      throw new Error('Topology confirmation is incomplete.')
+    }
+    return row
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Confirm structure timed out. Wait a moment and try again.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
   }
-  const row = confirmation as TopologyConfirmationDto
-  if (!row.structure || !row.confirmedBy || !row.evidenceRef) {
-    throw new Error('Topology confirmation is incomplete.')
-  }
-  return row
 }
 
 export async function invalidateCanonicalArchitecture(projectId: string, reason: string): Promise<void> {
@@ -892,36 +1002,66 @@ export async function fetchShipSession(projectId: string): Promise<{ session: Sh
 export async function shipCheckpoint(
   projectId: string,
   body: { substage: string; stepKind?: string; idempotencyKey?: string; payload?: Record<string, unknown> },
+  timeoutMs = 25_000,
 ): Promise<{ status: string; session: { id: string; substage: string } | null }> {
   const url = apiUrl(`/projects/${projectId}/canonical/ship/checkpoint`)
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json() as Promise<{ status: string; session: { id: string; substage: string } | null }>
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    return response.json() as Promise<{ status: string; session: { id: string; substage: string } | null }>
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Ship checkpoint timed out. Neon is slow — local workspace ready was kept.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 export async function syncCanonicalWizardDraft(
   projectId: string,
   _expectedRevision?: number | null,
+  timeoutMs = 12_000,
 ): Promise<CanonicalSnapshotDto> {
   // Do not send expectedRevision: autosave / RefreshEligibility often bumps the
   // aggregate between the UI snapshot and this call. Sync is catch-up, not a mutate race.
   const url = apiUrl(`/projects/${projectId}/canonical/commands/execute`)
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify({
-      command: 'sync-wizard-draft',
-      idempotencyKey: '',
-      payload: {},
-    }),
-  })
-  if (!response.ok) throw new Error(await readError(response))
-  await response.json()
-  return fetchCanonicalSnapshot(projectId)
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({
+        command: 'sync-wizard-draft',
+        idempotencyKey: '',
+        payload: {},
+      }),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    const body = (await response.json()) as { snapshot?: CanonicalSnapshotDto }
+    if (body.snapshot?.projectId != null && body.snapshot.eligibility) {
+      return body.snapshot
+    }
+    // Skip a second Neon round-trip when the execute payload already carried a snapshot.
+    return fetchCanonicalSnapshot(projectId, Math.min(10_000, timeoutMs))
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Wizard sync timed out. Neon is slow — continue with local confirmation.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 export async function fetchMyProject(): Promise<ProjectDto | null> {
@@ -954,7 +1094,7 @@ export async function saveProject(payload: ProjectPayload, projectId?: string | 
   const method = projectId ? 'PUT' : 'POST'
   console.info(`[blink] ${method} ${url}`, payload)
   const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 45_000)
+  const timer = window.setTimeout(() => controller.abort(), 90_000)
   try {
     const response = await fetch(url, {
       method,
@@ -966,7 +1106,7 @@ export async function saveProject(payload: ProjectPayload, projectId?: string | 
     return response.json() as Promise<ProjectDto>
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('Could not save the project. Try again.')
+      throw new Error('Could not save the project. Neon is slow — wait a moment and try again.')
     }
     throw error
   } finally {
@@ -2009,12 +2149,15 @@ export interface GroomClarifyResult {
   errors?: string[]
 }
 
-export async function clarifyRequirement(options: {
-  projectId?: string | null
-  projectName?: string
-  requirementText: string
-  answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
-}): Promise<GroomClarifyResult> {
+export async function clarifyRequirement(
+  options: {
+    projectId?: string | null
+    projectName?: string
+    requirementText: string
+    answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
+  },
+  signal?: AbortSignal,
+): Promise<GroomClarifyResult> {
   const url = apiUrl('/grooming/clarify')
   const answers = options.answers?.filter(
     (item) => item.optionId !== 'other' || Boolean(item.otherText?.trim()),
@@ -2026,6 +2169,11 @@ export async function clarifyRequirement(options: {
     answers: answers?.length ? answers : undefined,
   }
   const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
   const timer = window.setTimeout(() => controller.abort(), 100_000)
   try {
     const response = await fetch(url, {
@@ -2055,11 +2203,12 @@ export async function clarifyRequirement(options: {
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('The grooming helper took too long. Try again.')
+      throw error
     }
     throw error
   } finally {
     window.clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
   }
 }
 
@@ -2097,8 +2246,11 @@ export async function streamClarifyRequirement(
       message: done.message ?? '',
       status: done.status ?? 'error',
     }
-  } catch {
-    return clarifyRequirement(options)
+  } catch (error) {
+    if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+      throw error instanceof DOMException ? error : new DOMException('Aborted', 'AbortError')
+    }
+    return clarifyRequirement(options, signal)
   }
 }
 
@@ -2312,7 +2464,11 @@ async function postAdvisory(
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error(
-        pathSuffix.startsWith('sdlc-') || pathSuffix === 'confirm-product-scope'
+        pathSuffix.startsWith('sdlc-') ||
+          pathSuffix === 'confirm-product-scope' ||
+          pathSuffix === 'classify-work' ||
+          pathSuffix === 'create-spec' ||
+          pathSuffix === 'technical-plan'
           ? `Could not finish ${pathSuffix} in time. The API or agent is slow — retry in a moment.`
           : 'Grooming agent timed out. Retry when the API is responsive.',
       )
@@ -2329,6 +2485,8 @@ export function confirmProductScope(
     expectedDigest: string
     expectedRevision?: number
     overlayFiles: OverlayFilePayload[]
+    projectName?: string
+    productScope?: ProductScopeData | null
     actor?: string
   },
 ) {
@@ -2338,6 +2496,7 @@ export function confirmProductScope(
 export function classifyWork(
   projectId: string,
   payload: {
+    projectName?: string
     requirementText?: string
     productScope?: ProductScopeData | null
     overlayFiles?: OverlayFilePayload[]
@@ -2378,6 +2537,7 @@ export async function proposeDesigns(
 export function createSpec(
   projectId: string,
   payload: {
+    projectName?: string
     requirementText?: string
     productScope?: ProductScopeData | null
     workClassification?: WorkClassificationData | null
@@ -2392,6 +2552,7 @@ export function createSpec(
 export function technicalPlan(
   projectId: string,
   payload: {
+    projectName?: string
     requirementText?: string
     productScope?: ProductScopeData | null
     workClassification?: WorkClassificationData | null
@@ -2416,6 +2577,7 @@ export function sdlcStart(
     productScope?: ProductScopeData | null
     overlayFiles?: OverlayFilePayload[]
     issueId?: string
+    projectName?: string
     actor?: string
   },
 ) {
@@ -2560,14 +2722,27 @@ export async function gitApply(
     commitMessage?: string
     issueKey?: string
   },
+  timeoutMs = 45_000,
 ): Promise<DeliveryAgentResponse> {
-  const response = await fetch(apiUrl(`/projects/${projectId}/git-apply`), {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify(payload),
-  })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json() as Promise<DeliveryAgentResponse>
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(apiUrl(`/projects/${projectId}/git-apply`), {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    return response.json() as Promise<DeliveryAgentResponse>
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('git-apply timed out. Neon/GitHub is slow — continue with local workspace ready.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 export async function implementStep(

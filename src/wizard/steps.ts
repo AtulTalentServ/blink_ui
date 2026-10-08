@@ -120,14 +120,18 @@ export function canNavigateToStep(
   const targetIdx = stepIndex(target)
   const currentIdx = stepIndex(current)
   if (targetIdx < 0) return false
-  if (canonicalAllowedSteps?.length && !canonicalAllowedSteps.includes(target)) {
-    return false
-  }
   const reqIdx = stepIndex('requirements')
   if (targetIdx > reqIdx && !groomingUnlocked) return false
   const planIdx = stepIndex('sdlc-plan')
   if (targetIdx >= planIdx && !shapeAcknowledged) return false
-  return targetIdx <= Math.max(completedThrough, currentIdx)
+  const reachable = Math.max(completedThrough, currentIdx)
+  // Always allow revisiting the current step and anything already completed.
+  // Canonical eligibility must not trap the user on Ship after a soft checkpoint.
+  if (targetIdx <= reachable) return true
+  if (canonicalAllowedSteps?.length && !canonicalAllowedSteps.includes(target)) {
+    return false
+  }
+  return false
 }
 
 export type StepAttention = 'idle' | 'active' | 'done' | 'attention' | 'skipped'

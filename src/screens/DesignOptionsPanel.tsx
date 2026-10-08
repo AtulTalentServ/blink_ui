@@ -143,6 +143,9 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
 
   useEffect(() => {
     if (!state.groomConfirmed || !state.projectId) return
+    // Do not hit Neon/Figma just because Tickets opened — only hydrate when a file
+    // is already bound or Figma is connected (possible saved binding).
+    if (!hasFigmaFile && !figmaConnected) return
     const missingThumbs = screens.some((screen) => !screen.thumbnailUrl)
     if (hasFigmaFile && screens.length > 0 && !missingThumbs) return
     if (hasFigmaFile && screens.length > 0 && missingThumbs && thumbsTried) return
@@ -161,7 +164,7 @@ export function DesignOptionsPanel({ state, onUpdate, onNavigate }: Props) {
     }
     // Hydrate the bound file, screens, and missing previews when this step opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applyBound, hasFigmaFile, screens.length, state.groomConfirmed, state.projectId, thumbsTried])
+  }, [applyBound, figmaConnected, hasFigmaFile, screens.length, state.groomConfirmed, state.projectId, thumbsTried])
 
   const listFigmaFiles = useCallback(async () => {
     if (!state.projectId || !figma?.projectKey) return
