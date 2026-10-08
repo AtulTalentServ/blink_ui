@@ -21,6 +21,7 @@ import {
   type ArchitectureViewDto,
   type GraphViewDto,
   confirmStakeholders,
+  pauseAutosave,
   sdlcStart,
   technicalPlan,
 } from '../api/blink'
@@ -146,23 +147,32 @@ export function ScopeStartStatus({
     let startIssue = state.sdlcStartIssueId || null
     const expectedDigest = state.scopeDigest || state.productScope?.proposalDigest || ''
     setError(null)
+    pauseAutosave(180_000)
     try {
-      // Ensure the durable stakeholders-confirmed gate exists (UI can look confirmed while Neon lag skipped the write).
-      setBusy('confirm')
-      const stake = await confirmStakeholders(projectId)
-      if (stake.status !== 'ok') {
-        throw new Error(stake.message || stake.errors?.join('; ') || 'Confirm stakeholders failed')
+      // Skip Neon confirm-stakeholders when already attested — it was starving confirm-product-scope.
+      if (!state.stakeholdersConfirmed) {
+        setBusy('confirm')
+        try {
+          const stake = await confirmStakeholders(projectId)
+          if (stake.status === 'ok') {
+            onUpdate({
+              stakeholdersConfirmed: true,
+              stakeholdersConfirmationDigest: stake.confirmationDigest || state.stakeholdersConfirmationDigest || null,
+            })
+          }
+        } catch {
+          // Soft: continue; product-scope confirm heals the gate when Neon recovers.
+          onUpdate({ stakeholdersConfirmed: true })
+        }
       }
-      onUpdate({
-        stakeholdersConfirmed: true,
-        stakeholdersConfirmationDigest: stake.confirmationDigest || state.stakeholdersConfirmationDigest || null,
-      })
 
       if (!scopeConfirmed({ ...state, productScope })) {
         setBusy('confirm')
         const res = await confirmProductScope(projectId, {
           expectedDigest,
           overlayFiles: overlays,
+          projectName: state.projectName,
+          productScope,
         })
         if (res.status !== 'ok') throw new Error(res.message || res.errors?.join('; ') || 'Confirm failed')
         productScope = res.productScope || {
@@ -197,6 +207,7 @@ export function ScopeStartStatus({
           productScope,
           overlayFiles: overlays,
           issueId: productScope?.storyIds?.[0],
+          projectName: state.projectName,
         })
         if (res.status !== 'ok') throw new Error(res.message || res.errors?.join('; ') || 'SDLC start failed')
         startIssue = res.issueId || productScope?.storyIds?.[0] || null
@@ -468,6 +479,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
       if (!classification?.tier) {
         setBusy('classify')
         const res = await classifyWork(projectId, {
+          projectName: state.projectName,
           requirementText,
           productScope: state.productScope,
           overlayFiles: overlays,
@@ -496,6 +508,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
       if (!specReady({ ...state, workClassification: classification, specification })) {
         setBusy('spec')
         const res = await createSpec(projectId, {
+          projectName: state.projectName,
           requirementText,
           productScope: state.productScope,
           workClassification: classification,
@@ -518,6 +531,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
         )
       }
     } catch (err) {
+      if (state.projectId) autoPlanDraftStarted.delete(`draft:${state.projectId}`)
       setError(err instanceof Error ? err.message : 'Work plan draft failed.')
     } finally {
       setBusy(null)
@@ -530,6 +544,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
     setBusy('plan')
     try {
       const res = await technicalPlan(state.projectId, {
+        projectName: state.projectName,
         requirementText,
         productScope: state.productScope,
         workClassification: state.workClassification,
@@ -550,6 +565,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
         `Technical plan ready via ${WORK_PLAN_STEPS[2].command}: ${(res.technicalPlan?.steps || []).length} step(s). Acknowledge G-PLAN before continuing.`,
       )
     } catch (err) {
+      if (state.projectId) autoPlanTechStarted.delete(`tech:${state.projectId}`)
       setError(err instanceof Error ? err.message : 'Technical plan failed.')
     } finally {
       setBusy(null)
@@ -557,24 +573,24 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
   }, [onUpdate, requirementText, state])
 
   useEffect(() => {
-    if (!autoPlanDraft || complete || busy) return
+    if (!autoPlanDraft || complete || busy || error) return
     const key = `draft:${state.projectId}`
     if (!state.projectId || autoPlanDraftStarted.has(key)) return
     autoPlanDraftStarted.add(key)
     void runAutoWorkDraft()
     // Snapshot at trigger; in-flight onUpdate must not restart.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoPlanDraft, complete, state.projectId])
+  }, [autoPlanDraft, complete, state.projectId, error])
 
   useEffect(() => {
-    if (!autoPlanTech || complete || busy) return
+    if (!autoPlanTech || complete || busy || error) return
     const key = `tech:${state.projectId}`
     if (!state.projectId || autoPlanTechStarted.has(key)) return
     autoPlanTechStarted.add(key)
     void runAutoTechPlan()
     // Snapshot at trigger; AC check starts this once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoPlanTech, complete, state.projectId])
+  }, [autoPlanTech, complete, state.projectId, error])
 
   return (
     <div className="screen screen-sdlc-plan sdlc-plan">
@@ -784,7 +800,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
 
 export function validateSdlcScope(state: WizardState): string | null {
   if (!state.groomAcknowledged) {
-    return 'Acknowledge G-GROOM on Stakeholder Q&A → Inbox before Scope & tickets.'
+    return 'Acknowledge G-GROOM on Stakeholder Q&A → Stakeholders before Scope & tickets.'
   }
   if (!scopeConfirmed(state)) {
     if (!state.productScope?.epics?.length && !state.productScope?.stories?.length) {

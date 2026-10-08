@@ -74,6 +74,8 @@ export async function persistCanonicalGate(
   // that a concurrent wizard.synced bump should not block confirmation.
   const attempt = async (revision?: number | null) => {
     const res = await confirmCanonicalGate(projectId, kind, digest, revision ?? undefined)
+    // Gate may succeed without a snapshot when Neon is under pressure.
+    if (!res.snapshot) return {}
     return patchFromCanonicalSnapshot(res.snapshot)
   }
   try {

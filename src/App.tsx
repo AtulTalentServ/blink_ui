@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
-import { downloadWorkspace, fetchWorkspaceStatus, isNotProjectOwnerError, rehomeProject, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
+import { downloadWorkspace, fetchWorkspaceStatus, isNotProjectOwnerError, isAutosavePaused, rehomeProject, saveProject, clarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
@@ -9,6 +9,7 @@ import { SessionControls } from './components/SessionControls'
 import { ChatPanel, useChatPanelOpen } from './components/ChatPanel'
 import { ThemeBackground } from './components/ThemeBackground'
 import {
+  GenerationDownloadScreen,
   ProjectShapeScreen,
   RepositoriesScreen,
   TechnologyPerRepoScreen,
@@ -196,9 +197,13 @@ export default function App() {
   const [folderProgress, setFolderProgress] = useState({ percent: 0, copied: 0, total: 0 })
   const [folderQuery, setFolderQuery] = useState<{ name: string; id?: string } | null>(null)
   const [governancePrep, setGovernancePrep] = useState<'idle' | 'preparing' | 'ready' | 'failed'>('idle')
+  /** Classic kit ZIP + folder tree (pre-Ship). Avoid jumping to Ship before Work plan. */
+  const [kitResultOpen, setKitResultOpen] = useState(false)
   const lastSavedPayloadRef = useRef<string | null>(null)
   const lastGovernedPayloadRef = useRef<string | null>(null)
   const stakeholderGovernanceInFlightRef = useRef(false)
+  const autosaveInFlightRef = useRef(false)
+  const autosaveQueuedRef = useRef(false)
   const stepRef = useRef(step)
   const stateRef = useRef(state)
   const completedRef = useRef(completedThrough)
@@ -235,28 +240,29 @@ export default function App() {
   }, [])
 
   const validateCurrentStep = useCallback((): string | null => {
+    const current = stateRef.current
     switch (step) {
       case 'welcome':
         return null
       case 'project-stakeholders':
-        return validateProjectStakeholders(state)
+        return validateProjectStakeholders(current)
       case 'sdlc-scope':
       case 'requirements':
-        return validateRequirements(state)
+        return validateRequirements(current)
       case 'stakeholder-qa':
-        return validateStakeholderQa(state)
+        return validateStakeholderQa(current)
       case 'project-shape':
-        return validateProjectShape(state)
+        return validateProjectShape(current)
       case 'repositories':
-        return validateRepositories(state)
+        return validateRepositories(current)
       case 'technology-per-repo':
-        return validateShapeReview(state)
+        return validateShapeReview(current)
       case 'sdlc-plan':
-        return validateSdlcPlan(state)
+        return validateSdlcPlan(current)
       default:
         return null
     }
-  }, [step, state])
+  }, [step])
 
   const projectPayload = useCallback((): ProjectPayload => ({
     projectType: state.projectType,
@@ -313,11 +319,12 @@ export default function App() {
             stakeholdersConfirmed,
             stakeholdersConfirmationDigest,
           })
+          setGovernancePrep('ready')
         } catch {
           patch({ governanceStatus: 'failed' })
+          setGovernancePrep('failed')
         } finally {
           stakeholderGovernanceInFlightRef.current = false
-          setGovernancePrep('idle')
         }
       })()
     },
@@ -366,8 +373,12 @@ export default function App() {
       .then((snap) => patch(patchFromCanonicalSnapshot(snap)))
       .catch(() => undefined)
     setFolderQuery({ name: saved.projectName || payload.projectName, id })
+    // Only show the bar when the API actually reports workspace work — avoids Neon auth spam.
     if (saved.workspaceStatus === 'preparing' || saved.workspaceStatus === 'ready' || saved.workspaceStatus === 'failed') {
       setFolderPrep(saved.workspaceStatus)
+      if (saved.workspaceStatus === 'ready') {
+        setFolderProgress({ percent: 100, copied: 0, total: 0 })
+      }
     }
     return {
       id,
@@ -442,6 +453,7 @@ export default function App() {
     setFolderPrep('idle')
     setGovernancePrep('idle')
     setFolderQuery(null)
+    setKitResultOpen(false)
     setStatus(null)
     const fresh: WizardState = {
       ...defaultWizardState,
@@ -519,21 +531,42 @@ export default function App() {
 
   useEffect(() => {
     if (!session?.email || !state.projectId) return
-    const timer = window.setTimeout(() => {
+    const runSave = () => {
+      if (isAutosavePaused()) {
+        autosaveQueuedRef.current = true
+        window.setTimeout(runSave, 2000)
+        return
+      }
+      if (autosaveInFlightRef.current) {
+        autosaveQueuedRef.current = true
+        return
+      }
+      autosaveInFlightRef.current = true
+      autosaveQueuedRef.current = false
       const payload = withDraftProjectPayload(projectPayload())
       const wizardPayload = {
         ...payload,
         wizardStep: wizardBookmark(),
         wizardCompletedThrough: completedThrough,
-        wizardState: serializeWizardState(state),
+        wizardState: serializeWizardState(stateRef.current),
       }
-      void saveProject(wizardPayload, state.projectId).catch((error) => {
-        if (!isNotProjectOwnerError(error)) return
-        void rehomeProject(wizardPayload).then((saved) => {
-          patch({ projectId: String(saved.id) })
-        }).catch(() => undefined)
-      })
-    }, 900)
+      void saveProject(wizardPayload, state.projectId)
+        .catch((error) => {
+          if (!isNotProjectOwnerError(error)) return
+          void rehomeProject(wizardPayload).then((saved) => {
+            patch({ projectId: String(saved.id) })
+          }).catch(() => undefined)
+        })
+        .finally(() => {
+          autosaveInFlightRef.current = false
+          if (autosaveQueuedRef.current) {
+            autosaveQueuedRef.current = false
+            window.setTimeout(runSave, 1500)
+          }
+        })
+    }
+    // Longer debounce + single in-flight PUT — stacked autosaves were starving Neon for confirm-stakeholders.
+    const timer = window.setTimeout(runSave, 2500)
     return () => window.clearTimeout(timer)
   }, [session?.email, state, step, completedThrough, projectPayload, wizardBookmark, patch])
 
@@ -688,7 +721,10 @@ export default function App() {
     if (folderPrep !== 'preparing' || !folderQuery?.name.trim()) return
     let cancelled = false
     let emptyPolls = 0
+    let inFlight = false
     const check = async () => {
+      if (inFlight || cancelled) return
+      inFlight = true
       try {
         const progress = await fetchWorkspaceStatus(folderQuery.name, folderQuery.id)
         if (cancelled) return
@@ -708,17 +744,20 @@ export default function App() {
         }
         if (!progress.status) {
           emptyPolls += 1
-          if (emptyPolls >= 20) setFolderPrep('idle')
+          if (emptyPolls >= 12) setFolderPrep('idle')
         } else {
           emptyPolls = 0
         }
       } catch {
         emptyPolls += 1
-        if (emptyPolls >= 20) setFolderPrep('idle')
+        if (emptyPolls >= 12) setFolderPrep('idle')
+      } finally {
+        inFlight = false
       }
     }
     void check()
-    const timer = window.setInterval(() => void check(), 1000)
+    // Auth hits Neon on every poll — keep this rare so clarify/login stay responsive.
+    const timer = window.setInterval(() => void check(), 8000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
@@ -730,6 +769,12 @@ export default function App() {
     const timer = window.setTimeout(() => setFolderPrep('idle'), 5000)
     return () => window.clearTimeout(timer)
   }, [folderPrep])
+
+  useEffect(() => {
+    if (governancePrep !== 'ready' && governancePrep !== 'failed') return
+    const timer = window.setTimeout(() => setGovernancePrep('idle'), 8000)
+    return () => window.clearTimeout(timer)
+  }, [governancePrep])
 
   const handleCreateGithubRepos = useCallback(async (): Promise<boolean> => {
     if (creatingReposRef.current) return false
@@ -833,6 +878,16 @@ export default function App() {
   }, [patch, state.bootstrapAcknowledged, state.integrations, state.jiraCreatedIssues, state.productScope, state.projectId, state.repositories, state.sdlcStartIssueId, state.specification, state.workClassification])
 
   const goNext = useCallback(async () => {
+    // Clarify lives on stakeholder-qa; Continue can confirm wording (same as the in-page CTA).
+    if (
+      step === 'stakeholder-qa' &&
+      state.requirementsText.trim() &&
+      !state.groomConfirmed &&
+      !skipStepValidation
+    ) {
+      const ok = await handleGroomLooksGoodRef.current()
+      if (!ok) return
+    }
     const err = skipStepValidation ? null : validateCurrentStep()
     if (err) {
       setStatus({ type: 'error', message: err })
@@ -844,9 +899,10 @@ export default function App() {
       setStatus(null)
 
       const runStakeholderSideEffects = (projectId: string) => {
-        void configureStakeholders(projectId).catch(() => undefined)
         if (!stateRef.current.stakeholdersConfirmed) {
-          patch({ stakeholdersConfirmed: true, governanceStatus: 'ready' })
+          setGovernancePrep('preparing')
+          patch({ governanceStatus: 'preparing' })
+          void configureStakeholders(projectId).catch(() => undefined)
           void confirmStakeholders(projectId)
             .then((confirmed) => {
               if (confirmed.status !== 'ok') {
@@ -858,6 +914,7 @@ export default function App() {
                 nextSdlcCommand: confirmed.nextCommand || stateRef.current.nextSdlcCommand,
                 governanceStatus: 'ready',
               })
+              setGovernancePrep('ready')
             })
             .catch(() => {
               patch({
@@ -865,6 +922,7 @@ export default function App() {
                 stakeholdersConfirmationDigest: null,
                 governanceStatus: 'failed',
               })
+              setGovernancePrep('failed')
             })
         } else {
           scheduleStakeholderGovernance(projectId, { draft })
@@ -936,36 +994,50 @@ export default function App() {
 
   const goBack = useCallback(() => {
     setStatus(null)
+    if (kitResultOpen) {
+      setKitResultOpen(false)
+      return
+    }
     if (isWizardHistoryState(window.history.state) && stepIndex(step) > 0) {
       window.history.back()
       return
     }
     const idx = stepIndex(step)
     if (idx > 0) goToStep(STEP_ORDER[idx - 1])
-  }, [step, goToStep])
+  }, [step, goToStep, kitResultOpen])
+
+  const groomAbortRef = useRef<AbortController | null>(null)
 
   const handleGroomAsk = useCallback(async () => {
-    if (groomAskInFlightRef.current || state.groomQuestions.length) return
-    const text = (state.groomOriginal || state.requirementsText).trim()
+    if (groomAskInFlightRef.current) return
+    const text = (stateRef.current.groomOriginal || stateRef.current.requirementsText).trim()
     if (!text) {
       setStatus({ type: 'error', message: 'Paste a short description first.' })
       return
     }
+    if (stateRef.current.groomQuestions.length) return
     groomAskInFlightRef.current = true
     setGrooming(true)
     setStatus(null)
+    const controller = new AbortController()
+    groomAbortRef.current = controller
+    const hangTimer = window.setTimeout(() => controller.abort(), 90_000)
     try {
-      const result = await streamClarifyRequirement({
-        projectId: state.projectId,
-        projectName: state.projectName,
-        requirementText: text,
-      })
+      // Prefer JSON over SSE — Vite proxy + hung Neon auth was stalling /sdlc/stream.
+      const result = await clarifyRequirement(
+        {
+          projectId: stateRef.current.projectId,
+          projectName: stateRef.current.projectName,
+          requirementText: text,
+        },
+        controller.signal,
+      )
       if (result.status === 'error' || result.status === 'invalid_request') {
         patch({
           groomStatus: result.status,
           groomMessage: result.message,
           groomDraft: result.requirementDraft || text,
-          groomOriginal: state.groomOriginal || result.originalRequirement || text,
+          groomOriginal: stateRef.current.groomOriginal || result.originalRequirement || text,
         })
         setStatus({ type: 'error', message: result.message })
         return
@@ -975,7 +1047,7 @@ export default function App() {
         groomMessage: result.message,
         groomQuestions: assignQuestionBands(result.questions ?? []),
         groomDraft: result.requirementDraft || '',
-        groomOriginal: state.groomOriginal || result.originalRequirement || text,
+        groomOriginal: stateRef.current.groomOriginal || result.originalRequirement || text,
         groomAnswers: [],
         groomConfirmed: false,
       })
@@ -987,16 +1059,24 @@ export default function App() {
             : 'Answer the required questions. Important and suggestions are optional.',
       })
     } catch (e) {
+      const message =
+        e instanceof DOMException && e.name === 'AbortError'
+          ? 'Clarify timed out. Check the local agent on port 8787, then retry.'
+          : e instanceof Error
+            ? e.message
+            : 'Could not reach the grooming helper.'
       patch({
         groomStatus: 'error',
-        groomMessage: e instanceof Error ? e.message : 'Could not reach the grooming helper.',
+        groomMessage: message,
       })
-      setStatus({ type: 'error', message: e instanceof Error ? e.message : 'Could not reach the grooming helper.' })
+      setStatus({ type: 'error', message })
     } finally {
+      window.clearTimeout(hangTimer)
+      if (groomAbortRef.current === controller) groomAbortRef.current = null
       groomAskInFlightRef.current = false
       setGrooming(false)
     }
-  }, [state.groomQuestions.length, state.groomOriginal, state.requirementsText, state.projectId, state.projectName, patch])
+  }, [patch])
 
   const handleGroomPick = useCallback((questionId: string, optionId: string, optionLabel: string) => {
     setState((prev) => {
@@ -1063,44 +1143,56 @@ export default function App() {
   }, [])
 
   const handleGroomLooksGood = useCallback(async (): Promise<boolean> => {
-    if (state.groomConfirmed) return true
-    if (unansweredRequired(state).length && state.groomStatus !== 'error') {
+    const current = stateRef.current
+    if (current.groomConfirmed) return true
+    if (unansweredRequired(current).length && current.groomStatus !== 'error') {
       setStatus({
         type: 'error',
         message: 'Answer every required question under Need clarification, or mark Jira later to ask on a ticket.',
       })
       return false
     }
-    const original = (state.groomOriginal || state.requirementsText).trim()
-    const answers = state.groomAnswers.filter(
+    const original = (current.groomOriginal || current.requirementsText).trim()
+    const answers = current.groomAnswers.filter(
       (item) => item.optionId !== 'other' || Boolean(item.otherText?.trim()),
     )
-    let draft = (state.groomDraft || state.requirementsText).trim()
-    if (answers.length && state.groomStatus !== 'error') {
+    let draft = (current.groomDraft || current.requirementsText).trim()
+    if (answers.length && current.groomStatus !== 'error') {
+      // Prefer a fast JSON rewrite. If Neon/auth is busy, keep the current draft so Start over / Continue aren't blocked.
+      groomAbortRef.current?.abort()
+      const controller = new AbortController()
+      groomAbortRef.current = controller
+      const hangTimer = window.setTimeout(() => controller.abort(), 45_000)
       setGrooming(true)
       setStatus(null)
       try {
-        const result = await streamClarifyRequirement({
-          projectId: state.projectId,
-          projectName: state.projectName,
-          requirementText: original || draft,
-          answers,
-        })
+        const result = await clarifyRequirement(
+          {
+            projectId: current.projectId,
+            projectName: current.projectName,
+            requirementText: original || draft,
+            answers,
+          },
+          controller.signal,
+        )
         if (result.status === 'error' || result.status === 'invalid_request') {
-          setStatus({ type: 'error', message: result.message })
-          patch({ groomStatus: result.status, groomMessage: result.message })
-          return false
+          setStatus({ type: 'info', message: `${result.message} Using the current draft.` })
+        } else {
+          draft = (result.requirementDraft || draft).trim()
         }
-        draft = (result.requirementDraft || draft).trim()
-      } catch (e) {
-        setStatus({ type: 'error', message: e instanceof Error ? e.message : 'Could not update the wording.' })
-        return false
+      } catch {
+        setStatus({
+          type: 'info',
+          message: 'Rewrite is slow right now — saved your answers with the current draft.',
+        })
       } finally {
+        window.clearTimeout(hangTimer)
+        if (groomAbortRef.current === controller) groomAbortRef.current = null
         setGrooming(false)
       }
     }
     if (!draft) return false
-    const nextState = { ...state, requirementsText: draft, groomConfirmed: true, groomDraft: draft }
+    const nextState = { ...current, requirementsText: draft, groomConfirmed: true, groomDraft: draft }
     const questions = carryClarifyQuestionsForward(nextState)
     const basePatch: Partial<WizardState> = {
       requirementsText: draft,
@@ -1109,11 +1201,12 @@ export default function App() {
       groomStatus: 'draft_ready',
       questions,
       requirementsAnalyzed: true,
-      responses: responsesForStakeholderQuestions(questions, state.responses),
+      responses: responsesForStakeholderQuestions(questions, current.responses),
       questionsSent: false,
     }
     patch(basePatch)
-    const mergedState: WizardState = { ...state, ...basePatch }
+    const mergedState: WizardState = { ...current, ...basePatch }
+    stateRef.current = mergedState
     if (
       mergedState.projectId &&
       shouldRunGroomingRevisionAfterAnswers(mergedState) &&
@@ -1129,11 +1222,14 @@ export default function App() {
     }
     setStatus({ type: 'success', message: 'Requirement wording saved.' })
     return true
-  }, [state, patch])
+  }, [patch])
   handleGroomLooksGoodRef.current = handleGroomLooksGood
 
   const handleGroomStartOver = useCallback(() => {
+    groomAbortRef.current?.abort()
+    groomAbortRef.current = null
     groomAskInFlightRef.current = false
+    setGrooming(false)
     patch(clearGroomingPatch())
     setStatus(null)
   }, [patch])
@@ -1914,7 +2010,9 @@ export default function App() {
     const fromIdx = stepIndex(step)
     setCompletedThrough((prev) => Math.max(prev, fromIdx))
     patch({ generationSteps: steps, generationComplete: false })
-    goToShipSubstage('workspace')
+    // Header Download always stays on the classic kit/download panel and never
+    // jumps to Ship (Ship is only via wizard Continue / sidebar).
+    setKitResultOpen(true)
 
     const advanceStep = (id: string, st: 'running' | 'done' | 'error') => {
       setState((prev) => ({
@@ -2078,18 +2176,29 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [state, patch, persistProject, scheduleStakeholderGovernance, step, goToStep])
+  }, [state, patch, persistProject, scheduleStakeholderGovernance])
 
   const handleQuickDownload = useCallback(() => {
     if (loading) return
-    if (!state.requirementsText.trim() && !state.requirementFileName) {
+    if (!state.requirementsText.trim() && !state.groomDraft.trim() && !state.requirementFileName) {
       setStatus({ type: 'error', message: 'Upload a document or paste requirements first.' })
       return
     }
     void runGeneration()
-  }, [loading, state.requirementsText, state.requirementFileName, runGeneration])
+  }, [loading, state.requirementsText, state.groomDraft, state.requirementFileName, runGeneration])
 
   const renderScreen = () => {
+    if (kitResultOpen) {
+      return (
+        <GenerationDownloadScreen
+          state={state}
+          loading={loading}
+          exporting={creatingRepos}
+          onExportGithub={() => void handleCreateGithubRepos()}
+          onBack={() => setKitResultOpen(false)}
+        />
+      )
+    }
     switch (step) {
       case 'welcome':
         return (
@@ -2149,7 +2258,7 @@ export default function App() {
           <StakeholderQaScreen
             state={state}
             onUpdate={patch}
-            grooming={grooming || saving}
+            grooming={grooming}
             jiraPublish={jiraPublish}
             onAsk={() => void handleGroomAsk()}
             onPick={handleGroomPick}
@@ -2250,14 +2359,15 @@ export default function App() {
     step !== 'welcome'
     && !(step === 'ship' && ['implementation', 'review-pr', 'release'].includes(shipSubstage))
   const isWelcome = step === 'welcome'
-  const isSuccessScreen = false
+  const isSuccessScreen = kitResultOpen && (loading || state.generationComplete)
   const shipIdx = stepIndex('ship')
   const currentSkipped = state.generationComplete && stepIndex(step) > completedThrough && stepIndex(step) < shipIdx
+  // Original gate: after Project & Stakeholders (not blocked on confirmed scope / Work plan).
   const showQuickDownload =
     !isWelcome &&
+    !kitResultOpen &&
     step !== 'ship' &&
-    stepIndex(step) >= stepIndex('sdlc-plan') &&
-    Boolean(state.productScope?.status === 'confirmed' || state.productScope?.confirmationDigest)
+    stepIndex(step) > stepIndex('project-stakeholders')
 
   return (
     <div className={`app-shell${isWelcome ? ' welcome-mode' : ''}${chatOpen && !isWelcome ? ' chat-open' : ''}`}>
@@ -2278,7 +2388,7 @@ export default function App() {
       )}
 
       <div className={`main${isWelcome ? ' main-welcome' : ''}${isSuccessScreen ? ' main-success' : ''}`}>
-        {(!isSuccessScreen || folderPrep === 'preparing') && !isWelcome && (
+        {(!isSuccessScreen || folderPrep === 'preparing' || governancePrep === 'preparing') && !isWelcome && (
           <header className="top-float" aria-label="Step actions">
             <div className="top-float-row">
             <div className="top-float-chip top-float-start">
@@ -2312,39 +2422,76 @@ export default function App() {
               <SessionControls compact />
             </div>
             </div>
-            {folderPrep !== 'idle' && (
-              <div className={`header-progress${folderPrep === 'ready' ? ' is-ready' : ''}${folderPrep === 'failed' ? ' is-failed' : ''}${folderPrep === 'preparing' && folderProgress.total === 0 ? ' is-waiting' : ''}`}>
-                <div className="header-progress-copy">
-                  <span>
-                    {folderPrep === 'preparing'
-                      ? 'Preparing project folder'
-                      : folderPrep === 'ready'
-                        ? 'Project folder is ready'
-                        : 'Folder will finish when you download'}
-                  </span>
-                  {folderPrep !== 'failed' && (
-                    <strong>
-                      {folderPrep === 'ready'
-                        ? '100%'
-                        : folderProgress.total > 0
-                          ? `${folderProgress.percent}%`
-                          : 'Working'}
-                    </strong>
-                  )}
-                </div>
-                {folderPrep !== 'failed' && (
-                  <div
-                    className="header-progress-bar"
-                    role="progressbar"
-                    aria-label="Project folder progress"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={folderPrep === 'ready' ? 100 : folderProgress.percent}
-                  >
-                    <span
-                      className="header-progress-fill"
-                      style={folderPrep === 'ready' ? { width: '100%' } : folderProgress.total > 0 ? { width: `${folderProgress.percent}%` } : undefined}
-                    />
+            {(folderPrep !== 'idle' || governancePrep !== 'idle') && (
+              <div className="prep-stack">
+                {folderPrep !== 'idle' && (
+                  <div className={`header-progress${folderPrep === 'ready' ? ' is-ready' : ''}${folderPrep === 'failed' ? ' is-failed' : ''}${folderPrep === 'preparing' && folderProgress.total === 0 ? ' is-waiting' : ''}`}>
+                    <div className="header-progress-copy">
+                      <span>
+                        {folderPrep === 'preparing'
+                          ? 'Saving project folder'
+                          : folderPrep === 'ready'
+                            ? 'Project folder is ready'
+                            : 'Folder will finish when you download'}
+                      </span>
+                      {folderPrep !== 'failed' && (
+                        <strong>
+                          {folderPrep === 'ready'
+                            ? '100%'
+                            : folderProgress.total > 0
+                              ? `${folderProgress.percent}% · ${folderProgress.copied.toLocaleString()} / ${folderProgress.total.toLocaleString()}`
+                              : 'Working'}
+                        </strong>
+                      )}
+                    </div>
+                    {folderPrep !== 'failed' && (
+                      <div
+                        className="header-progress-bar"
+                        role="progressbar"
+                        aria-label="Project folder progress"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={folderPrep === 'ready' ? 100 : folderProgress.percent}
+                      >
+                        <span
+                          className="header-progress-fill"
+                          style={folderPrep === 'ready' ? { width: '100%' } : folderProgress.total > 0 ? { width: `${folderProgress.percent}%` } : undefined}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+                {governancePrep !== 'idle' && (
+                  <div className={`header-progress${governancePrep === 'ready' ? ' is-ready' : ''}${governancePrep === 'failed' ? ' is-failed' : ''}${governancePrep === 'preparing' ? ' is-waiting' : ''}`}>
+                    <div className="header-progress-copy">
+                      <span>
+                        {governancePrep === 'preparing'
+                          ? 'Checking stakeholder roles'
+                          : governancePrep === 'ready'
+                            ? state.sodWarnings.length
+                              ? 'Stakeholder governance note is ready'
+                              : 'Stakeholder roles are configured'
+                            : 'Could not finish stakeholder checks. You can keep going'}
+                      </span>
+                      {governancePrep !== 'failed' && (
+                        <strong>{governancePrep === 'ready' ? '100%' : 'Working'}</strong>
+                      )}
+                    </div>
+                    {governancePrep !== 'failed' && (
+                      <div
+                        className="header-progress-bar"
+                        role="progressbar"
+                        aria-label="Stakeholder governance progress"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={governancePrep === 'ready' ? 100 : 35}
+                      >
+                        <span
+                          className="header-progress-fill"
+                          style={governancePrep === 'ready' ? { width: '100%' } : undefined}
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

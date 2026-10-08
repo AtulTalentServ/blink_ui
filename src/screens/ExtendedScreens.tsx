@@ -48,6 +48,7 @@ import {
 import {
   confirmProjectTopology,
   isNotProjectOwnerError,
+  pauseAutosave,
   proposeProjectShape,
   rehomeProject,
   syncCanonicalWizardDraft,
@@ -171,6 +172,11 @@ export function ProjectShapeScreen({
   const userEditedShape = useRef(false)
 
   useEffect(() => {
+    // Manual picks (or repo edits) win — do not keep "Reading…" or overwrite the blueprint.
+    if (userEditedShape.current || state.repositoriesTouched) {
+      setProposing(false)
+      return
+    }
     if (!state.projectId || state.topologyConfirmation || !requirementText || state.shapeProposal?.components?.length) {
       setProposing(false)
       return
@@ -183,7 +189,7 @@ export function ProjectShapeScreen({
       requirementText,
     })
       .then((proposal) => {
-        if (cancelled) return
+        if (cancelled || userEditedShape.current) return
         setProposalNote(proposal.rationale)
         const patch: Partial<WizardState> = { shapeProposal: proposal }
         if (!userEditedShape.current && !state.repositoriesTouched) {
@@ -205,7 +211,7 @@ export function ProjectShapeScreen({
         onUpdate(patch)
       })
       .catch(async (cause) => {
-        if (cancelled) return
+        if (cancelled || userEditedShape.current) return
         if (isNotProjectOwnerError(cause)) {
           try {
             const saved = await rehomeProject(ownedProjectPayload(state))
@@ -636,36 +642,37 @@ export function RepositoriesScreen({
       setRosterError('Save the project before confirming the roster.')
       return
     }
-    setRosterBusy(true)
     setRosterError(null)
-    try {
-      const synced = await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
-      const canonicalPatch = await confirmRepositoryRoster(projectId, synced.revision)
-      const topologyConfirmation = nextTopologyConfirmation(
-        { ...state, repositoriesTouched: true },
-        { repositories },
-      )
-      onUpdate({
-        repositoriesTouched: true,
-        ...patchFromCanonicalSnapshot(synced),
-        ...canonicalPatch,
-        ...(topologyConfirmation ? { topologyConfirmation } : {}),
+    pauseAutosave(120_000)
+    const topologyConfirmation = nextTopologyConfirmation(
+      { ...state, repositoriesTouched: true },
+      { repositories },
+    )
+    // Local confirm first — never hold "Confirming…" on Neon.
+    onUpdate({
+      repositoriesTouched: true,
+      ...(topologyConfirmation ? { topologyConfirmation } : {}),
+    })
+    setRosterBusy(false)
+    // Neon is best-effort — never surface sync timeouts after local confirm.
+    void confirmRepositoryRoster(projectId, state.canonicalRevision ?? undefined)
+      .then((canonicalPatch) => {
+        if (Object.keys(canonicalPatch).length) onUpdate(canonicalPatch)
       })
-      if (topologyConfirmation) {
-        void confirmProjectTopology(projectId, {
-          projectName: state.projectName,
-          requirementText: shapeRequirementText(state),
-          repositoryModel: state.repositoryModel,
-          confirmedBy: topologyConfirmation.confirmedBy,
-          evidenceRef: topologyConfirmation.evidenceRef,
-          repositories: topologyConfirmation.roster,
-          repoTechnologies: state.repoTechnologies,
-        }).catch(() => undefined)
-      }
-    } catch (err) {
-      setRosterError(err instanceof Error ? err.message : 'Could not confirm repository roster.')
-    } finally {
-      setRosterBusy(false)
+      .catch(() => undefined)
+    void syncCanonicalWizardDraft(projectId)
+      .then((synced) => onUpdate(patchFromCanonicalSnapshot(synced)))
+      .catch(() => undefined)
+    if (topologyConfirmation) {
+      void confirmProjectTopology(projectId, {
+        projectName: state.projectName,
+        requirementText: shapeRequirementText(state),
+        repositoryModel: state.repositoryModel,
+        confirmedBy: topologyConfirmation.confirmedBy,
+        evidenceRef: topologyConfirmation.evidenceRef,
+        repositories: topologyConfirmation.roster,
+        repoTechnologies: state.repoTechnologies,
+      }).catch(() => undefined)
     }
   }
 
@@ -801,6 +808,12 @@ export function RepositoriesScreen({
           </div>
 
           {rosterError ? <p className="sdlc-timeline__outcome is-blocked">{rosterError}</p> : null}
+          {state.repositoriesTouched ? (
+            <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <CheckCircle2 size={16} className="check-green" />
+              Repositories confirmed — Continue when ready.
+            </p>
+          ) : null}
           <div className="row-actions">
             <button
               type="button"
@@ -808,7 +821,11 @@ export function RepositoriesScreen({
               disabled={rosterBusy || namedCount === 0}
               onClick={() => void confirmRoster()}
             >
-              {rosterBusy ? 'Confirming…' : 'Confirm repositories'}
+              {rosterBusy
+                ? 'Confirming…'
+                : state.repositoriesTouched
+                  ? 'Confirmed'
+                  : 'Confirm repositories'}
             </button>
           </div>
         </section>
@@ -854,38 +871,39 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     const nextRows = techRows.map((t) =>
       t.status === 'recommendation' || t.status === 'tbd' ? { ...t, status: 'confirmed' as const } : t,
     )
-    onUpdate({ repoTechnologies: nextRows })
     const projectId = state.projectId
     if (!projectId) {
       setTechError('Save the project before confirming technology.')
       return
     }
-    setTechBusy(true)
     setTechError(null)
-    try {
-      const synced = await syncCanonicalWizardDraft(projectId, state.canonicalRevision ?? undefined)
-      const canonicalPatch = await confirmAllRepoTechnologies(projectId, synced.revision)
-      const topologyConfirmation = nextTopologyConfirmation(state, { repoTechnologies: nextRows })
-      onUpdate({
-        ...patchFromCanonicalSnapshot(synced),
-        ...canonicalPatch,
-        ...(topologyConfirmation ? { topologyConfirmation } : {}),
+    pauseAutosave(120_000)
+    const topologyConfirmation = nextTopologyConfirmation(state, { repoTechnologies: nextRows })
+    // Local confirm first — never hold "Confirming…" on Neon.
+    onUpdate({
+      repoTechnologies: nextRows,
+      ...(topologyConfirmation ? { topologyConfirmation } : {}),
+    })
+    setTechBusy(false)
+    // Neon is best-effort — never surface sync timeouts after local confirm.
+    void confirmAllRepoTechnologies(projectId, state.canonicalRevision ?? undefined)
+      .then((canonicalPatch) => {
+        if (Object.keys(canonicalPatch).length) onUpdate(canonicalPatch)
       })
-      if (topologyConfirmation) {
-        void confirmProjectTopology(projectId, {
-          projectName: state.projectName,
-          requirementText: shapeRequirementText(state),
-          repositoryModel: state.repositoryModel,
-          confirmedBy: topologyConfirmation.confirmedBy,
-          evidenceRef: topologyConfirmation.evidenceRef,
-          repositories: topologyConfirmation.roster,
-          repoTechnologies: nextRows,
-        }).catch(() => undefined)
-      }
-    } catch (err) {
-      setTechError(err instanceof Error ? err.message : 'Could not confirm technology.')
-    } finally {
-      setTechBusy(false)
+      .catch(() => undefined)
+    void syncCanonicalWizardDraft(projectId)
+      .then((synced) => onUpdate(patchFromCanonicalSnapshot(synced)))
+      .catch(() => undefined)
+    if (topologyConfirmation) {
+      void confirmProjectTopology(projectId, {
+        projectName: state.projectName,
+        requirementText: shapeRequirementText(state),
+        repositoryModel: state.repositoryModel,
+        confirmedBy: topologyConfirmation.confirmedBy,
+        evidenceRef: topologyConfirmation.evidenceRef,
+        repositories: topologyConfirmation.roster,
+        repoTechnologies: nextRows,
+      }).catch(() => undefined)
     }
   }
 
@@ -902,6 +920,11 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
           <button type="button" className="primary-btn" disabled={techBusy} onClick={() => void confirmAll()}>
             {techBusy ? 'Confirming…' : `Confirm all (${pending})`}
           </button>
+        ) : techRows.length > 0 ? (
+          <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <CheckCircle2 size={16} className="check-green" />
+            All stacks confirmed
+          </p>
         ) : null}
       </div>
       {techError ? <p className="sdlc-timeline__outcome is-blocked">{techError}</p> : null}

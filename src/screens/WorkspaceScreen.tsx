@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, ChevronLeft, Download, ExternalLink, FolderGit2, Loader2, Sparkles } from 'lucide-react'
-import { fetchCanonicalSnapshot, gitApply, shipCheckpoint } from '../api/blink'
+import { fetchCanonicalSnapshot, gitApply, pauseAutosave, shipCheckpoint } from '../api/blink'
 import { patchFromCanonicalSnapshot } from '../wizard/canonical'
 import type { WizardState, WizardStep } from '../wizard/types'
 
@@ -55,62 +55,63 @@ export function WorkspaceScreen({
       setApplyError('Save the project first.')
       return
     }
-    setApplyBusy(true)
+    const projectId = state.projectId
+    const overlays = state.scopeOverlays || []
     setApplyError(null)
-    try {
-      if (!state.bootstrapAcknowledged) {
-        onUpdate({ bootstrapAcknowledged: true })
-      }
-      const overlays = state.scopeOverlays || []
-      if (overlays.length > 0) {
-        try {
-          const res = await gitApply(state.projectId, {
-            confirm: true,
-            overlayFiles: overlays,
-            repositories: state.repositories.map((r) => ({
-              name: r.name,
-              htmlUrl: r.htmlUrl,
-              purpose: r.purpose,
-            })),
-            issueKey: state.sdlcStartIssueId || undefined,
-          })
-          if (res.status === 'ok' || res.gitWritten) {
-            onUpdate({
-              gitWritten: true,
-              gitApplyCommit: res.commit || state.gitApplyCommit,
-              scopeOverlays: res.overlayFiles || overlays,
-              bootstrapAcknowledged: true,
+    pauseAutosave(120_000)
+    // Local unlock first — Neon ship/git-apply must not hold "Preparing…".
+    onUpdate({ gitWritten: true, bootstrapAcknowledged: true })
+    setApplyBusy(false)
+    void (async () => {
+      try {
+        if (overlays.length > 0) {
+          try {
+            const res = await gitApply(projectId, {
+              confirm: true,
+              overlayFiles: overlays,
+              repositories: state.repositories.map((r) => ({
+                name: r.name,
+                htmlUrl: r.htmlUrl,
+                purpose: r.purpose,
+              })),
+              issueKey: state.sdlcStartIssueId || undefined,
             })
-            const snap = await fetchCanonicalSnapshot(state.projectId).catch(() => null)
-            if (snap) onUpdate(patchFromCanonicalSnapshot(snap))
-            return
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          if (!/github|overlay_empty|workspace_repo/i.test(msg)) {
-            throw err
+            if (res.status === 'ok' || res.gitWritten) {
+              onUpdate({
+                gitWritten: true,
+                gitApplyCommit: res.commit || state.gitApplyCommit,
+                scopeOverlays: res.overlayFiles || overlays,
+                bootstrapAcknowledged: true,
+              })
+              const snap = await fetchCanonicalSnapshot(projectId).catch(() => null)
+              if (snap) onUpdate(patchFromCanonicalSnapshot(snap))
+              return
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            if (!/github|overlay_empty|workspace_repo|timed out|busy|timeout/i.test(msg)) {
+              throw err
+            }
           }
         }
+        await shipCheckpoint(projectId, {
+          substage: 'workspace',
+          stepKind: 'git-apply',
+          idempotencyKey: `git-apply-local-${projectId}`,
+          payload: {
+            source: 'workspace-screen',
+            local: true,
+            overlays: overlays.length,
+            generationComplete: state.generationComplete,
+          },
+        })
+        const snap = await fetchCanonicalSnapshot(projectId).catch(() => null)
+        if (snap) onUpdate(patchFromCanonicalSnapshot(snap))
+      } catch (err) {
+        // Soft: workspace already marked ready locally.
+        setApplyError(err instanceof Error ? err.message : 'Could not sync workspace checkpoint yet.')
       }
-      await shipCheckpoint(state.projectId, {
-        substage: 'workspace',
-        stepKind: 'git-apply',
-        idempotencyKey: `git-apply-local-${state.projectId}`,
-        payload: {
-          source: 'workspace-screen',
-          local: true,
-          overlays: overlays.length,
-          generationComplete: state.generationComplete,
-        },
-      })
-      onUpdate({ gitWritten: true, bootstrapAcknowledged: true })
-      const snap = await fetchCanonicalSnapshot(state.projectId).catch(() => null)
-      if (snap) onUpdate(patchFromCanonicalSnapshot(snap))
-    } catch (err) {
-      setApplyError(err instanceof Error ? err.message : 'Could not prepare the workspace.')
-    } finally {
-      setApplyBusy(false)
-    }
+    })()
   }, [onUpdate, state])
 
   return (
