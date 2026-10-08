@@ -139,6 +139,16 @@ function shapeFrom(state: Pick<WizardState, 'topology' | 'repositoryModel' | 'ar
   }
 }
 
+/** True once architecture-proposal returned the three shape fields (components may be empty). */
+function hasReadyShapeProposal(proposal: WizardState['shapeProposal']) {
+  return Boolean(
+    proposal
+    && proposal.topology
+    && proposal.repositoryModel
+    && proposal.architectureStyle,
+  )
+}
+
 function statusTone(status: string | undefined) {
   if (status === 'confirmed') return 'ok'
   if (status === 'recommendation') return 'soft'
@@ -167,7 +177,12 @@ export function ProjectShapeScreen({
   const [proposalNote, setProposalNote] = useState<string | null>(state.shapeProposal?.rationale || null)
   const [proposalError, setProposalError] = useState<string | null>(null)
   const [proposing, setProposing] = useState(
-    () => Boolean(state.projectId && requirementText && !state.shapeProposal?.components?.length && !state.topologyConfirmation),
+    () => Boolean(
+      state.projectId
+      && requirementText
+      && !hasReadyShapeProposal(state.shapeProposal)
+      && !state.topologyConfirmation,
+    ),
   )
   const userEditedShape = useRef(false)
 
@@ -177,7 +192,8 @@ export function ProjectShapeScreen({
       setProposing(false)
       return
     }
-    if (!state.projectId || state.topologyConfirmation || !requirementText || state.shapeProposal?.components?.length) {
+    // Stop after any usable proposal — components may be [] (UI falls back to defaultRepositories).
+    if (!state.projectId || state.topologyConfirmation || !requirementText || hasReadyShapeProposal(state.shapeProposal)) {
       setProposing(false)
       return
     }
@@ -238,7 +254,7 @@ export function ProjectShapeScreen({
     state.projectId,
     state.projectName,
     state.repositoriesTouched,
-    state.shapeProposal?.components,
+    state.shapeProposal,
     state.topologyConfirmation,
   ])
 
