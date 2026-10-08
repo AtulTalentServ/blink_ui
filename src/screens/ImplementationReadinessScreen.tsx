@@ -244,7 +244,11 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         await refreshShipProgress()
         try {
           const snap = await fetchCanonicalSnapshot(state.projectId)
-          onUpdate(patchFromCanonicalSnapshot(snap))
+          onUpdate(patchFromCanonicalSnapshot(snap, {
+            ...state,
+            shipSubstage: 'implementation',
+            gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
+          }))
         } catch {
           /* best-effort */
         }

@@ -677,7 +677,7 @@ export function RepositoriesScreen({
       })
       .catch(() => undefined)
     void syncCanonicalWizardDraft(projectId)
-      .then((synced) => onUpdate(patchFromCanonicalSnapshot(synced)))
+      .then((synced) => onUpdate(patchFromCanonicalSnapshot(synced, state)))
       .catch(() => undefined)
     if (topologyConfirmation) {
       void confirmProjectTopology(projectId, {
@@ -908,7 +908,7 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
       })
       .catch(() => undefined)
     void syncCanonicalWizardDraft(projectId)
-      .then((synced) => onUpdate(patchFromCanonicalSnapshot(synced)))
+      .then((synced) => onUpdate(patchFromCanonicalSnapshot(synced, state)))
       .catch(() => undefined)
     if (topologyConfirmation) {
       void confirmProjectTopology(projectId, {
