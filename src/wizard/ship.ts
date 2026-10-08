@@ -7,6 +7,12 @@ export const SHIP_SUBSTAGES: { id: ShipSubstage; label: string }[] = [
   { id: 'release', label: '4 · Release' },
 ]
 
+export function shipSubstageIndex(substage: string | undefined | null): number {
+  const id = String(substage || 'workspace').toLowerCase().trim()
+  const idx = SHIP_SUBSTAGES.findIndex((item) => item.id === id)
+  return idx >= 0 ? idx : 0
+}
+
 const LEGACY_SHIP_STEPS = new Set<WizardStep>([
   'generation',
   'implementation',

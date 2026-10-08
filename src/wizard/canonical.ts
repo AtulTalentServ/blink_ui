@@ -1,7 +1,13 @@
 import type { CanonicalSnapshotDto } from '../api/blink.ts'
+import { shipSubstageIndex } from './ship.ts'
 import type { ShipSubstage, WizardState } from './types.ts'
 
 export type CanonicalBlocker = { code?: string; message?: string; step?: string; substage?: string }
+
+export type CanonicalPatchCurrent = Pick<
+  WizardState,
+  'shipSubstage' | 'canonicalShipSubstage' | 'gitWritten' | 'implementStep'
+>
 
 export function blockersFromSnapshot(snap: CanonicalSnapshotDto): CanonicalBlocker[] {
   if (!snap.blockers) return []
@@ -18,15 +24,45 @@ export function blockersFromSnapshot(snap: CanonicalSnapshotDto): CanonicalBlock
   })
 }
 
-export function patchFromCanonicalSnapshot(snap: CanonicalSnapshotDto): Partial<WizardState> {
-  const substage = (snap.eligibility.shipSubstage || 'workspace') as ShipSubstage
+function mergeAllowedShipSubstages(
+  snapAllowed: string[] | undefined,
+  current?: CanonicalPatchCurrent | null,
+): ShipSubstage[] {
+  const allowed = new Set<ShipSubstage>(
+    (snapAllowed?.length ? snapAllowed : ['workspace']) as ShipSubstage[],
+  )
+  if (current?.gitWritten) allowed.add('implementation')
+  if (current?.implementStep) allowed.add('review-pr')
+  return [...allowed]
+}
+
+/**
+ * Map a canonical snapshot into wizard fields.
+ * When `current` is provided, never regress `shipSubstage` past a locally unlocked phase
+ * (Neon often still reports workspace after Mark ready / Implement).
+ */
+export function patchFromCanonicalSnapshot(
+  snap: CanonicalSnapshotDto,
+  current?: CanonicalPatchCurrent | null,
+): Partial<WizardState> {
+  const snapSubstage = (snap.eligibility.shipSubstage || 'workspace') as ShipSubstage
+  const allowed = mergeAllowedShipSubstages(snap.eligibility.allowedShipSubstages, current)
+  const localSubstage = (current?.shipSubstage || current?.canonicalShipSubstage || 'workspace') as ShipSubstage
+  let shipSubstage = snapSubstage
+  if (
+    current
+    && shipSubstageIndex(localSubstage) > shipSubstageIndex(snapSubstage)
+    && allowed.includes(localSubstage)
+  ) {
+    shipSubstage = localSubstage
+  }
   return {
     canonicalRevision: snap.revision,
     canonicalAllowedSteps: snap.eligibility.allowedSteps || null,
-    canonicalAllowedShipSubstages: (snap.eligibility.allowedShipSubstages as ShipSubstage[] | undefined) || null,
+    canonicalAllowedShipSubstages: allowed,
     canonicalMaxShipSubstage: (snap.eligibility.maxShipSubstage as ShipSubstage | undefined) || null,
-    canonicalShipSubstage: substage,
-    shipSubstage: substage,
+    canonicalShipSubstage: snapSubstage,
+    shipSubstage,
     canonicalBlockers: blockersFromSnapshot(snap),
   }
 }

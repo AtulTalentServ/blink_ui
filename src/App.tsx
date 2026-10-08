@@ -370,7 +370,7 @@ export default function App() {
       description: payload.description,
     })
     void syncCanonicalWizardDraft(id, stateRef.current.canonicalRevision ?? undefined)
-      .then((snap) => patch(patchFromCanonicalSnapshot(snap)))
+      .then((snap) => patch(patchFromCanonicalSnapshot(snap, stateRef.current)))
       .catch(() => undefined)
     setFolderQuery({ name: saved.projectName || payload.projectName, id })
     // Only show the bar when the API actually reports workspace work — avoids Neon auth spam.
@@ -437,7 +437,16 @@ export default function App() {
           payload: { source: 'wizard-nav' },
         }).catch(() => undefined)
         void fetchCanonicalSnapshot(projectId)
-          .then((snap) => patch(patchFromCanonicalSnapshot(snap)))
+          .then((snap) => {
+            // Prefer the substage we just opened — snapshot often lags Neon git-apply.
+            const preferred = {
+              ...stateRef.current,
+              shipSubstage: substage,
+              canonicalShipSubstage: substage,
+              gitWritten: stateRef.current.gitWritten || current.gitWritten,
+            }
+            patch(patchFromCanonicalSnapshot(snap, preferred))
+          })
           .catch(() => undefined)
       }
     },
@@ -656,7 +665,7 @@ export default function App() {
           remoteDraft.state.canonicalAllowedSteps,
         )
         void fetchCanonicalSnapshot(String(remote.id))
-          .then((snap) => patch(patchFromCanonicalSnapshot(snap)))
+          .then((snap) => patch(patchFromCanonicalSnapshot(snap, stateRef.current)))
           .catch(() => undefined)
         goToStep(nextStep, 'replace')
         seedWizardHistory(nextStep, true)
@@ -701,7 +710,7 @@ export default function App() {
     let cancelled = false
     void fetchCanonicalSnapshot(state.projectId)
       .then((snap) => {
-        if (!cancelled) patch(patchFromCanonicalSnapshot(snap))
+        if (!cancelled) patch(patchFromCanonicalSnapshot(snap, stateRef.current))
       })
       .catch(() => undefined)
     return () => {

@@ -84,7 +84,13 @@ export function WorkspaceScreen({
                 bootstrapAcknowledged: true,
               })
               const snap = await fetchCanonicalSnapshot(projectId).catch(() => null)
-              if (snap) onUpdate(patchFromCanonicalSnapshot(snap))
+              if (snap) {
+                onUpdate(patchFromCanonicalSnapshot(snap, {
+                  ...state,
+                  gitWritten: true,
+                  shipSubstage: state.shipSubstage || 'workspace',
+                }))
+              }
               return
             }
           } catch (err) {
@@ -106,7 +112,13 @@ export function WorkspaceScreen({
           },
         })
         const snap = await fetchCanonicalSnapshot(projectId).catch(() => null)
-        if (snap) onUpdate(patchFromCanonicalSnapshot(snap))
+        if (snap) {
+          onUpdate(patchFromCanonicalSnapshot(snap, {
+            ...state,
+            gitWritten: true,
+            shipSubstage: state.shipSubstage || 'workspace',
+          }))
+        }
       } catch (err) {
         // Soft: workspace already marked ready locally.
         setApplyError(err instanceof Error ? err.message : 'Could not sync workspace checkpoint yet.')

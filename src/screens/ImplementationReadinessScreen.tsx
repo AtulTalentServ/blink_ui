@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, Circle, Loader2, Play } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Circle, Loader2, Play, RefreshCw } from 'lucide-react'
 import {
   fetchCanonicalSnapshot,
   fetchShipSession,
@@ -22,6 +22,10 @@ interface StoryRow {
   hasDraft: boolean
   lastSummary?: string
   prCount: number
+  /** GitHub draft PR URLs for this story (first one powers the Drafted badge). */
+  prUrls: string[]
+  /** Why a draft PR was not opened (token missing, docs-only stub, etc.). */
+  skipReason?: string
 }
 
 function requirementTextOf(state: WizardState): string {
@@ -74,14 +78,83 @@ function payloadIssueId(step: ShipStepDto): string | null {
   return typeof issue === 'string' && issue.trim() ? issue.trim() : null
 }
 
-function resultSummary(step: ShipStepDto): { summary?: string; prCount: number } {
+function urlFromRecord(item: Record<string, unknown>): string {
+  for (const key of ['url', 'html_url', 'htmlUrl', 'pr_url', 'prUrl', 'draftPrUrl']) {
+    const value = String(item[key] || '').trim()
+    if (value.startsWith('http://') || value.startsWith('https://')) return value
+  }
+  return ''
+}
+
+function prUrlsFromText(text: string | undefined): string[] {
+  if (!text) return []
+  const matches = text.match(/https?:\/\/(?:www\.)?github\.com\/[^\s)]+\/pull\/\d+/gi) || []
+  return matches.map((url) => url.replace(/[.,;]+$/, ''))
+}
+
+function prUrlsFromUnknown(value: unknown): string[] {
+  const urls: string[] = []
+  const seen = new Set<string>()
+  const push = (url: string) => {
+    const trimmed = url.trim()
+    if (!trimmed || seen.has(trimmed)) return
+    seen.add(trimmed)
+    urls.push(trimmed)
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === 'string') {
+        push(item)
+        continue
+      }
+      if (!item || typeof item !== 'object') continue
+      const url = urlFromRecord(item as Record<string, unknown>)
+      if (url) push(url)
+    }
+    return urls
+  }
+  if (value && typeof value === 'object') {
+    const url = urlFromRecord(value as Record<string, unknown>)
+    if (url) push(url)
+  }
+  return urls
+}
+
+function resultSummary(step: ShipStepDto): { summary?: string; prCount: number; prUrls: string[]; skipReason?: string } {
   const result = step.result
-  if (!result || typeof result !== 'object') return { prCount: 0 }
+  if (!result || typeof result !== 'object') return { prCount: 0, prUrls: [] }
   const rec = result as Record<string, unknown>
-  const prs = rec.draftPullRequests
-  const prCount = Array.isArray(prs) ? prs.length : 0
+  const evidence = rec.evidence && typeof rec.evidence === 'object'
+    ? rec.evidence as Record<string, unknown>
+    : null
   const summary = typeof rec.summary === 'string' && rec.summary.trim() ? rec.summary.trim() : undefined
-  return { summary, prCount }
+  const prUrls = mergePrUrls(
+    prUrlsFromUnknown(rec.draftPullRequests),
+    prUrlsFromUnknown(rec.pullRequests),
+    prUrlsFromText(summary),
+    prUrlsFromText(typeof evidence?.draftPrError === 'string' ? evidence.draftPrError : undefined),
+  )
+  const prCount = prUrls.length || (Array.isArray(rec.draftPullRequests) ? rec.draftPullRequests.length : 0)
+  const skipReason = typeof evidence?.draftPrSkipped === 'string'
+    ? evidence.draftPrSkipped
+    : typeof evidence?.draftPrError === 'string'
+      ? evidence.draftPrError
+      : undefined
+  return { summary, prCount, prUrls, skipReason }
+}
+
+function mergePrUrls(...groups: (string[] | undefined)[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const group of groups) {
+    for (const url of group || []) {
+      const trimmed = url.trim()
+      if (!trimmed || seen.has(trimmed)) continue
+      seen.add(trimmed)
+      out.push(trimmed)
+    }
+  }
+  return out
 }
 
 function buildStoryRows(
@@ -89,23 +162,41 @@ function buildStoryRows(
   implementSteps: ShipStepDto[],
   latestIssueId: string | undefined,
   latestSummary: string | undefined,
+  latestPrUrls: string[],
+  registered: { issueId: string; url: string }[],
 ): StoryRow[] {
-  const byIssue = new Map<string, { summary?: string; prCount: number }>()
+  const byIssue = new Map<string, { summary?: string; prCount: number; prUrls: string[]; skipReason?: string }>()
   for (const step of implementSteps) {
     const id = payloadIssueId(step)
     if (!id) continue
-    const { summary, prCount } = resultSummary(step)
+    const { summary, prCount, prUrls, skipReason } = resultSummary(step)
     const prev = byIssue.get(id)
     byIssue.set(id, {
       summary: summary || prev?.summary,
       prCount: Math.max(prev?.prCount || 0, prCount),
+      prUrls: mergePrUrls(prev?.prUrls, prUrls),
+      skipReason: prUrls.length ? undefined : (skipReason || prev?.skipReason),
+    })
+  }
+  for (const pr of registered) {
+    if (!pr.issueId || !pr.url) continue
+    const prev = byIssue.get(pr.issueId) || { prCount: 0, prUrls: [] as string[] }
+    const prUrls = mergePrUrls(prev.prUrls, [pr.url])
+    byIssue.set(pr.issueId, {
+      summary: prev.summary,
+      prCount: Math.max(prev.prCount, prUrls.length),
+      prUrls,
+      skipReason: undefined,
     })
   }
   if (latestIssueId) {
-    const prev = byIssue.get(latestIssueId) || { prCount: 0 }
+    const prev = byIssue.get(latestIssueId) || { prCount: 0, prUrls: [] as string[] }
+    const prUrls = mergePrUrls(prev.prUrls, latestPrUrls)
     byIssue.set(latestIssueId, {
       summary: latestSummary || prev.summary,
-      prCount: prev.prCount,
+      prCount: Math.max(prev.prCount, prUrls.length),
+      prUrls,
+      skipReason: prUrls.length ? undefined : prev.skipReason,
     })
   }
 
@@ -118,6 +209,8 @@ function buildStoryRows(
       hasDraft: Boolean(hit),
       lastSummary: hit?.summary,
       prCount: hit?.prCount || 0,
+      prUrls: hit?.prUrls || [],
+      skipReason: hit?.skipReason,
     }
   })
 
@@ -129,9 +222,28 @@ function buildStoryRows(
       hasDraft: true,
       lastSummary: hit.summary,
       prCount: hit.prCount,
+      prUrls: hit.prUrls,
+      skipReason: hit.skipReason,
     })
   }
   return rows
+}
+
+function draftedSkipMessage(reason: string | undefined): string {
+  switch (reason) {
+    case 'docs_only_stub':
+      return 'No GitHub PR — agent returned docs/stub only. Fix LLM config and re-run Implement.'
+    case 'github_token_missing':
+      return 'No GitHub PR — connect GitHub on Integrations, then re-run Implement.'
+    case 'app_repos_missing':
+      return 'No GitHub PR — create/link app repositories first, then re-run Implement.'
+    case 'patches_empty':
+      return 'No GitHub PR — implement-step returned no code patches.'
+    default:
+      return reason
+        ? `No GitHub PR URL recorded (${reason}).`
+        : 'No GitHub PR URL was recorded for this story. Re-run Implement after GitHub is connected.'
+  }
 }
 
 export function ImplementationReadinessScreen({ state, onUpdate, onContinueToReview }: Props) {
@@ -175,15 +287,42 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     state.productScope?.stories,
   ])
 
+  const latestSessionPrUrls = useMemo(() => {
+    const fromState = prUrlsFromUnknown(state.draftPullRequests)
+    const fromLive = prs.map((pr) => String(pr.url || '').trim()).filter(Boolean)
+    return mergePrUrls(fromState, fromLive)
+  }, [state.draftPullRequests, prs])
+
   const rows = useMemo(
-    () => buildStoryRows(stories, implementSteps, state.implementStep?.issueId, state.implementStep?.summary),
-    [stories, implementSteps, state.implementStep?.issueId, state.implementStep?.summary],
+    () => buildStoryRows(
+      stories,
+      implementSteps,
+      state.implementStep?.issueId,
+      state.implementStep?.summary,
+      latestSessionPrUrls,
+      (state.registeredPullRequests || []).map((pr) => ({ issueId: pr.issueId, url: pr.url })),
+    ),
+    [
+      stories,
+      implementSteps,
+      state.implementStep?.issueId,
+      state.implementStep?.summary,
+      latestSessionPrUrls,
+      state.registeredPullRequests,
+    ],
   )
 
   const nextPending = rows.find((r) => !r.hasDraft)
   const selectedRow = rows.find((r) => r.id === selectedIssueId) || rows[0]
   const draftedCount = rows.filter((r) => r.hasDraft).length
   const selectedHasDraft = Boolean(selectedRow?.hasDraft)
+  const selectedPrUrls = useMemo(() => {
+    if (!selectedRow) return [] as string[]
+    if (selectedRow.id === state.implementStep?.issueId) {
+      return mergePrUrls(selectedRow.prUrls, latestSessionPrUrls)
+    }
+    return selectedRow.prUrls
+  }, [selectedRow, state.implementStep?.issueId, latestSessionPrUrls])
 
   const runImplement = useCallback(
     async (issueId: string) => {
@@ -225,26 +364,41 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         setPrs(draftPrs)
         const impl = res.implementStep
         const resolvedIssue = impl?.issueId || res.issueId || issueId
+        const evidence = res.evidence && typeof res.evidence === 'object'
+          ? res.evidence as Record<string, unknown>
+          : null
+        const skipReason = typeof evidence?.draftPrSkipped === 'string'
+          ? evidence.draftPrSkipped
+          : typeof evidence?.draftPrError === 'string'
+            ? evidence.draftPrError
+            : undefined
         onUpdate({
           implementStep: impl || {
             issueId: resolvedIssue,
             summary: res.message,
           },
+          draftPullRequests: draftPrs,
           sdlcStartIssueId: resolvedIssue,
           implementationAuthorized: true,
           scopeOverlays: res.overlayFiles || state.scopeOverlays || [],
           nextSdlcCommand: res.nextCommand || '/qa-validation',
         })
         setSelectedIssueId(resolvedIssue)
-        setMessage(
-          draftPrs.length
-            ? `${shortStoryLabel(resolvedIssue)} drafted · ${draftPrs.length} PR(s) opened`
-            : `${shortStoryLabel(resolvedIssue)} drafted`,
-        )
+        if (draftPrs.length) {
+          setError(null)
+          setMessage(`${shortStoryLabel(resolvedIssue)} drafted · ${draftPrs.length} PR(s) opened`)
+        } else {
+          setMessage(null)
+          setError(draftedSkipMessage(skipReason))
+        }
         await refreshShipProgress()
         try {
           const snap = await fetchCanonicalSnapshot(state.projectId)
-          onUpdate(patchFromCanonicalSnapshot(snap))
+          onUpdate(patchFromCanonicalSnapshot(snap, {
+            ...state,
+            shipSubstage: 'implementation',
+            gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
+          }))
         } catch {
           /* best-effort */
         }
@@ -261,7 +415,6 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   const selectStory = (id: string) => {
     setSelectedIssueId(id)
     onUpdate({ sdlcStartIssueId: id })
-    setPrs([])
   }
 
   return (
@@ -273,7 +426,19 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         <p className="status-banner info">Finish Workspace first, then run stories here.</p>
       ) : null}
       {error ? <p className="status-banner error">{error}</p> : null}
-      {message && !error ? <p className="status-banner success">{message}</p> : null}
+      {message && !error ? (
+        <p className="status-banner success">
+          {message}
+          {selectedPrUrls[0] ? (
+            <>
+              {' · '}
+              <a href={selectedPrUrls[0]} target="_blank" rel="noreferrer">
+                Open PR
+              </a>
+            </>
+          ) : null}
+        </p>
+      ) : null}
 
       <section className="card shape-section implement-queue-card">
         <div className="implement-queue-card__meta">
@@ -292,6 +457,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
             {rows.map((row) => {
               const isSelected = row.id === selectedIssueId
               const isBusy = busy && busyIssueId === row.id
+              const draftPrUrl = row.prUrls[0]
               return (
                 <li
                   key={row.id}
@@ -310,18 +476,48 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
                       <code className="implement-story-queue__id">{shortStoryLabel(row.id)}</code>
                       <span className="implement-story-queue__title">{row.title}</span>
                     </span>
-                    <span className={`implement-story-queue__badge is-${row.hasDraft ? 'drafted' : isSelected ? 'selected' : 'pending'}`}>
-                      {row.hasDraft ? 'Drafted' : isSelected ? 'Selected' : 'Pending'}
-                    </span>
                   </button>
+                  {row.hasDraft && draftPrUrl ? (
+                    <a
+                      className="implement-story-queue__badge is-drafted is-link"
+                      href={draftPrUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Open draft PR on GitHub"
+                    >
+                      Drafted
+                    </a>
+                  ) : row.hasDraft ? (
+                    <button
+                      type="button"
+                      className="implement-story-queue__badge is-drafted is-link"
+                      title="No PR URL — click for details"
+                      onClick={() => {
+                        setMessage(null)
+                        setError(draftedSkipMessage(row.skipReason))
+                      }}
+                    >
+                      Drafted
+                    </button>
+                  ) : (
+                    <span className={`implement-story-queue__badge is-${isSelected ? 'selected' : 'pending'}`}>
+                      {isSelected ? 'Selected' : 'Pending'}
+                    </span>
+                  )}
                   <button
                     type="button"
-                    className="implement-story-queue__action"
+                    className={`implement-story-queue__action${row.hasDraft ? ' is-rerun' : ' is-implement'}`}
                     disabled={busy || !readyForAgent || !workspaceReady}
                     onClick={() => void runImplement(row.id)}
                   >
-                    {isBusy ? <Loader2 className="spin" size={14} /> : <Play size={14} />}
-                    {row.hasDraft ? 'Re-run' : 'Implement'}
+                    {isBusy ? (
+                      <Loader2 className="spin" size={15} aria-hidden />
+                    ) : row.hasDraft ? (
+                      <RefreshCw size={15} aria-hidden />
+                    ) : (
+                      <Play size={15} aria-hidden />
+                    )}
+                    <span>{row.hasDraft ? 'Re-run' : 'Implement'}</span>
                   </button>
                 </li>
               )
@@ -331,7 +527,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
           <p className="muted small">Add stories in Scope &amp; tickets first.</p>
         )}
 
-        {selectedRow?.hasDraft && (selectedRow.lastSummary || prs.length > 0 || (state.implementStep?.issueId === selectedRow.id && state.implementStep?.notes?.length)) ? (
+        {selectedRow?.hasDraft && (selectedRow.lastSummary || selectedPrUrls.length > 0 || (state.implementStep?.issueId === selectedRow.id && state.implementStep?.notes?.length)) ? (
           <div className="implement-result">
             {selectedRow.lastSummary || (state.implementStep?.issueId === selectedRow.id ? state.implementStep?.summary : null) ? (
               <p className="implement-result__summary">
@@ -339,17 +535,13 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
                   || (state.implementStep?.issueId === selectedRow.id ? state.implementStep?.summary : null)}
               </p>
             ) : null}
-            {prs.length > 0 ? (
+            {selectedPrUrls.length > 0 ? (
               <ul className="implement-result__prs">
-                {prs.map((pr) => (
-                  <li key={`${pr.owner}/${pr.repo}/${pr.number}`}>
-                    {pr.url ? (
-                      <a href={pr.url} target="_blank" rel="noreferrer">
-                        Draft PR #{pr.number}
-                      </a>
-                    ) : (
-                      <span>{pr.branch}</span>
-                    )}
+                {selectedPrUrls.map((url, index) => (
+                  <li key={url}>
+                    <a href={url} target="_blank" rel="noreferrer">
+                      Draft PR{selectedPrUrls.length > 1 ? ` ${index + 1}` : ''}
+                    </a>
                   </li>
                 ))}
               </ul>
@@ -367,8 +559,12 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
               disabled={busy || !readyForAgent || !workspaceReady}
               onClick={() => void runImplement(nextPending.id)}
             >
-              {busy && busyIssueId === nextPending.id ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-              Next pending · {shortStoryLabel(nextPending.id)}
+              {busy && busyIssueId === nextPending.id ? (
+                <Loader2 className="spin" size={16} aria-hidden />
+              ) : (
+                <Play size={16} aria-hidden />
+              )}
+              <span>Next pending · {shortStoryLabel(nextPending.id)}</span>
             </button>
           ) : selectedIssueId ? (
             <button
@@ -377,8 +573,14 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
               disabled={busy || !readyForAgent || !workspaceReady}
               onClick={() => void runImplement(selectedIssueId)}
             >
-              {busy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-              {selectedHasDraft ? 'Re-run selected' : 'Implement selected'}
+              {busy ? (
+                <Loader2 className="spin" size={16} aria-hidden />
+              ) : selectedHasDraft ? (
+                <RefreshCw size={16} aria-hidden />
+              ) : (
+                <Play size={16} aria-hidden />
+              )}
+              <span>{selectedHasDraft ? 'Re-run selected' : 'Implement selected'}</span>
             </button>
           ) : null}
           {selectedHasDraft && onContinueToReview ? (
