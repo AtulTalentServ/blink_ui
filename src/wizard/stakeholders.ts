@@ -7,20 +7,20 @@ export interface StakeholderRoleDef {
 
 /** Local copy of blink-backend/src/main/resources/stakeholders.yaml (used if the API is unreachable). */
 export const STAKEHOLDER_ROLES: StakeholderRoleDef[] = [
-  { id: 'product_owner', label: 'Product Owner', defaultName: 'Rohit Naik', defaultEmail: 'rohit.naik@talentserv.co.in' },
-  { id: 'business_analyst', label: 'Business Analyst', defaultName: 'Rohit Naik', defaultEmail: 'rohit.naik@talentserv.co.in' },
+  { id: 'product_owner', label: 'Product Owner' },
+  { id: 'business_analyst', label: 'Business Analyst' },
   { id: 'ux_designer', label: 'UX Designer', defaultName: 'Riya Bajpai', defaultEmail: 'riya.bajpai@talentserv.co.in' },
-  { id: 'platform_architect', label: 'Platform Architect', defaultName: 'Atul Maurya', defaultEmail: 'atul.maurya@talentserv.co.in' },
-  { id: 'tech_lead', label: 'Tech Lead', defaultName: 'Atul Maurya', defaultEmail: 'atul.maurya@talentserv.co.in' },
+  { id: 'platform_architect', label: 'Platform Architect' },
+  { id: 'tech_lead', label: 'Tech Lead' },
   { id: 'backend_developer', label: 'Backend Developer', defaultName: 'Nisha Dhore', defaultEmail: 'nisha.dhore@talentserv.co.in' },
   { id: 'frontend_developer', label: 'Frontend Developer', defaultName: 'Pradnya Gajarmal', defaultEmail: 'pradnya.gajarmal@talentserv.co.in' },
   { id: 'dba', label: 'DBA', defaultName: 'Ashwin Kumar', defaultEmail: 'ashwin.kumar@talentserv.co.in' },
-  { id: 'sre', label: 'SRE', defaultName: 'Atul Maurya', defaultEmail: 'atul.maurya@talentserv.co.in' },
-  { id: 'qa_lead', label: 'QA Lead', defaultName: 'Atul Maurya', defaultEmail: 'atul.maurya@talentserv.co.in' },
-  { id: 'qa_engineer', label: 'QA Engineer', defaultName: 'Atul Maurya', defaultEmail: 'atul.maurya@talentserv.co.in' },
+  { id: 'sre', label: 'SRE' },
+  { id: 'qa_lead', label: 'QA Lead' },
+  { id: 'qa_engineer', label: 'QA Engineer' },
   { id: 'security_champion', label: 'Security Champion', defaultName: 'Riya Bajpai', defaultEmail: 'riya.bajpai@talentserv.co.in' },
-  { id: 'compliance_approver', label: 'Compliance Approver', defaultName: 'Atul Maurya', defaultEmail: 'atul.maurya@talentserv.co.in' },
-  { id: 'release_approver', label: 'Release Approver', defaultName: 'Atul Maurya', defaultEmail: 'atul.maurya@talentserv.co.in' },
+  { id: 'compliance_approver', label: 'Compliance Approver' },
+  { id: 'release_approver', label: 'Release Approver' },
 ]
 
 export function assignmentsFromRoles(roles: StakeholderRoleDef[]) {
