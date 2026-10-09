@@ -2181,6 +2181,7 @@ export default function App() {
       }
     } catch (e) {
       advanceStep('package', 'error')
+      setKitResultOpen(false)
       setStatus({ type: 'error', message: e instanceof Error ? e.message : 'Generation failed.' })
     } finally {
       setLoading(false)
@@ -2391,6 +2392,7 @@ export default function App() {
           state={state}
           onNavigate={(s) => {
             setStatus(null)
+            setKitResultOpen(false)
             goToStep(s)
           }}
         />

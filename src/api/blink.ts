@@ -2030,6 +2030,7 @@ export async function downloadWorkspace(options: {
   if (hints?.jiraCloudId?.trim()) form.append('mcpJiraCloudId', hints.jiraCloudId.trim())
   const url = apiUrl(`/projects/${options.projectId}/download`)
   console.info(`[blink] POST ${url}`)
+  pauseAutosave(180_000)
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 180_000)
   try {
