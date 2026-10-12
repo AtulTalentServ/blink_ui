@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
-import { downloadWorkspace, fetchWorkspaceStatus, isNotProjectOwnerError, isAutosavePaused, rehomeProject, saveProject, clarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
+import { downloadWorkspace, mcpProvidersFromIntegrations, fetchWorkspaceStatus, isNotProjectOwnerError, isAutosavePaused, pauseAutosave, rehomeProject, saveProject, clarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
@@ -2015,6 +2015,8 @@ export default function App() {
     setLoading(true)
     setStatus(null)
     const start = Date.now()
+    pauseAutosave(180_000)
+    console.info('[blink] generation start projectId=%s pauseAutosave=180s', state.projectId || '(none)')
     const steps = generationStepDefs(state.ideTool).map((s) => ({ ...s, status: 'pending' as const }))
     const fromIdx = stepIndex(step)
     setCompletedThrough((prev) => Math.max(prev, fromIdx))
@@ -2040,10 +2042,12 @@ export default function App() {
       advanceStep('package', 'running')
       let projectId = state.projectId
       if (!projectId) {
+        console.info('[blink] generation persistProject before download')
         const saved = await persistProject()
         projectId = saved.id
         scheduleStakeholderGovernance(saved.id)
       }
+      console.info('[blink] generation package POST download projectId=%s', projectId)
       const repositories = (
         state.repositoriesTouched
           ? state.repositories
@@ -2126,7 +2130,7 @@ export default function App() {
               spaceKey,
             })),
         },
-        mcpProviders: connected.map((item) => item.id),
+        mcpProviders: mcpProvidersFromIntegrations(connected.map((item) => item.id)),
         mcpSiteHints: {
           jiraUrl: jira?.baseUrl,
           jiraEmail: jira?.email,
@@ -2150,6 +2154,7 @@ export default function App() {
       }
 
       advanceStep('package', 'done')
+      console.info('[blink] generation package ok elapsed=%sms files=%s folder=%s', Date.now() - start, String(fileCount), folderStatus)
       downloadBlob(blob, filename)
       const fallbackStructure = buildDownloadStructure(repositories)
       patch({
@@ -2180,6 +2185,7 @@ export default function App() {
         setFolderPrep('ready')
       }
     } catch (e) {
+      console.info('[blink] generation failed elapsed=%sms err=%s', Date.now() - start, e instanceof Error ? e.message : String(e))
       advanceStep('package', 'error')
       setKitResultOpen(false)
       setStatus({ type: 'error', message: e instanceof Error ? e.message : 'Generation failed.' })

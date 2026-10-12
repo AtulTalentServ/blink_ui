@@ -16,6 +16,7 @@ import {
   Folder,
   GitBranch,
   Layers,
+  Loader2,
   Monitor,
   Network,
   Plus,
@@ -65,7 +66,11 @@ import {
 import {
   canonicalRepositoryStructure,
   nextTopologyConfirmation,
+  shapeFingerprint,
   shapeRequirementText,
+  shouldAutoAcknowledgeShape,
+  shouldAutoConfirmRepoTechnologies,
+  stacksReadyForWorkPlan,
   topologyConfirmer,
   topologyRoster,
 } from '../wizard/shape'
@@ -850,12 +855,18 @@ export function RepositoriesScreen({
   )
 }
 
+const autoTechConfirmed = new Set<string>()
+const autoShapeAcked = new Set<string>()
+
 export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
   const shape = shapeFrom(state)
   const repositories = state.repositories || []
   const techRows = state.repoTechnologies || []
   const [techBusy, setTechBusy] = useState(false)
   const [techError, setTechError] = useState<string | null>(null)
+  const autoConfirm = shouldAutoConfirmRepoTechnologies(state)
+  const autoAck = shouldAutoAcknowledgeShape(state)
+  const setupReady = stacksReadyForWorkPlan(state) && Boolean(state.shapeAcknowledged)
 
   useEffect(() => {
     const missing = repositories.filter((repo) => !techRows.some((t) => t.repoId === repo.id))
@@ -882,6 +893,39 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
       ),
     })
   }
+
+  const confirmRecommendations = useCallback(async () => {
+    const nextRows = techRows.map((t) =>
+      t.status === 'recommendation' ? { ...t, status: 'confirmed' as const } : t,
+    )
+    const projectId = state.projectId
+    const topologyConfirmation = nextTopologyConfirmation(state, { repoTechnologies: nextRows })
+    onUpdate({
+      repoTechnologies: nextRows,
+      ...(topologyConfirmation ? { topologyConfirmation } : {}),
+    })
+    if (!projectId) return
+    pauseAutosave(120_000)
+    void confirmAllRepoTechnologies(projectId, state.canonicalRevision ?? undefined)
+      .then((canonicalPatch) => {
+        if (Object.keys(canonicalPatch).length) onUpdate(canonicalPatch)
+      })
+      .catch(() => undefined)
+    void syncCanonicalWizardDraft(projectId)
+      .then((synced) => onUpdate(patchFromCanonicalSnapshot(synced, state)))
+      .catch(() => undefined)
+    if (topologyConfirmation) {
+      void confirmProjectTopology(projectId, {
+        projectName: state.projectName,
+        requirementText: shapeRequirementText(state),
+        repositoryModel: state.repositoryModel,
+        confirmedBy: topologyConfirmation.confirmedBy,
+        evidenceRef: topologyConfirmation.evidenceRef,
+        repositories: topologyConfirmation.roster,
+        repoTechnologies: nextRows,
+      }).catch(() => undefined)
+    }
+  }, [onUpdate, state, techRows])
 
   const confirmAll = async () => {
     const nextRows = techRows.map((t) =>
@@ -923,19 +967,52 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     }
   }
 
+  useEffect(() => {
+    if (!autoConfirm) return
+    const key = `${state.projectId || 'local'}:tech:${techRows.map((row) => row.repoId).join(',')}`
+    if (autoTechConfirmed.has(key)) return
+    autoTechConfirmed.add(key)
+    void confirmRecommendations()
+  }, [autoConfirm, confirmRecommendations, state.projectId, techRows])
+
+  useEffect(() => {
+    if (!autoAck) return
+    const key = `${state.projectId || 'local'}:shape:${shapeFingerprint(state)}`
+    if (autoShapeAcked.has(key)) return
+    autoShapeAcked.add(key)
+    const patch = applyShapeAcknowledgement(state)
+    onUpdate(patch)
+    const projectId = state.projectId
+    if (!projectId) return
+    void persistCanonicalGate(
+      projectId,
+      'shape',
+      shapeGateDigest({ ...state, ...patch }),
+      state.canonicalRevision,
+    )
+      .then((canonicalPatch) => onUpdate(canonicalPatch))
+      .catch(() => autoShapeAcked.delete(key))
+  }, [autoAck, onUpdate, state])
+
   const pending = techRows.filter((t) => t.status !== 'confirmed').length
+  const tbdCount = techRows.filter((t) => t.status === 'tbd').length
 
   return (
     <div className="screen shape-screen">
       <div className="screen-header screen-header-row">
         <div>
           <h2>Technology</h2>
-          <p>Confirm the stack for each repository.</p>
+          <p>Stacks come from Project Shape. Suggested ones lock automatically.</p>
         </div>
-        {pending > 0 ? (
+        {tbdCount > 0 ? (
           <button type="button" className="primary-btn" disabled={techBusy} onClick={() => void confirmAll()}>
             {techBusy ? 'Confirming…' : `Confirm all (${pending})`}
           </button>
+        ) : pending > 0 ? (
+          <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <Loader2 className="spin" size={16} />
+            Confirming stacks…
+          </p>
         ) : techRows.length > 0 ? (
           <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
             <CheckCircle2 size={16} className="check-green" />
@@ -1017,39 +1094,40 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
       )}
 
       {techRows.length > 0 ? (
-        <section className="card shape-section" style={{ marginTop: '1rem' }}>
-          <div className="shape-section-head">
-            <h3 className="card-title">Setup review</h3>
-            <span className="shape-section-meta">Required before Work plan</span>
+        <section
+          className={`auto-run-status${setupReady ? ' is-done' : ''}${tbdCount ? ' is-error' : ''}${autoConfirm || autoAck ? ' is-running' : ''}`}
+          style={{ marginTop: '1rem' }}
+        >
+          <div className="auto-run-status__icon" aria-hidden="true">
+            {autoConfirm || autoAck ? (
+              <Loader2 className="spin" size={18} />
+            ) : setupReady ? (
+              <CheckCircle2 size={18} />
+            ) : (
+              <Cpu size={18} />
+            )}
           </div>
-          <p className="muted">
-            Topology, repositories, and stacks below are what classify / spec / technical-plan will
-            use. Changing them later clears the work plan, not scope or grooming.
-          </p>
-          <label className="checkbox-option" style={{ marginTop: '0.75rem' }}>
-            <input
-              type="checkbox"
-              checked={Boolean(state.shapeAcknowledged)}
-              onChange={(e) => {
-                if (!e.target.checked) {
-                  onUpdate({ shapeAcknowledged: false, shapeDigest: null })
-                  return
-                }
-                const patch = applyShapeAcknowledgement(state)
-                onUpdate(patch)
-                const projectId = state.projectId
-                if (projectId) {
-                  void persistCanonicalGate(
-                    projectId,
-                    'shape',
-                    shapeGateDigest({ ...state, ...patch }),
-                    state.canonicalRevision,
-                  ).then((canonicalPatch) => onUpdate(canonicalPatch))
-                }
-              }}
-            />
-            I have reviewed this setup and it is ready for the work plan.
-          </label>
+          <div className="auto-run-status__copy">
+            {setupReady ? (
+              <>
+                <strong>Setup locked for Work plan</strong>
+                <p>
+                  Topology, repositories, and stacks are what classify / spec / technical-plan will use.
+                  Changing them later clears the work plan, not scope or grooming. Continue to Work plan.
+                </p>
+              </>
+            ) : tbdCount > 0 ? (
+              <>
+                <strong>Resolve TBD stacks</strong>
+                <p>Fill the remaining TBD stack fields, then Blink locks this setup automatically.</p>
+              </>
+            ) : (
+              <>
+                <strong>{autoConfirm ? 'Confirming stacks…' : 'Locking setup…'}</strong>
+                <p>Suggested stacks and setup review lock in the background. Nothing to check.</p>
+              </>
+            )}
+          </div>
         </section>
       ) : null}
     </div>
