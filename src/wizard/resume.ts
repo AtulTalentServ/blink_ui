@@ -95,6 +95,7 @@ export function serializeWizardState(state: WizardState): WizardState {
   return {
     ...currentState,
     requirementFile: null,
+    jiraCreatedIssues: (state.jiraCreatedIssues || []).filter((item) => item.status !== 'creating'),
     integrations: (state.integrations || []).map((item) => {
       const { token: _token, ...rest } = item
       return rest
@@ -130,6 +131,7 @@ export function restoreWizardState(raw: unknown): WizardState {
       return { ...item, ...rest, token: undefined }
     }),
     wizardLayoutVersion: typeof currentState.wizardLayoutVersion === 'number' ? currentState.wizardLayoutVersion : 0,
+    jiraCreatedIssues: (currentState.jiraCreatedIssues || []).filter((item) => item.status !== 'creating'),
   }
 }
 

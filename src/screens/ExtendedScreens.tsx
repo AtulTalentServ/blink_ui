@@ -38,6 +38,7 @@ import {
   TOPOLOGY_OPTIONS,
   defaultRepositories,
   defaultRepoTechnologies,
+  mergeRecommendedRepoTechnologies,
   repositoriesFromComponents,
   ensurePlatformDefaults,
   githubRepoSlug,
@@ -51,6 +52,7 @@ import {
   isNotProjectOwnerError,
   pauseAutosave,
   proposeProjectShape,
+  recommendRepoTechnologies,
   rehomeProject,
   syncCanonicalWizardDraft,
   type ProjectPayload,
@@ -864,9 +866,16 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
   const techRows = state.repoTechnologies || []
   const [techBusy, setTechBusy] = useState(false)
   const [techError, setTechError] = useState<string | null>(null)
-  const autoConfirm = shouldAutoConfirmRepoTechnologies(state)
+  const [stackReady, setStackReady] = useState(
+    () => techRows.length > 0 && techRows.every((row) => row.status === 'confirmed'),
+  )
+  const autoConfirm = stackReady && shouldAutoConfirmRepoTechnologies(state)
   const autoAck = shouldAutoAcknowledgeShape(state)
   const setupReady = stacksReadyForWorkPlan(state) && Boolean(state.shapeAcknowledged)
+  const techRowsRef = useRef(techRows)
+  techRowsRef.current = techRows
+  const requirementText = shapeRequirementText(state)
+  const stackSuggestKey = `${state.projectId || ''}|${repositories.map((repo) => repo.id).join(',')}|${requirementText}|${state.topology || ''}`
 
   useEffect(() => {
     const missing = repositories.filter((repo) => !techRows.some((t) => t.repoId === repo.id))
@@ -884,6 +893,59 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     state.repositoryModel,
     state.architectureStyle,
     onUpdate,
+  ])
+
+  useEffect(() => {
+    const repos = state.repositories || []
+    if (!repos.length) {
+      setStackReady(true)
+      return
+    }
+    if (techRowsRef.current.length > 0 && techRowsRef.current.every((row) => row.status === 'confirmed')) {
+      setStackReady(true)
+      return
+    }
+    if (!state.projectId) {
+      setStackReady(true)
+      return
+    }
+    let cancelled = false
+    setStackReady(false)
+    setTechBusy(true)
+    setTechError(null)
+    void recommendRepoTechnologies(state.projectId, {
+      projectName: state.projectName,
+      requirementText,
+      topology: state.topology,
+      repositoryModel: state.repositoryModel,
+      architectureStyle: state.architectureStyle,
+      repositories: repos,
+    })
+      .then((rows) => {
+        if (cancelled) return
+        onUpdate({
+          repoTechnologies: mergeRecommendedRepoTechnologies(techRowsRef.current, rows, repos),
+        })
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (cancelled) return
+        setStackReady(true)
+        setTechBusy(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    stackSuggestKey,
+    onUpdate,
+    requirementText,
+    state.architectureStyle,
+    state.projectId,
+    state.projectName,
+    state.repositories,
+    state.repositoryModel,
+    state.topology,
   ])
 
   const updateTech = (repoId: string, field: string, value: string) => {
@@ -1002,9 +1064,14 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
       <div className="screen-header screen-header-row">
         <div>
           <h2>Technology</h2>
-          <p>Stacks come from Project Shape. Suggested ones lock automatically.</p>
+          <p>Stacks are suggested from the requirement via AI-SDLC. Suggested ones lock automatically.</p>
         </div>
-        {tbdCount > 0 ? (
+        {!stackReady ? (
+          <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <Loader2 className="spin" size={16} />
+            Suggesting stacks from the requirement…
+          </p>
+        ) : tbdCount > 0 ? (
           <button type="button" className="primary-btn" disabled={techBusy} onClick={() => void confirmAll()}>
             {techBusy ? 'Confirming…' : `Confirm all (${pending})`}
           </button>

@@ -1,4 +1,4 @@
-import { sanitizeDownloadStructure } from '../wizard/defaults'
+import { sanitizeDownloadStructure, type RepoDefinition, type RepoTechnology } from '../wizard/defaults'
 import type { DesignOption, ProductScopeData, WizardState } from '../wizard/types'
 import { stripExcludedZipFolders } from './stripZipFolders'
 import { loadAuthSession } from '../auth/session'
@@ -347,12 +347,52 @@ export interface BlinkJiraIssueDeleteDto {
   errors: string[]
 }
 
-/** Developer panel: list Blink-marked Jira issues for the connected Blink project. */
+function normalizeBlinkJiraIssues(raw: {
+  ok?: boolean
+  connected?: boolean
+  projectId?: number | null
+  blinkProjectId?: number | null
+  projectKey?: string | null
+  jiraProjectKey?: string | null
+  browseBase?: string | null
+  message?: string | null
+  issues?: Array<{
+    key?: string
+    type?: string
+    issueType?: string
+    summary?: string
+    sourceKind?: string
+    sourceId?: string
+    url?: string
+  }>
+}): BlinkJiraIssueListDto {
+  return {
+    connected: raw.connected ?? raw.ok !== false,
+    blinkProjectId: raw.blinkProjectId ?? raw.projectId ?? null,
+    jiraProjectKey: raw.jiraProjectKey || raw.projectKey || null,
+    browseBase: raw.browseBase || null,
+    issues: (raw.issues || [])
+      .map((row) => ({
+        key: row.key || '',
+        issueType: row.issueType || row.type || '',
+        summary: row.summary || '',
+        sourceKind: row.sourceKind || '',
+        sourceId: row.sourceId || '',
+        url: row.url || '',
+      }))
+      .filter((row) => Boolean(row.key && row.sourceId)),
+    message: raw.message || null,
+  }
+}
+
+/** List Blink-marked Jira issues for the connected Blink project. */
 export async function fetchBlinkJiraIssues(projectId: string): Promise<BlinkJiraIssueListDto> {
-  const url = apiUrl(`/dev/jira/issues?projectId=${encodeURIComponent(projectId)}`)
+  const url = apiUrl(`/integrations/jira/issues?projectId=${encodeURIComponent(projectId)}`)
   const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
   if (!response.ok) throw new Error(await readError(response))
-  return response.json() as Promise<BlinkJiraIssueListDto>
+  return normalizeBlinkJiraIssues(
+    (await response.json()) as Parameters<typeof normalizeBlinkJiraIssues>[0],
+  )
 }
 
 export async function deleteBlinkJiraIssue(projectId: string, issueKey: string): Promise<BlinkJiraIssueDeleteDto> {
@@ -800,6 +840,74 @@ export async function proposeProjectShape(
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error('Shape suggestion timed out. Keep your selections and confirm the structure.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
+function asRepoTechnology(row: unknown): RepoTechnology | null {
+  if (!row || typeof row !== 'object') return null
+  const item = row as Record<string, unknown>
+  const repoId = String(item.repoId || '').trim()
+  if (!repoId) return null
+  const status =
+    item.status === 'confirmed' || item.status === 'tbd' ? item.status : 'recommendation'
+  return {
+    repoId,
+    language: String(item.language || '—'),
+    framework: String(item.framework || '—'),
+    database: String(item.database || '—'),
+    buildTool: String(item.buildTool || '—'),
+    status,
+  }
+}
+
+export async function recommendRepoTechnologies(
+  projectId: string,
+  payload: {
+    projectName?: string
+    requirementText?: string
+    topology?: string
+    repositoryModel?: string
+    architectureStyle?: string
+    repositories?: RepoDefinition[]
+  },
+): Promise<RepoTechnology[]> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 90_000)
+  try {
+    const response = await fetch(apiUrl(`/projects/${projectId}/recommend-technology-stack`), {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({
+        projectId,
+        projectName: payload.projectName,
+        requirementText: payload.requirementText,
+        topology: payload.topology,
+        repositoryModel: payload.repositoryModel,
+        architectureStyle: payload.architectureStyle,
+        repositories: payload.repositories,
+      }),
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(await readError(response))
+    const result = (await response.json()) as Record<string, unknown>
+    const status = String(result.status || '')
+    if (status && status !== 'ok') {
+      const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
+      throw new Error(String(result.message || errors || status))
+    }
+    const rows = Array.isArray(result.repoTechnologies) ? result.repoTechnologies : []
+    const mapped = rows.map(asRepoTechnology).filter((row): row is RepoTechnology => Boolean(row))
+    if (!mapped.length) {
+      throw new Error('Technology recommendation did not include stacks.')
+    }
+    return mapped
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Stack suggestion timed out. Using the default stacks.')
     }
     throw error
   } finally {
@@ -1647,67 +1755,46 @@ export async function streamCreateJiraIssues(
   signal?: AbortSignal,
 ): Promise<CreateJiraIssuesResult> {
   const url = apiUrl('/integrations/jira/issues')
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      ...authHeaders(true),
-      Accept: 'application/json, text/event-stream',
-    },
-    body: JSON.stringify(payload),
-    signal,
+  console.info(`[blink] POST ${url} (stream)`, {
+    projectKey: payload.projectKey,
+    epics: payload.epics?.length,
+    stories: payload.stories?.length,
   })
-  const contentType = response.headers.get('content-type') || ''
-  if (!response.ok) throw new ApiRequestError(await readError(response), response.status)
-  if (!contentType.includes('text/event-stream') || !response.body) {
-    const raw = (await response.json()) as CreateJiraIssuesResult & {
-      created?: Array<JiraCreatedIssueResult & { id?: string; url?: string | null }>
-    }
-    const rows = raw.issues?.length ? raw.issues : raw.created || []
-    return {
-      status: raw.status,
-      message: raw.message,
-      errors: raw.errors,
-      issues: rows.map((row) => ({
-        ...row,
-        sourceId: row.sourceId || row.id,
-        jiraUrl: row.jiraUrl || row.url || null,
-      })),
-    }
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', onAbort, { once: true })
   }
-
-  let result: CreateJiraIssuesResult = { status: 'ok', message: '', issues: [] }
-  await readSse(response.body, (event, data) => {
-    let parsed: Record<string, unknown> = {}
+  const timer = window.setTimeout(() => controller.abort(), 300_000)
+  try {
+    let response: Response
     try {
-      parsed = JSON.parse(data) as Record<string, unknown>
-    } catch {
-      return
-    }
-    if (event === 'start') {
-      const total = typeof parsed.total === 'number' ? parsed.total : 0
-      const projectKey = typeof parsed.projectKey === 'string' ? parsed.projectKey : ''
-      handlers.onStart?.(total, projectKey)
-      return
-    }
-    if (event === 'item') {
-      const row = parsed as JiraCreatedIssueResult & { id?: string; url?: string | null }
-      const issue = {
-        ...row,
-        sourceId: row.sourceId || row.id,
-        jiraUrl: row.jiraUrl || row.url || null,
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          ...authHeaders(true),
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error('Creating Jira tickets timed out. Check the API logs and retry.')
       }
-      result.issues = [...result.issues, issue]
-      handlers.onItem?.(issue)
-      return
+      throw error
     }
-    if (event === 'done') {
-      const raw = parsed as unknown as CreateJiraIssuesResult & {
+    const contentType = response.headers.get('content-type') || ''
+    if (!response.ok) throw new ApiRequestError(await readError(response), response.status)
+    if (!contentType.includes('text/event-stream') || !response.body) {
+      const raw = (await response.json()) as CreateJiraIssuesResult & {
         created?: Array<JiraCreatedIssueResult & { id?: string; url?: string | null }>
       }
-      const rows = raw.issues?.length ? raw.issues : raw.created || result.issues
-      result = {
-        status: raw.status || result.status,
-        message: raw.message || result.message,
+      const rows = raw.issues?.length ? raw.issues : raw.created || []
+      return {
+        status: raw.status,
+        message: raw.message,
         errors: raw.errors,
         issues: rows.map((row) => ({
           ...row,
@@ -1716,8 +1803,63 @@ export async function streamCreateJiraIssues(
         })),
       }
     }
-  })
-  return result
+
+    let result: CreateJiraIssuesResult = { status: 'ok', message: '', issues: [] }
+    await readSse(
+      response.body,
+      (event, data) => {
+        let parsed: Record<string, unknown> = {}
+        try {
+          parsed = JSON.parse(data) as Record<string, unknown>
+        } catch {
+          return
+        }
+        if (event === 'start') {
+          const total = typeof parsed.total === 'number' ? parsed.total : 0
+          const projectKey = typeof parsed.projectKey === 'string' ? parsed.projectKey : ''
+          handlers.onStart?.(total, projectKey)
+          return
+        }
+        if (event === 'item') {
+          const row = parsed as JiraCreatedIssueResult & { id?: string; url?: string | null }
+          const issue = {
+            ...row,
+            sourceId: row.sourceId || row.id,
+            jiraUrl: row.jiraUrl || row.url || null,
+          }
+          result.issues = [...result.issues, issue]
+          handlers.onItem?.(issue)
+          return
+        }
+        if (event === 'done') {
+          const raw = parsed as unknown as CreateJiraIssuesResult & {
+            created?: Array<JiraCreatedIssueResult & { id?: string; url?: string | null }>
+          }
+          const rows = raw.issues?.length ? raw.issues : raw.created || result.issues
+          result = {
+            status: raw.status || result.status,
+            message: raw.message || result.message,
+            errors: raw.errors,
+            issues: rows.map((row) => ({
+              ...row,
+              sourceId: row.sourceId || row.id,
+              jiraUrl: row.jiraUrl || row.url || null,
+            })),
+          }
+        }
+      },
+      controller.signal,
+    )
+    return result
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Creating Jira tickets timed out. Check the API logs and retry.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  }
 }
 
 export interface CreateJiraCommentPayload {

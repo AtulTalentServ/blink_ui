@@ -325,19 +325,7 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        className="chat-fab"
-        onClick={() => onOpenChange(true)}
-        title="Open Blink Chat (Ctrl+L)"
-        aria-label="Open Blink Chat"
-      >
-        <MessageSquare size={18} />
-      </button>
-    )
-  }
+  if (!open) return null
 
   return (
     <aside className="chat-panel" aria-label="Blink Chat">

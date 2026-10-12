@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, ChevronRight, ExternalLink, Layers, Loader2, RefreshCw, Ticket } from 'lucide-react'
 import {
+  fetchBlinkJiraIssues,
   fetchJiraIssueStatuses,
   ingestFigmaDesign,
+  pauseAutosave,
   saveFigmaDesign,
   transitionJiraIssue,
   type JiraIssueStatusItem,
@@ -13,8 +15,13 @@ import {
   beginJiraCreate,
   createdTicketsOnScreen,
   createJiraIssuesFromState,
+  failCreatingJiraIssues,
   endJiraCreate,
+  isJiraCreateBusy,
   isJiraReady,
+  isLostJiraCreateKeys,
+  issuesFromBlinkJiraList,
+  JIRA_CREATE_KEYS_LOST,
   jiraConnection,
   markTicketsPipelineBusy,
   mergeJiraCreatedIssues,
@@ -87,6 +94,13 @@ function TicketBadge({
   }
 
   if (created.status === 'failed') {
+    if (isLostJiraCreateKeys(created)) {
+      return (
+        <span className="jira-ticket-badge jira-ticket-badge--pending" title={created.message}>
+          Looking up Jira…
+        </span>
+      )
+    }
     return (
       <span className="jira-ticket-badge jira-ticket-badge--failed" title={created.message || 'Create failed'}>
         Failed
@@ -357,24 +371,28 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
     }
     setCreatingIssues(true)
     setCreateError(null)
+    pauseAutosave(180_000)
+    const latestCreated = { current: state.jiraCreatedIssues || [] }
     const placeholders = [...epics, ...stories]
       .filter((item) => item.id && createdBySource.get(item.id)?.status !== 'created')
       .map((item) => ({ sourceId: item.id, status: 'creating' as const }))
     if (placeholders.length) {
-      onUpdate({ jiraCreatedIssues: mergeJiraCreatedIssues(state.jiraCreatedIssues, placeholders) })
+      latestCreated.current = mergeJiraCreatedIssues(latestCreated.current, placeholders)
+      onUpdate({ jiraCreatedIssues: latestCreated.current })
     }
     try {
       const result = await createJiraIssuesFromState(state, {
         pendingOnly: true,
         onStart: () => undefined,
         onItem: (issue) => {
-          onUpdate({
-            jiraCreatedIssues: mergeJiraCreatedIssues(state.jiraCreatedIssues, [issue, ...placeholders]),
-          })
+          latestCreated.current = mergeJiraCreatedIssues(latestCreated.current, [issue])
+          onUpdate({ jiraCreatedIssues: latestCreated.current })
         },
       })
-      const mergedIssues = mergeJiraCreatedIssues(state.jiraCreatedIssues, result.issues)
+      const mergedIssues = mergeJiraCreatedIssues(latestCreated.current, result.issues)
+      latestCreated.current = mergedIssues
       onUpdate({ jiraCreatedIssues: mergedIssues })
+      pauseAutosave(2_000)
       if (result.status === 'error') {
         setCreateError(result.message || 'Jira did not create the issues.')
         return
@@ -417,12 +435,45 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
         onUpdate({ figmaDesign: { ...state.figmaDesign, screens: linked } })
       }
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Could not create Jira issues.')
+      const message = err instanceof Error ? err.message : 'Could not create Jira issues.'
+      const lost = /timed out|failed to fetch|network|502|proxy/i.test(message)
+      latestCreated.current = failCreatingJiraIssues(
+        latestCreated.current,
+        lost ? JIRA_CREATE_KEYS_LOST : message,
+      )
+      onUpdate({ jiraCreatedIssues: latestCreated.current })
+      setCreateError(lost ? JIRA_CREATE_KEYS_LOST : message)
     } finally {
       setCreatingIssues(false)
       endJiraCreate()
     }
   }, [createdBySource, epics, onUpdate, state, stories])
+
+  const hydratedSig = useRef('')
+  useEffect(() => {
+    if (!state.projectId || !jiraReady || creatingIssues || isJiraCreateBusy()) return
+    const total = epics.length + stories.length
+    if (total === 0 || createdOk >= total) return
+    const sig = `${state.projectId}:${total}`
+    if (hydratedSig.current === sig) return
+    hydratedSig.current = sig
+    const projectId = state.projectId
+    console.info('[blink] jira hydrate start projectId=%s pending=%s', projectId, total - createdOk)
+    void fetchBlinkJiraIssues(projectId)
+      .then((listed) => {
+        const recovered = issuesFromBlinkJiraList(listed.issues)
+        console.info('[blink] jira hydrate listed=%s matched=%s', listed.issues.length, recovered.length)
+        if (!recovered.length) {
+          setCreateError(listed.message || JIRA_CREATE_KEYS_LOST)
+          return
+        }
+        onUpdate({ jiraCreatedIssues: mergeJiraCreatedIssues(state.jiraCreatedIssues, recovered) })
+        setCreateError(null)
+      })
+      .catch((err) => {
+        setCreateError(err instanceof Error ? err.message : JIRA_CREATE_KEYS_LOST)
+      })
+  }, [createdOk, creatingIssues, epics.length, jiraReady, onUpdate, state.jiraCreatedIssues, state.projectId, stories.length])
 
   useEffect(() => {
     if (!state.projectId || !jiraReady || !issueKeySig) {
