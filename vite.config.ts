@@ -35,9 +35,11 @@ function proxyTimeoutMs(url: string | undefined): number {
     path.includes('/classify-work') ||
     path.includes('/create-spec') ||
     path.includes('/technical-plan') ||
-    path.includes('/chat')
+    path.includes('/chat') ||
+    path.includes('/jira/issues') ||
+    path.includes('/integrations/jira')
   ) {
-    return 200_000
+    return 300_000
   }
   return 60_000
 }

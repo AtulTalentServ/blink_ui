@@ -43,11 +43,14 @@ function avatarTone(name: string): number {
 }
 
 function toRoleDef(role: StakeholderRoleDef): StakeholderRoleDef {
+  const local = STAKEHOLDER_ROLES.find((item) => item.id === role.id)
+  const defaultName = role.defaultName?.trim() || local?.defaultName
+  const defaultEmail = role.defaultEmail?.trim() || local?.defaultEmail
   return {
     id: role.id,
     label: role.label,
-    defaultName: role.defaultName,
-    defaultEmail: role.defaultEmail,
+    defaultName,
+    defaultEmail,
   }
 }
 
@@ -60,6 +63,26 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
   const assignmentsRef = useRef(state.stakeholderAssignments)
   catalogLoadedRef.current = state.stakeholdersCatalogLoaded
   assignmentsRef.current = state.stakeholderAssignments
+
+  const applyNamedAssignments = (catalog: StakeholderRoleDef[]) => {
+    const seeded = assignmentsFromRoles(catalog)
+    if (dirtyRef.current) {
+      if (!catalogLoadedRef.current) onUpdate({ stakeholdersCatalogLoaded: true })
+      return
+    }
+    const current = assignmentsRef.current
+    const pruned = current.filter((row) => row.personName.trim())
+    if (!catalogLoadedRef.current) {
+      onUpdate({ stakeholderAssignments: seeded, stakeholdersCatalogLoaded: true })
+      return
+    }
+    if (pruned.length !== current.length) {
+      onUpdate({
+        stakeholderAssignments: pruned.length ? pruned : seeded,
+        stakeholdersCatalogLoaded: true,
+      })
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -75,28 +98,15 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
             defaultEmail: role.defaultEmail,
           }),
         )
-        setRoles(mapped.length ? mapped : STAKEHOLDER_ROLES)
+        const catalog = mapped.length ? mapped : STAKEHOLDER_ROLES
+        setRoles(catalog)
         setCatalogQuiet(null)
-        if (!dirtyRef.current && !catalogLoadedRef.current) {
-          onUpdate({
-            stakeholderAssignments: assignmentsFromRoles(mapped.length ? mapped : STAKEHOLDER_ROLES),
-            stakeholdersCatalogLoaded: true,
-          })
-        } else if (!catalogLoadedRef.current) {
-          onUpdate({ stakeholdersCatalogLoaded: true })
-        }
+        applyNamedAssignments(catalog)
       } catch {
         if (cancelled) return
         setRoles(STAKEHOLDER_ROLES)
         setCatalogQuiet(null)
-        const catalogIds = new Set(STAKEHOLDER_ROLES.map((role) => role.id))
-        const stale = assignmentsRef.current.some((row) => !catalogIds.has(row.roleId))
-        if (!dirtyRef.current && (stale || assignmentsRef.current.length === 0) && !catalogLoadedRef.current) {
-          onUpdate({
-            stakeholderAssignments: assignmentsFromRoles(STAKEHOLDER_ROLES),
-            stakeholdersCatalogLoaded: true,
-          })
-        }
+        applyNamedAssignments(STAKEHOLDER_ROLES)
       }
     })()
     return () => {

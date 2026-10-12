@@ -8,11 +8,12 @@ export function DeveloperWindowHost() {
     const onKey = (event: KeyboardEvent) => {
       if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd') {
         event.preventDefault()
+        event.stopPropagation()
         openDeveloperPopup()
       }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
   return null

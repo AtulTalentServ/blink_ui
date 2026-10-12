@@ -24,12 +24,14 @@ export const STAKEHOLDER_ROLES: StakeholderRoleDef[] = [
 ]
 
 export function assignmentsFromRoles(roles: StakeholderRoleDef[]) {
-  return roles.map((role) => ({
-    id: `sa-${role.id}`,
-    roleId: role.id,
-    personName: role.defaultName ?? '',
-    personEmail: role.defaultEmail ?? '',
-  }))
+  return roles
+    .filter((role) => Boolean(role.defaultName?.trim()))
+    .map((role) => ({
+      id: `sa-${role.id}`,
+      roleId: role.id,
+      personName: role.defaultName?.trim() ?? '',
+      personEmail: role.defaultEmail?.trim() ?? '',
+    }))
 }
 
 export interface PersonRecord {

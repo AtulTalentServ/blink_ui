@@ -559,6 +559,34 @@ export function defaultRepoTechnologies(
   })
 }
 
+/** Overlay AI-SDLC stack suggestions onto unconfirmed rows; keep confirmed stacks. */
+export function mergeRecommendedRepoTechnologies(
+  current: RepoTechnology[],
+  recommended: RepoTechnology[],
+  repos: RepoDefinition[],
+): RepoTechnology[] {
+  const recById = new Map(recommended.map((row) => [row.repoId, row]))
+  const currentById = new Map(current.map((row) => [row.repoId, row]))
+  return repos.map((repo) => {
+    const existing = currentById.get(repo.id)
+    if (existing?.status === 'confirmed') return existing
+    const next = recById.get(repo.id)
+    if (!next) {
+      return existing ?? defaultRepoTechnologies([repo])[0]
+    }
+    const status =
+      next.status === 'confirmed' || next.status === 'tbd' ? next.status : 'recommendation'
+    return {
+      repoId: repo.id,
+      language: next.language,
+      framework: next.framework,
+      database: next.database,
+      buildTool: next.buildTool,
+      status,
+    }
+  })
+}
+
 export function platformOptionsForCloud(cloudProvider: string): {
   deployment: { id: string; label: string }[]
   iac: { id: string; label: string }[]
