@@ -91,13 +91,23 @@ function stepDone(id: StepId, state: WizardState): boolean {
   }
 }
 
-/** Scope already locked on Requirements — nothing left to pick. */
-export function shouldAutoRunScopeStart(_state: WizardState): boolean {
-  return false
+/** Prevents StrictMode / remount from kicking confirm+/sdlc-start twice. */
+const autoScopeStarted = new Set<string>()
+
+/** Proposed scope is already on screen — lock it and start SDLC without a second click. */
+export function shouldAutoRunScopeStart(state: WizardState): boolean {
+  if (!state.projectId) return false
+  if (!state.groomAcknowledged) return false
+  if (scopeConfirmed(state) && state.sdlcStartIssueId) return false
+  const hasScope = Boolean(state.productScope?.epics?.length || state.productScope?.stories?.length)
+  const digest = state.scopeDigest || state.productScope?.proposalDigest || ''
+  const hasOverlays = (state.scopeOverlays || []).length > 0
+  return hasScope && Boolean(digest) && hasOverlays
 }
 
 const autoPlanDraftStarted = new Set<string>()
 const autoPlanTechStarted = new Set<string>()
+const autoPlanAcked = new Set<string>()
 
 /** Classify + spec have no picker once G-GROOM and shape are already acknowledged. */
 export function shouldAutoRunWorkDraft(state: WizardState): boolean {
@@ -106,11 +116,22 @@ export function shouldAutoRunWorkDraft(state: WizardState): boolean {
   return !specReady(state)
 }
 
-/** /technical-plan has no picker after the human AC checkbox. */
+/** Spec already has acceptance criteria — lock them and run /technical-plan. */
+export function shouldAutoAcknowledgeAcceptanceCriteria(state: WizardState): boolean {
+  return specReady(state) && !state.acceptanceCriteriaAcknowledged
+}
+
+/** /technical-plan has no picker once the spec (and its AC) exists. */
 export function shouldAutoRunTechnicalPlan(state: WizardState): boolean {
   if (!state.projectId) return false
-  if (!specReady(state) || !state.acceptanceCriteriaAcknowledged) return false
+  if (!specReady(state)) return false
   return !planReady(state)
+}
+
+/** Technical plan is already on screen — lock G-PLAN without a second click. */
+export function shouldAutoAcknowledgePlan(state: WizardState): boolean {
+  if (!planReady(state)) return false
+  return !state.planAcknowledged && !state.shipPlanAcknowledged
 }
 
 function requirementTextOf(state: WizardState): string {
@@ -133,11 +154,12 @@ export function ScopeStartStatus({
 }) {
   const [busy, setBusy] = useState<'confirm' | 'start' | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const auto = shouldAutoRunScopeStart(state)
   const done = scopeConfirmed(state) && Boolean(state.sdlcStartIssueId)
   const canConfirm =
     Boolean(state.productScope?.epics?.length || state.productScope?.stories?.length)
     && (state.scopeOverlays || []).length > 0
-  const waiting = Boolean(state.groomConfirmed) && !done && !canConfirm
+  const waiting = Boolean(state.groomConfirmed) && !auto && !done && !canConfirm
 
   const runAutoScope = useCallback(async () => {
     if (!state.projectId) return
@@ -220,12 +242,23 @@ export function ScopeStartStatus({
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not lock scope and start the SDLC.')
+      if (state.projectId) autoScopeStarted.delete(state.projectId)
     } finally {
       setBusy(null)
     }
   }, [onUpdate, state])
 
-  if (!state.groomConfirmed && !done) return null
+  useEffect(() => {
+    if (!auto || busy || done) return
+    const key = state.projectId
+    if (!key || autoScopeStarted.has(key)) return
+    autoScopeStarted.add(key)
+    void runAutoScope()
+    // Snapshot at trigger; in-flight onUpdate must not restart.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auto, done, state.projectId])
+
+  if (!state.groomConfirmed && !done && !auto) return null
 
   const running = Boolean(busy)
   return (
@@ -246,14 +279,14 @@ export function ScopeStartStatus({
           <>
             <strong>Scope locked · SDLC started</strong>
             <p>
-              {state.sdlcStartIssueId ? `Issue ${state.sdlcStartIssueId}. ` : ''}
-              You can move on to Stakeholder Q&A.
+              {state.sdlcStartIssueId ? `Issue ${state.sdlcStartIssueId} is the first story. ` : ''}
+              Continue to Project Shape.
             </p>
           </>
         ) : running ? (
           <>
             <strong>{busy === 'confirm' ? 'Locking product scope…' : 'Starting the SDLC…'}</strong>
-            <p>Nothing to choose — confirm and <code>/sdlc-start</code> run here.</p>
+            <p>Nothing to choose — confirm and <code>/sdlc-start</code> run in the background.</p>
           </>
         ) : error ? (
           <>
@@ -263,16 +296,16 @@ export function ScopeStartStatus({
         ) : waiting ? (
           <>
             <strong>Waiting for epics and stories</strong>
-            <p>Propose product scope first, then confirm it explicitly as a human gate.</p>
+            <p>Once product scope is proposed, Blink locks it and starts the SDLC automatically.</p>
           </>
         ) : (
           <>
-            <strong>Confirm product scope</strong>
-            <p>Lock scope, then start the SDLC chain — both require your explicit action.</p>
+            <strong>Ready to start</strong>
+            <p>Blink will lock scope and start the SDLC in the background.</p>
           </>
         )}
       </div>
-      {!running && !done && canConfirm ? (
+      {!running && !done && canConfirm && !auto ? (
         <button type="button" className="secondary-btn" onClick={() => void runAutoScope()}>
           {scopeConfirmed(state) && !state.sdlcStartIssueId ? 'Start SDLC' : 'Confirm product scope'}
         </button>
@@ -306,7 +339,7 @@ function blockReason(id: StepId, state: WizardState): string | null {
   if (id === 'plan') {
     if (!specReady(state)) return 'Create the specification before /technical-plan.'
     if (!state.acceptanceCriteriaAcknowledged) {
-      return 'Confirm acceptance criteria before /technical-plan.'
+      return 'Wait for Blink to lock acceptance criteria, then /technical-plan runs.'
     }
   }
   return null
@@ -431,8 +464,10 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
   }, [busy, error, state])
 
   const autoPlanDraft = shouldAutoRunWorkDraft(state)
+  const autoAckAc = shouldAutoAcknowledgeAcceptanceCriteria(state)
   const autoPlanTech = shouldAutoRunTechnicalPlan(state)
-  const autoRun = autoPlanDraft || autoPlanTech
+  const autoAckPlan = shouldAutoAcknowledgePlan(state)
+  const autoRun = autoPlanDraft || autoPlanTech || autoAckAc || autoAckPlan
 
   const acknowledgePlan = useCallback(() => {
     onUpdate({ planAcknowledged: true, shipPlanAcknowledged: true })
@@ -457,16 +492,6 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
       }
     }
   }, [architecture, architectureConfirmed, onUpdate, state])
-
-  const rejectPlan = useCallback(() => {
-    onUpdate({
-      technicalPlan: null,
-      planAcknowledged: false,
-      shipPlanAcknowledged: false,
-    })
-    setLastChange('G-PLAN rejected. /technical-plan will run again after you confirm.')
-    setError(null)
-  }, [onUpdate])
 
   const runAutoWorkDraft = useCallback(async () => {
     if (!state.projectId) return
@@ -522,12 +547,12 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
           technicalPlan: null,
           planAcknowledged: false,
           shipPlanAcknowledged: false,
-          acceptanceCriteriaAcknowledged: false,
+          acceptanceCriteriaAcknowledged: true,
           scopeOverlays: overlays,
           nextSdlcCommand: res.nextCommand || '/technical-plan',
         })
         setLastChange(
-          `Specification drafted via ${WORK_PLAN_STEPS[1].command}: ${res.specification?.title || 'untitled'}. Confirm acceptance criteria next.`,
+          `Specification drafted via ${WORK_PLAN_STEPS[1].command}: ${res.specification?.title || 'untitled'}. Technical plan runs next.`,
         )
       }
     } catch (err) {
@@ -562,7 +587,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
         nextSdlcCommand: res.nextCommand || '/sdlc-next',
       })
       setLastChange(
-        `Technical plan ready via ${WORK_PLAN_STEPS[2].command}: ${(res.technicalPlan?.steps || []).length} step(s). Acknowledge G-PLAN before continuing.`,
+        `Technical plan ready via ${WORK_PLAN_STEPS[2].command}: ${(res.technicalPlan?.steps || []).length} step(s). Locking G-PLAN…`,
       )
     } catch (err) {
       if (state.projectId) autoPlanTechStarted.delete(`tech:${state.projectId}`)
@@ -583,20 +608,37 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
   }, [autoPlanDraft, complete, state.projectId, error])
 
   useEffect(() => {
+    if (!autoAckAc) return
+    onUpdate({ acceptanceCriteriaAcknowledged: true })
+  }, [autoAckAc, onUpdate])
+
+  useEffect(() => {
     if (!autoPlanTech || complete || busy || error) return
     const key = `tech:${state.projectId}`
     if (!state.projectId || autoPlanTechStarted.has(key)) return
     autoPlanTechStarted.add(key)
     void runAutoTechPlan()
-    // Snapshot at trigger; AC check starts this once.
+    // Snapshot at trigger; spec ready starts this once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoPlanTech, complete, state.projectId, error])
+
+  useEffect(() => {
+    if (!planReady(state) && state.projectId) autoPlanAcked.delete(`gplan:${state.projectId}`)
+  }, [hasPlan, state.projectId])
+
+  useEffect(() => {
+    if (!autoAckPlan || busy) return
+    const key = `gplan:${state.projectId}`
+    if (!state.projectId || autoPlanAcked.has(key)) return
+    autoPlanAcked.add(key)
+    acknowledgePlan()
+  }, [acknowledgePlan, autoAckPlan, busy, state.projectId])
 
   return (
     <div className="screen screen-sdlc-plan sdlc-plan">
       <div className="screen-header">
         <h2>Work plan</h2>
-        <p>Agents draft the plan; you confirm acceptance criteria and acknowledge before Ship.</p>
+        <p>Agents draft classify, spec, and technical plan. G-PLAN locks automatically — Continue to Ship.</p>
       </div>
 
       {blockedMsg && !busy ? (
@@ -665,57 +707,26 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
         })}
       </ol>
 
-      {needsAcAck ? (
-        <section className="card shape-section work-plan-gate" style={{ marginTop: '1rem' }}>
-          <div className="sdlc-panel__head">
-            <CheckCircle2 size={18} />
-            <div>
-              <h3>Your turn · Confirm acceptance criteria</h3>
-              <p className="muted">Required before the technical-plan agent runs.</p>
-            </div>
+      {needsAcAck || (specReady(state) && !planReady(state) && busy === 'plan') ? (
+        <section className={`auto-run-status${needsAcAck ? ' is-running' : ''}`} style={{ marginTop: '1rem' }}>
+          <div className="auto-run-status__icon" aria-hidden="true">
+            <Loader2 className="spin" size={18} />
           </div>
-          <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={Boolean(state.acceptanceCriteriaAcknowledged)}
-              onChange={(e) => onUpdate({ acceptanceCriteriaAcknowledged: e.target.checked })}
-            />
-            I have reviewed the acceptance criteria
-          </label>
+          <div className="auto-run-status__copy">
+            <strong>{needsAcAck ? 'Locking acceptance criteria…' : 'Starting the technical plan…'}</strong>
+            <p>Nothing to check — the spec already has acceptance criteria, so /technical-plan runs next.</p>
+          </div>
         </section>
       ) : null}
 
       {complete && needsPlanAck ? (
-        <section className="card shape-section work-plan-gate" style={{ marginTop: '1rem' }}>
-          <div className="sdlc-panel__head">
-            <CheckCircle2 size={18} />
-            <div>
-              <h3>Your turn · Acknowledge the plan</h3>
-              <p className="muted">Locks the technical plan so Ship can start (Workspace → Implementation).</p>
-            </div>
+        <section className="auto-run-status is-running" style={{ marginTop: '1rem' }}>
+          <div className="auto-run-status__icon" aria-hidden="true">
+            <Loader2 className="spin" size={18} />
           </div>
-          {architectureStale ? (
-            <p className="sdlc-timeline__outcome is-blocked">
-              Architecture looks stale. You can still acknowledge the plan, or return to Project Shape to refresh it.
-            </p>
-          ) : null}
-          <label className="muted small" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <input
-              type="checkbox"
-              checked={Boolean(state.planAcknowledged || state.shipPlanAcknowledged)}
-              onChange={(e) => {
-                if (e.target.checked) acknowledgePlan()
-              }}
-            />
-            I have reviewed the technical plan
-          </label>
-          <div className="ship-actions">
-            <button type="button" className="primary-btn" onClick={acknowledgePlan}>
-              Acknowledge plan &amp; unlock Ship
-            </button>
-            <button type="button" className="secondary-btn" onClick={rejectPlan}>
-              Reject &amp; re-plan
-            </button>
+          <div className="auto-run-status__copy">
+            <strong>Locking G-PLAN…</strong>
+            <p>Nothing to check — the technical plan is ready, so Ship unlocks next.</p>
           </div>
         </section>
       ) : null}
@@ -804,12 +815,12 @@ export function validateSdlcScope(state: WizardState): string | null {
   }
   if (!scopeConfirmed(state)) {
     if (!state.productScope?.epics?.length && !state.productScope?.stories?.length) {
-      return 'Open Scope & tickets after G-GROOM, propose epics and stories, then confirm product scope.'
+      return 'Open Scope & tickets after G-GROOM so Blink can propose epics and stories, then lock scope automatically.'
     }
-    return 'Confirm product scope on Stakeholder Q&A → Scope & tickets before continuing.'
+    return 'Wait for Blink to lock product scope on Scope & tickets before continuing.'
   }
   if (!state.sdlcStartIssueId) {
-    return 'Start the SDLC chain on Stakeholder Q&A → Scope & tickets before continuing.'
+    return 'Wait for Blink to start the SDLC on Scope & tickets before continuing.'
   }
   return null
 }
@@ -817,11 +828,13 @@ export function validateSdlcScope(state: WizardState): string | null {
 export function validateSdlcPlan(state: WizardState): string | null {
   if (!state.groomAcknowledged) return 'Acknowledge G-GROOM on Stakeholder Q&A before the work plan.'
   if (!state.shapeAcknowledged) return 'Review Project Shape before the work plan.'
-  if (!specReady(state)) return 'Wait for the specification to finish drafting, then confirm acceptance criteria.'
-  if (!state.acceptanceCriteriaAcknowledged) return 'Confirm acceptance criteria before the technical plan.'
-  if (!planReady(state)) return 'Wait for the technical plan to finish, then acknowledge G-PLAN.'
+  if (!specReady(state)) return 'Wait for the specification to finish drafting.'
+  if (!state.acceptanceCriteriaAcknowledged) {
+    return 'Wait for Blink to lock acceptance criteria, then the technical plan runs.'
+  }
+  if (!planReady(state)) return 'Wait for the technical plan to finish. G-PLAN locks automatically.'
   if (!(state.planAcknowledged || state.shipPlanAcknowledged)) {
-    return 'Acknowledge G-PLAN before continuing.'
+    return 'Wait for Blink to lock G-PLAN, then Continue to Ship.'
   }
   return null
 }

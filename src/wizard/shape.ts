@@ -244,10 +244,28 @@ export function validateShapeReview(state: WizardState): string | null {
   if (rows.some((row) => row.status !== 'confirmed')) {
     return 'Confirm each repository stack before the work plan.'
   }
-  if (!state.shapeAcknowledged) {
-    return 'Review this setup, then confirm it is ready for the work plan.'
-  }
   return null
+}
+
+export function stacksReadyForWorkPlan(state: WizardState): boolean {
+  const rows = state.repoTechnologies || []
+  if (!rows.length) return false
+  if (!(state.repositories || []).some((repo) => repo.name.trim())) return false
+  return rows.every((row) => row.status === 'confirmed')
+}
+
+/** Suggested stacks from Project Shape — promote them without a second Confirm click. */
+export function shouldAutoConfirmRepoTechnologies(state: WizardState): boolean {
+  const rows = state.repoTechnologies || []
+  if (!rows.length) return false
+  if (rows.some((row) => row.status === 'tbd')) return false
+  return rows.some((row) => row.status === 'recommendation')
+}
+
+/** Setup review is informational once every stack is confirmed. */
+export function shouldAutoAcknowledgeShape(state: WizardState): boolean {
+  if (state.shapeAcknowledged) return false
+  return stacksReadyForWorkPlan(state)
 }
 
 export function acknowledgeShapePatch(state: WizardState): Partial<WizardState> {

@@ -1986,13 +1986,30 @@ export async function extractRequirementText(file: File): Promise<{ fileName: st
   return { fileName: body.fileName || file.name, text }
 }
 
+/** Map wizard integration ids onto MCP servers written into `.cursor/mcp.json`. */
+export function mcpProvidersFromIntegrations(ids: string[]): string[] {
+  const out = new Set<string>()
+  for (const raw of ids) {
+    const id = raw.trim().toLowerCase()
+    if (!id) continue
+    out.add(id)
+    if (id === 'jira' || id === 'confluence' || id === 'atlassian' || id === 'bitbucket') {
+      out.add('atlassian')
+    }
+    if (id === 'atlassian') {
+      out.add('jira')
+    }
+  }
+  return [...out]
+}
+
 export async function downloadWorkspace(options: {
   projectId: string
   file: File | null
   requirementsText: string
   repositories?: { name: string; purpose?: string; description?: string }[]
   setupContext?: Record<string, unknown>
-  /** Connected integration ids for .cursor/mcp.json (github, jira, confluence). */
+  /** Connected integration ids for .cursor/mcp.json (github, jira, atlassian, confluence). */
   mcpProviders?: string[]
   /** Non-secret site hints for automation_sdlc/.env.mcp.example (never tokens). */
   mcpSiteHints?: {
@@ -2029,10 +2046,14 @@ export async function downloadWorkspace(options: {
   if (hints?.confluenceEmail?.trim()) form.append('mcpConfluenceEmail', hints.confluenceEmail.trim())
   if (hints?.jiraCloudId?.trim()) form.append('mcpJiraCloudId', hints.jiraCloudId.trim())
   const url = apiUrl(`/projects/${options.projectId}/download`)
-  console.info(`[blink] POST ${url}`)
+  console.info(`[blink] POST ${url} pauseAutosave=180s`)
   pauseAutosave(180_000)
   const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 180_000)
+  const started = Date.now()
+  const timer = window.setTimeout(() => {
+    console.info(`[blink] download abort after 180s ${url}`)
+    controller.abort()
+  }, 180_000)
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -2041,7 +2062,9 @@ export async function downloadWorkspace(options: {
       signal: controller.signal,
     })
     if (!response.ok) throw new Error(await readError(response))
-    console.info(`[blink] download HTTP ${response.status} bytes=${response.headers.get('content-length') ?? '?'}`)
+    console.info(
+      `[blink] download HTTP ${response.status} bytes=${response.headers.get('content-length') ?? '?'} elapsed=${Date.now() - started}ms folder=${response.headers.get('X-Blink-Folder-Status') ?? ''} validated=${response.headers.get('X-Blink-Setup-Validated') ?? ''}`,
+    )
     const original = await response.blob()
     const stripped = await stripExcludedZipFolders(original)
     const filename =

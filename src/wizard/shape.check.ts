@@ -9,6 +9,8 @@ import {
   hasWorkPlanArtifacts,
   remapWizardProgress,
   shapeFingerprint,
+  shouldAutoAcknowledgeShape,
+  shouldAutoConfirmRepoTechnologies,
   validateShapeReview,
   withShapeInvalidation,
 } from './shape.ts'
@@ -107,7 +109,7 @@ assert.notEqual(shapeFingerprint(before), shapeFingerprint({ ...before, topology
 const untouched = withShapeInvalidation(before, { projectName: 'Fitoyo' })
 assert.equal(untouched.technicalPlan, undefined)
 
-const review = validateShapeReview({
+const reviewState = {
   ...defaultWizardState,
   repositories: [{ id: 'web', name: 'fitoyo-web', purpose: 'UI', description: '', owner: '', dependencies: '' }],
   repoTechnologies: [
@@ -117,11 +119,20 @@ const review = validateShapeReview({
       framework: 'React',
       database: 'none',
       buildTool: 'vite',
-      status: 'confirmed',
+      status: 'confirmed' as const,
     },
   ],
   shapeAcknowledged: false,
-})
-assert.equal(review, 'Review this setup, then confirm it is ready for the work plan.')
+}
+assert.equal(validateShapeReview(reviewState), null)
+assert.equal(shouldAutoAcknowledgeShape(reviewState), true)
+assert.equal(shouldAutoConfirmRepoTechnologies(reviewState), false)
+
+const suggested = {
+  ...reviewState,
+  repoTechnologies: [{ ...reviewState.repoTechnologies[0], status: 'recommendation' as const }],
+}
+assert.equal(shouldAutoConfirmRepoTechnologies(suggested), true)
+assert.equal(shouldAutoAcknowledgeShape(suggested), false)
 
 console.log('shape.check.ts: ok')

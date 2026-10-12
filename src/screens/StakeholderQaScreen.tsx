@@ -35,7 +35,7 @@ const QA_STEPS: { id: QaTab; label: string; title: string; detail: string }[] = 
     id: 'tickets',
     label: 'Scope & tickets',
     title: 'Scope & tickets',
-    detail: 'Propose epics and stories from the confirmed requirement, then start the SDLC.',
+    detail: 'Propose epics and stories from the confirmed requirement. Blink locks scope and starts the SDLC for you.',
   },
 ]
 

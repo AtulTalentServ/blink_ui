@@ -9,12 +9,9 @@ import './ai-sdlc-theme.css'
 
 function Root() {
   const { session } = useAuth()
-  if (!session) {
-    return <LoginScreen />
-  }
   return (
     <>
-      <App />
+      {session ? <App /> : <LoginScreen />}
       <DeveloperWindowHost />
     </>
   )
