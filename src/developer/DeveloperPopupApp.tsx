@@ -61,7 +61,10 @@ function ChatModelPanel() {
   return (
     <section className="dev-chat-model">
       <h2>AI model</h2>
-      <p>Used by Blink chat and all AI operations. Credentials stay in the runtime environment.</p>
+      <p>
+        Used by Blink chat, clarification questions, and other AI commands. Gemini uses
+        GEMINI_API_KEY on the agent runtime when set.
+      </p>
       <label>
         <span>Provider and model</span>
         <select value={model} onChange={(event) => selectModel(event.target.value)}>

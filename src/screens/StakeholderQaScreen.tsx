@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { GroomingPanel } from './GroomRequirementScreen'
 import { DesignOptionsPanel } from './DesignOptionsPanel'
 import { JiraScopePanel } from './JiraScopePanel'
-import { ScopeStartStatus, validateSdlcScope, scopeConfirmed } from './SdlcPlanningScreen'
+import { ScopeStartStatus, validateSdlcScope, hasDraftTickets, scopeConfirmed } from './SdlcPlanningScreen'
 import {
   StakeholderQuestionsScreen,
   jiraCommentForQuestion,
@@ -76,7 +76,7 @@ interface Props {
 */
 function defaultTab(state: WizardState): QaTab {
   if (state.requirementsText.trim() && !state.groomConfirmed) return 'clarify'
-  if (state.groomAcknowledged && !scopeConfirmed(state)) return 'tickets'
+  if (state.groomAcknowledged && !hasDraftTickets(state)) return 'tickets'
   if (state.groomConfirmed) return 'stakeholders'
   return 'clarify'
 }
@@ -107,8 +107,8 @@ export function StakeholderQaScreen(props: Props) {
   }, [state.groomConfirmed, state.groomAcknowledged])
 
   useEffect(() => {
-    if (state.groomAcknowledged && !scopeConfirmed(state)) setTab('tickets')
-  }, [state.groomAcknowledged, state.productScope?.confirmationDigest, state.sdlcStartIssueId])
+    if (state.groomAcknowledged && !hasDraftTickets(state)) setTab('tickets')
+  }, [state.groomAcknowledged, state.productScope?.epics?.length, state.productScope?.stories?.length])
 
   useEffect(() => {
     if (tab !== 'clarify' || !canClarify || props.grooming) return
@@ -133,7 +133,7 @@ export function StakeholderQaScreen(props: Props) {
   const stepDone = (id: QaTab) => {
     if (id === 'clarify') return wordingConfirmed
     if (id === 'stakeholders') return Boolean(state.groomAcknowledged)
-    return scopeConfirmed(state) && Boolean(state.sdlcStartIssueId)
+    return hasDraftTickets(state) || (scopeConfirmed(state) && Boolean(state.sdlcStartIssueId))
   }
 
   return (

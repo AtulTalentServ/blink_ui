@@ -27,6 +27,7 @@ import {
 } from '../api/blink'
 import type { WizardState } from '../wizard/types'
 import { shapePlanContext } from '../wizard/shape'
+import { hasDraftTickets, scopeConfirmed, validateSdlcScope } from '../wizard/scopeGate'
 
 interface Props {
   state: WizardState
@@ -68,9 +69,7 @@ const WORK_PLAN_STEPS: PlanStep[] = [
   },
 ]
 
-export function scopeConfirmed(state: WizardState): boolean {
-  return Boolean(state.productScope?.status === 'confirmed' || state.productScope?.confirmationDigest)
-}
+export { hasDraftTickets, scopeConfirmed, validateSdlcScope }
 
 function specReady(state: WizardState): boolean {
   return Boolean(state.specification?.markdown || state.specification?.title)
@@ -99,7 +98,7 @@ export function shouldAutoRunScopeStart(state: WizardState): boolean {
   if (!state.projectId) return false
   if (!state.groomAcknowledged) return false
   if (scopeConfirmed(state) && state.sdlcStartIssueId) return false
-  const hasScope = Boolean(state.productScope?.epics?.length || state.productScope?.stories?.length)
+  const hasScope = hasDraftTickets(state)
   const digest = state.scopeDigest || state.productScope?.proposalDigest || ''
   const hasOverlays = (state.scopeOverlays || []).length > 0
   return hasScope && Boolean(digest) && hasOverlays
@@ -807,22 +806,6 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
       ) : null}
     </div>
   )
-}
-
-export function validateSdlcScope(state: WizardState): string | null {
-  if (!state.groomAcknowledged) {
-    return 'Acknowledge G-GROOM on Stakeholder Q&A → Stakeholders before Scope & tickets.'
-  }
-  if (!scopeConfirmed(state)) {
-    if (!state.productScope?.epics?.length && !state.productScope?.stories?.length) {
-      return 'Open Scope & tickets after G-GROOM so Blink can propose epics and stories, then lock scope automatically.'
-    }
-    return 'Wait for Blink to lock product scope on Scope & tickets before continuing.'
-  }
-  if (!state.sdlcStartIssueId) {
-    return 'Wait for Blink to start the SDLC on Scope & tickets before continuing.'
-  }
-  return null
 }
 
 export function validateSdlcPlan(state: WizardState): string | null {
