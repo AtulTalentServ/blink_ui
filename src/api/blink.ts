@@ -2,6 +2,7 @@ import { sanitizeDownloadStructure, type RepoDefinition, type RepoTechnology } f
 import type { DesignOption, ProductScopeData, WizardState } from '../wizard/types'
 import { stripExcludedZipFolders } from './stripZipFolders'
 import { loadAuthSession } from '../auth/session'
+import { resolveApiBase, isLocalApiTarget } from '../developer/apiTarget'
 import { CHAT_MODEL_STORAGE_KEY } from '../developer/chatModels'
 
 export interface StakeholderRoleDto {
@@ -95,14 +96,8 @@ function authHeaders(json = false): HeadersInit {
   return headers
 }
 
-/** API base. In `npm run dev`, `.env.development` can point at Render or `/api` (Vite proxy). */
-const DEFAULT_API_URL = 'https://blink-backend-af7x.onrender.com/api'
-
 export function apiUrl(path: string): string {
-  let base = (import.meta.env.VITE_API_URL ?? DEFAULT_API_URL).replace(/\/$/, '')
-  if (/^https?:\/\//.test(base) && !base.endsWith('/api')) {
-    base = `${base}/api`
-  }
+  const base = resolveApiBase()
   const suffix = path.startsWith('/') ? path : `/${path}`
   return `${base}${suffix}`
 }
@@ -160,8 +155,7 @@ export function canonicalizeOAuthCallback(url: string): string {
 }
 
 function isLocalApi(): boolean {
-  const base = (import.meta.env.VITE_API_URL ?? DEFAULT_API_URL).replace(/\/$/, '')
-  return base.startsWith('/') || /localhost|127\.0\.0\.1/.test(base)
+  return isLocalApiTarget()
 }
 
 function normalizeGroomQuestions(value: unknown): GroomQuestionDto[] {

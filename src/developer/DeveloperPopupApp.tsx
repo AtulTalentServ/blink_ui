@@ -9,6 +9,7 @@ import { DeveloperModeProvider, useDeveloperMode } from './DeveloperModeContext'
 import { loadDeveloperSession, subscribeDeveloperSession, type DeveloperSessionSnapshot } from './session'
 import { S3WorkspacesPanel } from './S3WorkspacesPanel'
 import { JiraEpicsPanel } from './JiraEpicsPanel'
+import { ApiTargetControl } from './ApiTargetControl'
 import { CHAT_MODELS, CHAT_MODEL_STORAGE_KEY } from './chatModels'
 
 function SessionBlock() {
@@ -79,20 +80,26 @@ function ChatModelPanel() {
   )
 }
 
-function DeveloperToolsPage() {
+export function DeveloperToolsPage({ surface = 'popup' }: { surface?: 'popup' | 'inapp' }) {
   const { state, setEnabled, setCapability, resetCapabilities } = useDeveloperMode()
 
   useEffect(() => {
-    document.title = 'Blink Developer'
-  }, [])
+    if (surface === 'popup') {
+      document.title = 'Blink Developer'
+    }
+  }, [surface])
 
   return (
-    <div className="dev-popup">
+    <div className={`dev-popup${surface === 'inapp' ? ' dev-popup-inapp' : ''}`}>
       <header className="dev-popup-head">
         <Code2 size={18} strokeWidth={2.2} />
         <div>
           <h1>Developer mode</h1>
-          <p>Separate from the Blink wizard. Close this window to hide the tools.</p>
+          <p>
+            {surface === 'inapp'
+              ? 'In-app panel (popups blocked in this shell). Esc or Close to hide.'
+              : 'Separate from the Blink wizard. Close this window to hide the tools.'}
+          </p>
         </div>
       </header>
 
@@ -141,6 +148,7 @@ function DeveloperToolsPage() {
       </div>
 
       <SessionBlock />
+      <ApiTargetControl />
       <ChatModelPanel />
 
       <S3WorkspacesPanel />
@@ -151,7 +159,11 @@ function DeveloperToolsPage() {
           <RotateCcw size={13} />
           Reset controls
         </button>
-        <span>Ctrl+Shift+D from Blink opens this window</span>
+        <span>
+          {surface === 'inapp'
+            ? 'Ctrl+Shift+D toggles this panel when popups are blocked'
+            : 'Ctrl+Shift+D from Blink opens this window'}
+        </span>
       </footer>
     </div>
   )

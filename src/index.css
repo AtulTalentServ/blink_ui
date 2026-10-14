@@ -7373,6 +7373,52 @@ textarea::placeholder {
   text-align: left;
 }
 
+.login-api-target {
+  margin-bottom: 0.85rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(248, 250, 252, 0.65);
+}
+
+.login-api-target label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.login-api-target select {
+  min-width: 10.5rem;
+  font-weight: 500;
+}
+
+.login-api-target-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.login-api-target-switch {
+  display: block;
+  margin-top: 0.55rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent, #2563eb);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.login-api-target-switch:hover {
+  opacity: 0.85;
+}
+
 .login-otp-input {
   letter-spacing: 0.28em;
   font-weight: 700;

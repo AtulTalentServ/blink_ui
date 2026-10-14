@@ -12,6 +12,8 @@ import { useAuth } from '../auth/AuthContext'
 import { LOGIN_ALLOWED_DOMAIN, isTalentservEmail } from '../auth/session'
 import { AppHeader } from '../components/AppHeader'
 import { ThemeBackground } from '../components/ThemeBackground'
+import { ApiTargetControl } from '../developer/ApiTargetControl'
+import { isLocalBackendUnavailableMessage, setApiTarget } from '../developer/apiTarget'
 import { useDeveloperMode } from '../developer'
 
 export function LoginScreen() {
@@ -30,7 +32,7 @@ export function LoginScreen() {
   const [verifying, setVerifying] = useState(false)
   const [resendIn, setResendIn] = useState(0)
 
-  useEffect(() => {
+  const loadLoginConfig = () => {
     void fetchLoginConfig()
       .then((config) => {
         setGateRequired(config.gateRequired)
@@ -38,11 +40,24 @@ export function LoginScreen() {
         if (config.allowedDomain?.trim()) {
           setAllowedDomain(config.allowedDomain.trim().replace(/^@/, ''))
         }
+        setNotice(null)
       })
-      .catch(() => {
+      .catch((err) => {
         setGateRequired(false)
         setOtpReveal(false)
+        const message =
+          err instanceof Error ? err.message : 'Could not reach the Blink API. Check the backend setting below.'
+        if (isLocalBackendUnavailableMessage(message)) {
+          setNotice({
+            type: 'error',
+            message,
+          })
+        }
       })
+  }
+
+  useEffect(() => {
+    loadLoginConfig()
   }, [])
 
   useEffect(() => {
@@ -160,7 +175,29 @@ export function LoginScreen() {
               else void signInWithOtp()
             }}
           >
-            {notice && <div className={`status-banner ${notice.type}`}>{notice.message}</div>}
+            <ApiTargetControl compact onTargetChange={() => loadLoginConfig()} />
+
+            {notice && (
+              <div className={`status-banner ${notice.type}`}>
+                {notice.message}
+                {notice.type === 'error' && isLocalBackendUnavailableMessage(notice.message) && (
+                  <button
+                    type="button"
+                    className="login-api-target-switch"
+                    onClick={() => {
+                      setApiTarget('deployed')
+                      setNotice({
+                        type: 'info',
+                        message: 'Switched to deployed backend (Render). You can sign in now.',
+                      })
+                      loadLoginConfig()
+                    }}
+                  >
+                    Use deployed backend instead
+                  </button>
+                )}
+              </div>
+            )}
 
             {showDeveloperCode && issuedOtp && (
               <div className="login-otp-reveal" aria-live="polite">
