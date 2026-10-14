@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
 import { downloadWorkspace, mcpProvidersFromIntegrations, fetchWorkspaceStatus, isNotProjectOwnerError, isAutosavePaused, pauseAutosave, rehomeProject, saveProject, clarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
@@ -6,7 +6,9 @@ import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
 import { WizardSidebar, STEP_ORDER } from './components/WizardSidebar'
 import { SessionControls } from './components/SessionControls'
-import { ChatPanel, useChatPanelOpen } from './components/ChatPanel'
+import { ChatPanel, useChatPanelHotkeys, useChatPanelOpen } from './components/ChatPanel'
+import { isBlinkDesktopShell } from './desktop/detect'
+import { scheduleIdleWork } from './utils/scheduleIdleWork'
 import { ThemeBackground } from './components/ThemeBackground'
 import {
   GenerationDownloadScreen,
@@ -221,6 +223,11 @@ export default function App() {
   const autoEnsureProject = useDeveloperCapability('autoEnsureProject')
   const unrestrictedNav = useDeveloperCapability('unrestrictedStepNav')
   const [chatOpen, setChatOpen] = useChatPanelOpen()
+  useChatPanelHotkeys(chatOpen, setChatOpen)
+  const groomingUnlockedForDev = useMemo(() => groomingComplete(state), [
+    state.requirementsText,
+    state.requirementFileName,
+  ])
   const shapeConfirmRef = useRef<(() => Promise<void>) | null>(null)
   const handleGroomLooksGoodRef = useRef<() => Promise<boolean>>(async () => false)
   const [shapeConfirmUi, setShapeConfirmUi] = useState({ busy: false, pending: false, confirmed: false })
@@ -528,17 +535,24 @@ export default function App() {
 
   useEffect(() => {
     if (!session?.email) return
+    const debounceMs = isBlinkDesktopShell() ? 1200 : 500
+    let cancelIdle: (() => void) | undefined
     const timer = window.setTimeout(() => {
-      saveWizardDraft(session.email, {
-        step: wizardBookmark(),
-        completedThrough: completedRef.current,
-        state: stateRef.current,
-        updatedAt: Date.now(),
-        freshStart: freshStartRef.current && !stateRef.current.projectId,
+      cancelIdle = scheduleIdleWork(() => {
+        saveWizardDraft(session.email, {
+          step: wizardBookmark(),
+          completedThrough: completedRef.current,
+          state: stateRef.current,
+          updatedAt: Date.now(),
+          freshStart: freshStartRef.current && !stateRef.current.projectId,
+        })
+        saveSessionStep(stepRef.current)
       })
-      saveSessionStep(stepRef.current)
-    }, 500)
-    return () => window.clearTimeout(timer)
+    }, debounceMs)
+    return () => {
+      window.clearTimeout(timer)
+      cancelIdle?.()
+    }
   }, [session?.email, step, completedThrough, state, wizardBookmark])
 
   useEffect(() => {
@@ -726,9 +740,9 @@ export default function App() {
     publishDeveloperSession({
       step,
       projectId: state.projectId,
-      groomingUnlocked: groomingComplete(state),
+      groomingUnlocked: groomingUnlockedForDev,
     })
-  }, [step, state])
+  }, [step, state.projectId, groomingUnlockedForDev])
 
   useEffect(() => {
     if (folderPrep !== 'preparing' || !folderQuery?.name.trim()) return
@@ -2391,13 +2405,13 @@ export default function App() {
 
   return (
     <div className={`app-shell${isWelcome ? ' welcome-mode' : ''}${chatOpen && !isWelcome ? ' chat-open' : ''}`}>
-      <ThemeBackground />
+      {!isBlinkDesktopShell() && <ThemeBackground />}
       {!isWelcome && (
         <WizardSidebar
           currentStep={step}
           completedThrough={completedThrough}
           generationComplete={state.generationComplete}
-          groomingUnlocked={groomingComplete(state)}
+          groomingUnlocked={groomingUnlockedForDev}
           unrestrictedNav={unrestrictedNav}
           state={state}
           onNavigate={(s) => {
@@ -2564,7 +2578,7 @@ export default function App() {
         )}
       </div>
 
-      {!isWelcome && (
+      {!isWelcome && chatOpen ? (
         <ChatPanel
           projectId={state.projectId}
           currentStep={step}
@@ -2575,7 +2589,7 @@ export default function App() {
             goToStep(s as WizardStep)
           }}
         />
-      )}
+      ) : null}
     </div>
   )
 }

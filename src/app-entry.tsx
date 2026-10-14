@@ -6,6 +6,8 @@ import { DeveloperModeProvider, DeveloperWindowHost } from './developer'
 import { LoginScreen } from './screens/LoginScreen'
 import './index.css'
 import './ai-sdlc-theme.css'
+import './desktop-perf.css'
+import { isBlinkDesktopShell } from './desktop/detect'
 
 function Root() {
   const { session } = useAuth()
@@ -17,12 +19,14 @@ function Root() {
   )
 }
 
+const blinkTree = (
+  <DeveloperModeProvider>
+    <AuthProvider>
+      <Root />
+    </AuthProvider>
+  </DeveloperModeProvider>
+)
+
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <DeveloperModeProvider>
-      <AuthProvider>
-        <Root />
-      </AuthProvider>
-    </DeveloperModeProvider>
-  </StrictMode>,
+  isBlinkDesktopShell() ? blinkTree : <StrictMode>{blinkTree}</StrictMode>,
 )

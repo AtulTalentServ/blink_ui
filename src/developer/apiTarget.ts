@@ -1,6 +1,9 @@
 /** Developer option: route Blink API calls to local Go or hosted Render. */
 
+import { isBlinkDesktopShell } from '../desktop/detect'
+
 export const API_TARGET_STORAGE_KEY = 'blink.apiTarget'
+export const API_TARGET_HEADER = 'x-blink-api-target'
 
 export const DEPLOYED_API_BASE = 'https://blink-backend-af7x.onrender.com/api'
 
@@ -59,9 +62,17 @@ function localApiBase(): string {
   return 'http://127.0.0.1:8090/api'
 }
 
+/** Desktop dev (5174) uses same-origin `/api` so Vite can proxy without Render CORS for 5174. */
+export function usesDesktopDevApiProxy(): boolean {
+  return isBlinkDesktopShell() && import.meta.env.DEV
+}
+
 /** Base URL including `/api` suffix, no trailing slash. */
 export function resolveApiBase(): string {
   const target = getApiTarget()
+  if (usesDesktopDevApiProxy()) {
+    return normalizeApiSuffix('/api')
+  }
   if (target === 'deployed') {
     return DEPLOYED_API_BASE
   }
@@ -73,6 +84,9 @@ export function isLocalApiTarget(): boolean {
 }
 
 export function describeApiTarget(target: ApiTarget = getApiTarget()): string {
+  if (usesDesktopDevApiProxy()) {
+    return target === 'local' ? 'Local (via desktop proxy → :8090)' : 'Deployed (via desktop proxy → Render)'
+  }
   const base = target === 'local' ? localApiBase() : DEPLOYED_API_BASE
   return target === 'local' ? `Local (${base})` : 'Deployed (Render)'
 }

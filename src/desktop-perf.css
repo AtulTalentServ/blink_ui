@@ -1,0 +1,89 @@
+/*
+ * WebView2 perf profile (html.blink-desktop from desktop/status_strip.js).
+ * Fixes 100vh vs status-bar overflow and heavy compositing while scrolling.
+ */
+html.blink-desktop,
+html.blink-desktop body {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+html.blink-desktop #root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+html.blink-desktop .app-shell,
+html.blink-desktop .app-shell.welcome-mode {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100%;
+  isolation: auto;
+  background: #f7fbfc !important;
+}
+
+html.blink-desktop .chat-panel {
+  height: 100% !important;
+  max-height: 100%;
+}
+
+html.blink-desktop .content-welcome {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain;
+}
+
+html.blink-desktop .welcome-page {
+  overflow: visible;
+  height: auto;
+  min-height: 100%;
+}
+
+html.blink-desktop .welcome-page .welcome-body {
+  overflow: visible;
+}
+
+html.blink-desktop .theme-bg,
+html.blink-desktop .theme-bg-waves,
+html.blink-desktop .theme-bg-dots,
+html.blink-desktop .theme-bg-grain {
+  display: none;
+}
+
+html.blink-desktop .sidebar,
+html.blink-desktop .card,
+html.blink-desktop .chat-panel,
+html.blink-desktop .secondary-btn,
+html.blink-desktop .file-badge,
+html.blink-desktop .header-chat-btn,
+html.blink-desktop .header-download-btn {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.blink-desktop .sidebar {
+  background: linear-gradient(180deg, #ecf7fc 0%, #f0fcf7 100%);
+}
+
+html.blink-desktop .card {
+  background: rgba(255, 255, 255, 0.96);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 140px;
+}
+
+html.blink-desktop .chat-panel {
+  background: rgba(255, 255, 255, 0.98);
+}
+
+html.blink-desktop .login-card {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+html.blink-desktop .content {
+  contain: layout style;
+}

@@ -1,10 +1,12 @@
 import http from 'node:http'
+import https from 'node:https'
 import net from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const LOCAL_API = 'http://localhost:8090'
+const DEPLOYED_API = 'https://blink-backend-af7x.onrender.com'
 
 function localBackendUp(ms = 250): Promise<boolean> {
   return new Promise((resolve) => {
@@ -49,9 +51,10 @@ function proxyTimeoutMs(url: string | undefined): number {
 
 function forward(base: string, req: IncomingMessage, res: ServerResponse) {
   const dest = new URL(req.url ?? '/', base)
-  const lib = http
+  const lib = dest.protocol === 'https:' ? https : http
   const headers = { ...req.headers, host: dest.host }
   delete headers.connection
+  delete headers['x-blink-api-target']
   const upstream = lib.request(
     dest,
     { method: req.method, headers, timeout: proxyTimeoutMs(req.url) },
@@ -69,13 +72,19 @@ function forward(base: string, req: IncomingMessage, res: ServerResponse) {
   req.pipe(upstream)
 }
 
-function apiFallbackProxy(): Plugin {
+function apiFallbackProxy(isDesktopDev: boolean): Plugin {
   return {
     name: 'api-fallback-proxy',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         if (!req.url?.startsWith('/api')) {
           next()
+          return
+        }
+        const wantDeployed =
+          isDesktopDev && String(req.headers['x-blink-api-target'] ?? '').toLowerCase() === 'deployed'
+        if (wantDeployed) {
+          forward(DEPLOYED_API, req, res)
           return
         }
         void localBackendUp().then((up) => {
@@ -96,10 +105,15 @@ function apiFallbackProxy(): Plugin {
   }
 }
 
+const desktopDev = process.env.BLINK_DESKTOP_DEV === '1'
+
 export default defineConfig({
-  plugins: [react(), apiFallbackProxy()],
+  plugins: [react(), apiFallbackProxy(desktopDev)],
   server: {
     host: true,
-    port: 5173,
+    port: desktopDev ? 5174 : 5173,
+    // WebView2 + Vite HMR causes constant main-thread work; desktop uses port 5174 without HMR.
+    hmr: desktopDev ? false : undefined,
+    watch: desktopDev ? null : undefined,
   },
 })

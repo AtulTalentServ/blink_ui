@@ -1,12 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import {
   ChevronDown,
   ChevronRight,
-  LayoutGrid,
   Loader2,
   Square,
-  Terminal,
-  X,
 } from 'lucide-react'
 import { CursorAgentMarkdown } from './CursorAgentMarkdown'
 import type { CursorConversationTurn, CursorThinkingBlock, ImplementRunState } from './implementRunTypes'
@@ -43,15 +40,6 @@ export function CursorAgentConversationPanel({
   onStop,
   onToggleThinking,
 }: Props) {
-  const [tasksCardOpen, setTasksCardOpen] = useState(true)
-  const [now, setNow] = useState(() => Date.now())
-
-  useEffect(() => {
-    if (!state.running) return
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [state.running])
-
   const cursorBrandModels = models.filter((m) => m.group === 'cursor')
   const otherModels = models.filter((m) => m.group === 'other')
   const modelLabel =
@@ -108,48 +96,6 @@ export function CursorAgentConversationPanel({
             </div>
           </article>
         ))}
-
-        {state.running && runningSteps.length > 0 ? (
-          <div className="cursor-agent-tasks-wrap">
-            {tasksCardOpen ? (
-              <div className="cursor-agent-tasks-card">
-                <div className="cursor-agent-tasks-card__head">
-                  <span>
-                    {runningSteps.length} {runningSteps.length === 1 ? 'Task' : 'Tasks'} running
-                  </span>
-                  <button
-                    type="button"
-                    className="cursor-agent-icon-btn"
-                    aria-label="Hide tasks"
-                    onClick={() => setTasksCardOpen(false)}
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-                <ul className="cursor-agent-tasks-card__list">
-                  {runningSteps.map((step) => (
-                    <li key={step.stepId}>
-                      <Terminal size={14} aria-hidden />
-                      <span className="cursor-agent-tasks-card__cmd">{step.title}</span>
-                      <span className="cursor-agent-tasks-card__time">
-                        {formatElapsed(step.timestamp, now)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            <button
-              type="button"
-              className="cursor-agent-tasks-pill"
-              onClick={() => setTasksCardOpen((v) => !v)}
-            >
-              <LayoutGrid size={14} aria-hidden />
-              {runningSteps.length} {runningSteps.length === 1 ? 'Task' : 'Tasks'}
-              <ChevronDown size={14} className={tasksCardOpen ? 'is-open' : ''} aria-hidden />
-            </button>
-          </div>
-        ) : null}
       </div>
 
       <footer className="cursor-agent-composer-bar">
@@ -266,18 +212,6 @@ function thoughtPreview(text: string): string {
 
 function formatToolLine(turn: CursorConversationTurn): string {
   return turn.content.replace(/\s+/g, ' ').trim()
-}
-
-function formatElapsed(iso: string, nowMs: number): string {
-  const start = Date.parse(iso)
-  if (Number.isNaN(start)) return ''
-  const sec = Math.max(0, Math.floor((nowMs - start) / 1000))
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  const s = sec % 60
-  if (h > 0) return `${h}h ${m}m ${s}s`
-  if (m > 0) return `${m}m ${s}s`
-  return `${s}s`
 }
 
 function summarizeActivities(state: ImplementRunState): {

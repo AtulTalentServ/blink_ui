@@ -38,14 +38,14 @@ export async function fetchLoginConfig(): Promise<AuthLoginConfig> {
   return response.json() as Promise<AuthLoginConfig>
 }
 
-export async function requestLoginOtp(email: string, accessCode?: string): Promise<OtpRequestResponse> {
+export async function requestLoginOtp(email: string): Promise<OtpRequestResponse> {
   // Login must tolerate Neon pool recovery after wizard autosave storms (default timedFetch is 15s).
   const response = await timedFetch(
     apiUrl('/auth/otp/request'),
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, accessCode: accessCode || undefined }),
+      body: JSON.stringify({ email }),
     },
     45_000,
   )
@@ -55,13 +55,13 @@ export async function requestLoginOtp(email: string, accessCode?: string): Promi
   return response.json() as Promise<OtpRequestResponse>
 }
 
-export async function verifyLoginOtp(email: string, otp: string, accessCode?: string): Promise<AuthSessionResponse> {
+export async function verifyLoginOtp(email: string, otp: string): Promise<AuthSessionResponse> {
   const response = await timedFetch(
     apiUrl('/auth/otp/verify'),
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, otp, accessCode: accessCode || undefined }),
+      body: JSON.stringify({ email, otp }),
     },
     45_000,
   )
@@ -72,6 +72,18 @@ export async function verifyLoginOtp(email: string, otp: string, accessCode?: st
 }
 
 const SEND_CODE_FAILED = 'We could not send the sign-in code. Try again in a moment.'
+
+/** Parses Go/Java OTP cooldown errors ("wait N seconds before requesting another code"). */
+export function parseOtpResendWaitSeconds(message: string): number | null {
+  const match = message.match(/wait (\d+) seconds before requesting/i)
+  if (!match) return null
+  const secs = Number(match[1])
+  return Number.isFinite(secs) && secs > 0 ? secs : null
+}
+
+export function isOtpResendCooldownError(message: string): boolean {
+  return /wait (\d+ )?seconds before requesting/i.test(message) || /wait before requesting another code/i.test(message)
+}
 
 function isInternalAuthDetail(message: string): boolean {
   const lower = message.toLowerCase()
@@ -103,8 +115,15 @@ export function toUserAuthError(err: unknown, fallback: string): string {
   return raw
 }
 
-export function publicOtpSentMessage(email: string, revealed: boolean): string {
+export function publicOtpSentMessage(
+  email: string,
+  revealed: boolean,
+  deliveryMode?: string,
+): string {
   if (revealed) return 'Enter the 6-digit code shown below.'
+  if (deliveryMode === 'gmail') {
+    return `We sent a 6-digit code to ${email} via Gmail. Check Spam if it is missing.`
+  }
   return `We sent a 6-digit code to ${email}.`
 }
 

@@ -1,5 +1,11 @@
+import { isBlinkDesktopShell } from '../desktop/detect'
+
 /** Slide atmosphere: logo blue/cyan wash left, logo mint wash right. */
 export function ThemeBackground() {
+  if (isBlinkDesktopShell()) {
+    return <div className="theme-bg theme-bg-lite" aria-hidden="true" />
+  }
+
   return (
     <div className="theme-bg" aria-hidden="true">
       <svg className="theme-bg-waves" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">

@@ -5,6 +5,8 @@ import {
   publicOtpSentMessage,
   requestLoginOtp,
   shouldRevealLoginOtp,
+  isOtpResendCooldownError,
+  parseOtpResendWaitSeconds,
   toUserAuthError,
   verifyLoginOtp,
 } from '../api/auth'
@@ -12,6 +14,7 @@ import { useAuth } from '../auth/AuthContext'
 import { LOGIN_ALLOWED_DOMAIN, isTalentservEmail } from '../auth/session'
 import { AppHeader } from '../components/AppHeader'
 import { ThemeBackground } from '../components/ThemeBackground'
+import { isBlinkDesktopShell } from '../desktop/detect'
 import { ApiTargetControl } from '../developer/ApiTargetControl'
 import { isLocalBackendUnavailableMessage, setApiTarget } from '../developer/apiTarget'
 import { useDeveloperMode } from '../developer'
@@ -21,8 +24,6 @@ export function LoginScreen() {
   const { state: developerState } = useDeveloperMode()
   const [email, setEmail] = useState('')
   const [otp, setOtp] = useState('')
-  const [accessCode, setAccessCode] = useState('')
-  const [gateRequired, setGateRequired] = useState(false)
   const [otpReveal, setOtpReveal] = useState(false)
   const [allowedDomain, setAllowedDomain] = useState(LOGIN_ALLOWED_DOMAIN)
   const [step, setStep] = useState<'email' | 'otp'>('email')
@@ -35,7 +36,6 @@ export function LoginScreen() {
   const loadLoginConfig = () => {
     void fetchLoginConfig()
       .then((config) => {
-        setGateRequired(config.gateRequired)
         setOtpReveal(Boolean(config.otpReveal))
         if (config.allowedDomain?.trim()) {
           setAllowedDomain(config.allowedDomain.trim().replace(/^@/, ''))
@@ -43,7 +43,6 @@ export function LoginScreen() {
         setNotice(null)
       })
       .catch((err) => {
-        setGateRequired(false)
         setOtpReveal(false)
         const message =
           err instanceof Error ? err.message : 'Could not reach the Blink API. Check the backend setting below.'
@@ -79,14 +78,10 @@ export function LoginScreen() {
       })
       return
     }
-    if (gateRequired && !accessCode.trim()) {
-      setNotice({ type: 'error', message: 'Enter your access code.' })
-      return
-    }
     setSending(true)
     setNotice(null)
     try {
-      const result = await requestLoginOtp(trimmed, gateRequired ? accessCode : undefined)
+      const result = await requestLoginOtp(trimmed)
       setEmail(trimmed)
       const localCode = result.otp?.trim() || null
       const reveal = shouldRevealLoginOtp(localCode, {
@@ -98,11 +93,32 @@ export function LoginScreen() {
       setOtp(reveal && localCode ? localCode : '')
       setStep('otp')
       setResendIn(result.resendAfterSeconds || 45)
+      if (result.deliveryMode === 'gmail' && !reveal) {
+        setNotice({
+          type: 'info',
+          message:
+            'Code sent via Gmail. Check Inbox and Spam; @talentserv.co.in filters sometimes block external senders. For desktop dev without email, switch API backend to Local.',
+        })
+      }
     } catch (err) {
-      setNotice({
-        type: 'error',
-        message: toUserAuthError(err, 'We could not send the sign-in code. Try again in a moment.'),
-      })
+      const raw = err instanceof Error ? err.message : ''
+      const waitSecs = parseOtpResendWaitSeconds(raw)
+      if (isOtpResendCooldownError(raw)) {
+        setEmail(trimmed)
+        setStep('otp')
+        setResendIn(waitSecs ?? 45)
+        setNotice({
+          type: 'info',
+          message: waitSecs
+            ? `A code was already sent to ${trimmed} (Gmail on Render). Check Inbox and Spam, or switch to Local backend to see the code on screen. Resend in ${waitSecs}s.`
+            : `A code was already sent to ${trimmed}. Check Inbox and Spam, or use Local backend for on-screen OTP.`,
+        })
+      } else {
+        setNotice({
+          type: 'error',
+          message: toUserAuthError(err, 'We could not send the sign-in code. Try again in a moment.'),
+        })
+      }
     } finally {
       setSending(false)
     }
@@ -117,7 +133,7 @@ export function LoginScreen() {
     setVerifying(true)
     setNotice(null)
     try {
-      const session = await verifyLoginOtp(email, code, gateRequired ? accessCode : undefined)
+      const session = await verifyLoginOtp(email, code)
       if (!session.token) {
         throw new Error('Sign-in did not return a session. Try again.')
       }
@@ -145,7 +161,7 @@ export function LoginScreen() {
 
   return (
     <div className="app-shell welcome-mode">
-      <ThemeBackground />
+      {!isBlinkDesktopShell() && <ThemeBackground />}
       <div className="login-page">
         <AppHeader />
 
@@ -157,10 +173,8 @@ export function LoginScreen() {
             </h1>
             <p className="welcome-desc">
               {step === 'otp'
-                ? publicOtpSentMessage(email, showDeveloperCode)
-                : gateRequired
-                  ? `Enter your @${allowedDomain} email and access code.`
-                  : `We'll send a 6-digit code to your @${allowedDomain} inbox.`}
+                ? publicOtpSentMessage(email, showDeveloperCode, undefined)
+                : `We'll send a 6-digit code to your @${allowedDomain} inbox.`}
             </p>
           </div>
 
@@ -230,21 +244,6 @@ export function LoginScreen() {
               />
             </div>
 
-            {gateRequired && (
-              <div className="field-group">
-                <label htmlFor="login-gate">Access code</label>
-                <input
-                  id="login-gate"
-                  type="password"
-                  autoComplete="off"
-                  placeholder="Access code"
-                  value={accessCode}
-                  disabled={sending || verifying || step === 'otp'}
-                  onChange={(event) => setAccessCode(event.target.value)}
-                />
-              </div>
-            )}
-
             {step === 'otp' && (
               <div className="field-group">
                 <label htmlFor="login-otp">6-digit code</label>
@@ -265,11 +264,17 @@ export function LoginScreen() {
               </div>
             )}
 
-            <button type="submit" className="primary-btn login-submit" disabled={sending || verifying}>
+            <button
+              type="submit"
+              className="primary-btn login-submit"
+              disabled={sending || verifying || (step === 'email' && resendIn > 0)}
+            >
               {step === 'email'
                 ? sending
                   ? 'Sending code…'
-                  : 'Send sign-in code'
+                  : resendIn > 0
+                    ? `Send again in ${resendIn}s`
+                    : 'Send sign-in code'
                 : verifying
                   ? 'Signing in…'
                   : 'Sign in'}

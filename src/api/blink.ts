@@ -2,7 +2,7 @@ import { sanitizeDownloadStructure, type RepoDefinition, type RepoTechnology } f
 import type { DesignOption, ProductScopeData, WizardState } from '../wizard/types'
 import { stripExcludedZipFolders } from './stripZipFolders'
 import { loadAuthSession } from '../auth/session'
-import { resolveApiBase, isLocalApiTarget } from '../developer/apiTarget'
+import { resolveApiBase, isLocalApiTarget, getApiTarget, usesDesktopDevApiProxy, API_TARGET_HEADER } from '../developer/apiTarget'
 import { logTechStack, summarizeRepoTechnologyRow } from '../developer/techStackDebug'
 import { CHAT_MODEL_STORAGE_KEY } from '../developer/chatModels'
 
@@ -82,6 +82,9 @@ async function readError(response: Response): Promise<string> {
 
 function authHeaders(json = false): HeadersInit {
   const headers: Record<string, string> = {}
+  if (usesDesktopDevApiProxy()) {
+    headers[API_TARGET_HEADER] = getApiTarget()
+  }
   if (json) {
     headers['Content-Type'] = 'application/json'
     headers.Accept = 'application/json'
