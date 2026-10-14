@@ -5,9 +5,7 @@ import {
   Circle,
   ClipboardList,
   FileText,
-  Layers,
   Loader2,
-  Map,
   Play,
   Sparkles,
 } from 'lucide-react'
@@ -16,10 +14,8 @@ import {
   confirmProductScope,
   createSpec,
   fetchCanonicalArchitecture,
-  fetchCanonicalGraph,
   pinCanonicalArchitecture,
   type ArchitectureViewDto,
-  type GraphViewDto,
   confirmStakeholders,
   pauseAutosave,
   sdlcStart,
@@ -367,39 +363,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
   const [busy, setBusy] = useState<StepId | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [lastChange, setLastChange] = useState<string | null>(null)
-  const [graph, setGraph] = useState<GraphViewDto | null>(null)
-  const [graphError, setGraphError] = useState<string | null>(null)
   const [architecture, setArchitecture] = useState<ArchitectureViewDto | null>(null)
-  const [architectureError, setArchitectureError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!state.projectId) {
-      setGraph(null)
-      return
-    }
-    let cancelled = false
-    void fetchCanonicalGraph(state.projectId)
-      .then((view) => {
-        if (!cancelled) {
-          setGraph(view)
-          setGraphError(null)
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setGraph(null)
-          setGraphError(err instanceof Error ? err.message : 'Graph not available yet.')
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [
-    state.projectId,
-    state.technicalPlan?.markdown,
-    state.technicalPlan?.steps?.length,
-    state.productScope?.stories?.length,
-  ])
 
   useEffect(() => {
     if (!state.projectId) {
@@ -409,16 +373,10 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
     let cancelled = false
     void fetchCanonicalArchitecture(state.projectId)
       .then((view) => {
-        if (!cancelled) {
-          setArchitecture(view)
-          setArchitectureError(null)
-        }
+        if (!cancelled) setArchitecture(view)
       })
-      .catch((err) => {
-        if (!cancelled) {
-          setArchitecture(null)
-          setArchitectureError(err instanceof Error ? err.message : 'Architecture governance is unavailable.')
-        }
+      .catch(() => {
+        if (!cancelled) setArchitecture(null)
       })
     return () => {
       cancelled = true
@@ -433,10 +391,6 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
   const needsPlanAck = hasPlan && !state.planAcknowledged && !state.shipPlanAcknowledged
   const needsAcAck = specReady(state) && !planReady(state) && !state.acceptanceCriteriaAcknowledged
   const architectureConfirmed = architecture?.confirmedDigest === architecture?.digest && !architecture?.invalidatedAt
-  const architectureStale = Boolean(architecture && !architectureConfirmed)
-  const graphBlockers = (state.canonicalBlockers || []).filter(
-    (blocker) => (blocker.code || '').includes('graph') || (blocker.message || '').toLowerCase().includes('dependency'),
-  )
 
   const statuses = useMemo(() => {
     const map = {} as Record<StepId, StepStatus>
@@ -728,64 +682,6 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
             <p>Nothing to check — the technical plan is ready, so Ship unlocks next.</p>
           </div>
         </section>
-      ) : null}
-
-      {(graph || graphError || architecture || architectureError) ? (
-        <details className="work-plan-advanced">
-          <summary>Advanced details (dependency graph &amp; architecture)</summary>
-          {graph || graphError ? (
-            <section className="card shape-section" style={{ marginTop: '0.75rem' }}>
-              <div className="sdlc-panel__head">
-                <Map size={18} />
-                <div>
-                  <h3>Dependency graph</h3>
-                  <p className="muted">Derived from stories and the technical plan.</p>
-                </div>
-              </div>
-              {graphError && !graph ? <p className="sdlc-timeline__outcome is-blocked">{graphError}</p> : null}
-              {graph ? (
-                <>
-                  {graph.cycles?.length ? (
-                    <p className="sdlc-timeline__outcome is-blocked">
-                      {graph.cycles.length} cycle(s): {graph.cycles.map((c) => c.join(' → ')).join('; ')}
-                    </p>
-                  ) : (
-                    <p className="sdlc-timeline__outcome">No dependency cycles detected.</p>
-                  )}
-                  {graph.executionOrder?.length ? (
-                    <p className="muted small">
-                      Suggested order: <code>{graph.executionOrder.join(' → ')}</code>
-                    </p>
-                  ) : null}
-                  <p className={graphBlockers.length ? 'sdlc-timeline__outcome is-blocked' : 'muted small'}>
-                    {graphBlockers.length
-                      ? graphBlockers.map((blocker) => blocker.message).join('; ')
-                      : 'No graph enforcement blocker.'}
-                  </p>
-                </>
-              ) : null}
-            </section>
-          ) : null}
-          {(architecture || architectureError) ? (
-            <section className="card shape-section" style={{ marginTop: '0.75rem' }}>
-              <div className="sdlc-panel__head">
-                <Layers size={18} />
-                <div>
-                  <h3>Architecture</h3>
-                  <p className="muted">Pinned with the plan when a confirmed baseline exists.</p>
-                </div>
-              </div>
-              {architecture ? (
-                <p className={architectureStale ? 'sdlc-timeline__outcome is-blocked' : 'sdlc-timeline__outcome'}>
-                  {architectureStale
-                    ? 'Unconfirmed or stale — refresh on Project Shape if needed.'
-                    : `Confirmed revision ${architecture.revision}.`}
-                </p>
-              ) : null}
-              {architectureError ? <p className="muted small">{architectureError}</p> : null}
-            </section>
-          ) : null}
-        </details>
       ) : null}
 
       {error && !busy ? (

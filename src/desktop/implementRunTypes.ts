@@ -47,12 +47,23 @@ export interface CursorConversationTurn {
   meta?: string
 }
 
+export type CursorFileChangeStatus = 'added' | 'modified' | 'deleted'
+
+export interface CursorFileChange {
+  path: string
+  status: CursorFileChangeStatus
+  additions: number
+  deletions: number
+  timestamp: string
+}
+
 export interface ImplementRunState {
   running: boolean
   steps: ImplementRunStep[]
   logs: ImplementRunLogLine[]
   activities: ImplementRunActivity[]
   thinkingBlocks: CursorThinkingBlock[]
+  fileChanges: CursorFileChange[]
   turns: CursorConversationTurn[]
   sessionId?: string
   finished?: { ok: boolean; exitCode: number; summary?: string }
@@ -102,6 +113,14 @@ export type ImplementRunEvent =
     }
   | { type: 'cursor_session'; sessionId: string; timestamp: string }
   | {
+      type: 'cursor_file_change'
+      path: string
+      fileStatus: CursorFileChangeStatus
+      additions: number
+      deletions: number
+      timestamp: string
+    }
+  | {
       type: 'finished'
       ok: boolean
       exitCode: number
@@ -116,8 +135,38 @@ export function emptyImplementRunState(): ImplementRunState {
     logs: [],
     activities: [],
     thinkingBlocks: [],
+    fileChanges: [],
     turns: [],
   }
+}
+
+function upsertFileChange(state: ImplementRunState, change: CursorFileChange): ImplementRunState {
+  const files = [...state.fileChanges]
+  const idx = files.findIndex((row) => row.path === change.path)
+  if (change.status === 'deleted') {
+    if (idx >= 0) {
+      const prev = files[idx]
+      files[idx] = {
+        ...change,
+        additions: 0,
+        deletions: prev.additions + prev.deletions,
+      }
+    } else {
+      files.push(change)
+    }
+  } else if (idx >= 0) {
+    const prev = files[idx]
+    files[idx] = {
+      path: change.path,
+      status: prev.status === 'added' && change.status === 'added' ? 'added' : 'modified',
+      additions: prev.additions + change.additions,
+      deletions: prev.deletions + change.deletions,
+      timestamp: change.timestamp,
+    }
+  } else {
+    files.push(change)
+  }
+  return { ...state, fileChanges: files.slice(-200) }
 }
 
 function appendTurn(state: ImplementRunState, turn: CursorConversationTurn): ImplementRunState {
@@ -196,7 +245,7 @@ function upsertThinkingDelta(
       id: `${sid}-${timestamp}`,
       sessionId: sid,
       text,
-      collapsed: false,
+      collapsed: true,
       streaming: true,
       timestamp,
     })
@@ -337,6 +386,16 @@ export function reduceImplementRunEvent(state: ImplementRunState, raw: string): 
 
   if (event.type === 'cursor_session') {
     return { ...state, sessionId: event.sessionId }
+  }
+
+  if (event.type === 'cursor_file_change') {
+    return upsertFileChange(state, {
+      path: event.path,
+      status: event.fileStatus,
+      additions: event.additions,
+      deletions: event.deletions,
+      timestamp: event.timestamp,
+    })
   }
 
   if (event.type === 'finished') {

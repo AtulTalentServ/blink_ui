@@ -1060,13 +1060,18 @@ export default function App() {
         controller.signal,
       )
       if (result.status === 'error' || result.status === 'invalid_request') {
+        const detail = result.errors?.find((e) => e && !e.startsWith('LLM_'))
+        const statusMessage =
+          detail && result.message === 'The language model request failed. Try again.'
+            ? `${result.message} (${detail.length > 120 ? `${detail.slice(0, 117)}…` : detail})`
+            : result.message
         patch({
           groomStatus: result.status,
-          groomMessage: result.message,
+          groomMessage: statusMessage,
           groomDraft: result.requirementDraft || text,
           groomOriginal: stateRef.current.groomOriginal || result.originalRequirement || text,
         })
-        setStatus({ type: 'error', message: result.message })
+        setStatus({ type: 'error', message: statusMessage })
         return
       }
       patch({

@@ -6,7 +6,14 @@ import {
   Square,
 } from 'lucide-react'
 import { CursorAgentMarkdown } from './CursorAgentMarkdown'
-import type { CursorConversationTurn, CursorThinkingBlock, ImplementRunState } from './implementRunTypes'
+import type {
+  CursorConversationTurn,
+  CursorFileChange,
+  CursorThinkingBlock,
+  ImplementRunState,
+} from './implementRunTypes'
+
+const THINKING_VISIBLE_LINES = 10
 import type { CursorCliModelOption } from './tauriDesktop'
 
 type Props = {
@@ -55,8 +62,11 @@ export function CursorAgentConversationPanel({
   const runningSteps = state.steps.filter((s) => s.status === 'active')
   const latestTaskLabel = activityStats.currentTask || runningSteps.at(-1)?.title
 
+  const fileChanges = state.fileChanges || []
+
   return (
     <section className="cursor-agent-shell">
+      <div className="cursor-agent-shell__body">
       <div className="cursor-agent-shell__thread">
         {exchanges.length === 0 && !state.running ? (
           <p className="cursor-agent-shell__empty">
@@ -96,6 +106,23 @@ export function CursorAgentConversationPanel({
             </div>
           </article>
         ))}
+      </div>
+
+      <aside className="cursor-agent-changes" aria-label="Files changed">
+        <div className="cursor-agent-changes__head">
+          <strong>Changes</strong>
+          <span className="cursor-agent-changes__count">{fileChanges.length}</span>
+        </div>
+        {fileChanges.length === 0 ? (
+          <p className="cursor-agent-changes__empty muted small">Edited files appear here as the agent runs.</p>
+        ) : (
+          <ul className="cursor-agent-changes__list">
+            {fileChanges.map((row) => (
+              <FileChangeRow key={row.path} change={row} />
+            ))}
+          </ul>
+        )}
+      </aside>
       </div>
 
       <footer className="cursor-agent-composer-bar">
@@ -182,32 +209,61 @@ function ThoughtBlock({
   block: CursorThinkingBlock
   onToggle: () => void
 }) {
-  const preview = thoughtPreview(block.text)
-  const title = block.streaming ? 'Thinking…' : block.collapsed ? 'Thought briefly' : 'Thought process'
+  const tail = thinkingTail(block.text, THINKING_VISIBLE_LINES)
+  const hiddenLineCount = Math.max(0, block.text.split(/\n/).length - THINKING_VISIBLE_LINES)
+  const title = block.streaming ? 'Thinking…' : block.collapsed ? 'Thought (last 10 lines)' : 'Thought process'
 
   return (
     <div className={`cursor-agent-thought${block.streaming ? ' is-streaming' : ''}`}>
-      <button type="button" className="cursor-agent-thought__toggle" onClick={onToggle}>
+      <button type="button" className="cursor-agent-thought__toggle" onClick={onToggle} aria-expanded={!block.collapsed}>
         {block.collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
         <span>{title}</span>
       </button>
-      {block.collapsed && preview ? (
-        <p className="cursor-agent-thought__preview">{preview}</p>
+      {block.collapsed && tail ? (
+        <pre className="cursor-agent-thought__preview">{tail}</pre>
       ) : null}
       {!block.collapsed ? (
-        <div className="cursor-agent-thought__body">{block.text.trim() || '…'}</div>
+        <div className="cursor-agent-thought__body">
+          {hiddenLineCount > 0 ? (
+            <p className="cursor-agent-thought__trunc muted small">{hiddenLineCount} earlier line(s) hidden</p>
+          ) : null}
+          <pre className="cursor-agent-thought__lines">{tail || '…'}</pre>
+        </div>
       ) : null}
     </div>
   )
 }
 
-function thoughtPreview(text: string): string {
-  const line = text
-    .split(/\n/)
-    .map((l) => l.trim())
-    .find(Boolean)
-  if (!line) return ''
-  return line.length > 160 ? `${line.slice(0, 157)}…` : line
+function thinkingTail(text: string, maxLines: number): string {
+  const lines = text.split(/\n/)
+  const slice = lines.length > maxLines ? lines.slice(-maxLines) : lines
+  return slice.join('\n').trimEnd()
+}
+
+function FileChangeRow({ change }: { change: CursorFileChange }) {
+  const label = displayPath(change.path)
+  const statusLabel =
+    change.status === 'added' ? 'A' : change.status === 'deleted' ? 'D' : 'M'
+  return (
+    <li className={`cursor-file-change cursor-file-change--${change.status}`} title={change.path}>
+      <span className={`cursor-file-change__badge cursor-file-change__badge--${change.status}`}>{statusLabel}</span>
+      <span className="cursor-file-change__path">{label}</span>
+      <span className="cursor-file-change__stats">
+        {change.additions > 0 ? <span className="cursor-file-change__add">+{change.additions}</span> : null}
+        {change.deletions > 0 ? <span className="cursor-file-change__del">−{change.deletions}</span> : null}
+        {change.status === 'deleted' && change.additions === 0 && change.deletions === 0 ? (
+          <span className="cursor-file-change__del">deleted</span>
+        ) : null}
+      </span>
+    </li>
+  )
+}
+
+function displayPath(path: string): string {
+  const norm = path.replace(/\\/g, '/')
+  const parts = norm.split('/').filter(Boolean)
+  if (parts.length <= 2) return parts.join('/')
+  return `…/${parts.slice(-2).join('/')}`
 }
 
 function formatToolLine(turn: CursorConversationTurn): string {

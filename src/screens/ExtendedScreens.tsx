@@ -1223,9 +1223,9 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
         </section>
       )}
 
-      {productRepoCount > 0 ? (
+      {productRepoCount > 0 && (setupReady || autoConfirm || autoAck || tbdCount === 0) ? (
         <section
-          className={`auto-run-status${setupReady ? ' is-done' : ''}${tbdCount ? ' is-error' : ''}${autoConfirm || autoAck ? ' is-running' : ''}`}
+          className={`auto-run-status${setupReady ? ' is-done' : ''}${autoConfirm || autoAck ? ' is-running' : ''}`}
           style={{ marginTop: '1rem' }}
         >
           <div className="auto-run-status__icon" aria-hidden="true">
@@ -1245,11 +1245,6 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
                   Topology, repositories, and stacks are what classify / spec / technical-plan will use.
                   Changing them later clears the work plan, not scope or grooming. Continue to Work plan.
                 </p>
-              </>
-            ) : tbdCount > 0 ? (
-              <>
-                <strong>Resolve TBD stacks</strong>
-                <p>Fill the remaining TBD stack fields, then Blink locks this setup automatically.</p>
               </>
             ) : (
               <>

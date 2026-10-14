@@ -28,15 +28,6 @@ import {
   pendingJiraTicketCount,
   planScopeFromWording,
 } from '../wizard/jiraTickets'
-import {
-  isScopeOptionSelected,
-  patchScopeOther,
-  patchScopePick,
-  patchScopeToggleOther,
-  scopeAnswersForQuestion,
-} from '../wizard/scopeClarify'
-import { isAnswered, unansweredRequired } from '../wizard/grooming'
-import type { GroomQuestion } from '../wizard/types'
 import { shouldAutoStartTickets, type JiraPublishState } from '../wizard/thinking'
 
 interface Props {
@@ -240,18 +231,11 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
   const [statusError, setStatusError] = useState<string | null>(null)
   const [transitionKey, setTransitionKey] = useState<string | null>(null)
   const [expandedEpicIds, setExpandedEpicIds] = useState<string[]>([])
-  const [replanningScope, setReplanningScope] = useState(false)
-
   const planInFlight = useRef(false)
 
   const jira = jiraConnection(state)
   const epics = state.productScope?.epics || []
   const stories = state.productScope?.stories || []
-  const scopeQuestions = state.scopeQuestions || []
-  const scopeAnswers = state.scopeAnswers || []
-  const scopeClarifyPending =
-    scopeQuestions.length > 0 &&
-    unansweredRequired({ groomQuestions: scopeQuestions, groomAnswers: scopeAnswers }).length > 0
   const jiraReady = isJiraReady(state)
   const createdOnScreen = createdTicketsOnScreen(state)
   const createdOk = createdOnScreen.length
@@ -319,7 +303,13 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
     setScopeError(null)
     markTicketsPipelineBusy(true)
     try {
-      const patch = await planScopeFromWording(state, wording)
+      const hasScope = (state.productScope?.epics?.length || 0) + (state.productScope?.stories?.length || 0) > 0
+      const patch = await planScopeFromWording(
+        state,
+        wording,
+        undefined,
+        hasScope ? { refresh: true, productScope: state.productScope ?? undefined } : undefined,
+      )
       onUpdate(patch)
     } catch (err) {
       setScopeError(err instanceof Error ? err.message : 'Could not plan product scope.')
@@ -329,33 +319,6 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
       if (!isJiraReady(state)) markTicketsPipelineBusy(false)
     }
   }, [onUpdate, state, wording])
-
-  const handleScopeReplan = useCallback(async () => {
-    if (scopeClarifyPending) {
-      setScopeError('Answer the scope questions below before re-planning.')
-      return
-    }
-    if (!wording || planInFlight.current) return
-    planInFlight.current = true
-    setReplanningScope(true)
-    setScopeError(null)
-    markTicketsPipelineBusy(true)
-    try {
-      const patch = await planScopeFromWording(state, wording, undefined, {
-        refresh: true,
-        productScope: state.productScope,
-        answers: scopeAnswers,
-        skipClarify: true,
-      })
-      onUpdate(patch)
-    } catch (err) {
-      setScopeError(err instanceof Error ? err.message : 'Could not re-plan product scope.')
-    } finally {
-      planInFlight.current = false
-      setReplanningScope(false)
-      if (!isJiraReady(state)) markTicketsPipelineBusy(false)
-    }
-  }, [onUpdate, scopeAnswers, scopeClarifyPending, state, wording])
 
   const handleCreateInJira = useCallback(async () => {
     if (!beginJiraCreate()) return
@@ -597,98 +560,6 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
       </div>
 
       {planningScope || autoPlan ? <p className="muted">Planning epics and stories…</p> : null}
-      {replanningScope ? <p className="muted">Re-planning epics and stories from your scope choices…</p> : null}
-
-      {scopeQuestions.length > 0 ? (
-        <div className="scope-clarify-panel groom-panel">
-          <div className="req-section-head">
-            <h4>Shape the backlog</h4>
-            <p>Choose how v1 should be split. Then re-plan to refresh epics and stories.</p>
-          </div>
-          {scopeQuestions.map((question: GroomQuestion) => {
-            const rows = scopeAnswersForQuestion(question.id, scopeAnswers)
-            const otherRow = rows.find((item) => item.optionId === 'other')
-            const otherSelected = Boolean(otherRow)
-            return (
-              <fieldset key={question.id} className="groom-question-card">
-                <legend>{question.text}</legend>
-                <div className="groom-options">
-                  {question.options.map((option) => (
-                    <label key={option.id} className="groom-option">
-                      <input
-                        type={question.allowMultiple ? 'checkbox' : 'radio'}
-                        name={`scope-${question.id}`}
-                        checked={isScopeOptionSelected(question, scopeAnswers, option.id)}
-                        onChange={() =>
-                          onUpdate({
-                            scopeAnswers: patchScopePick(
-                              { scopeQuestions, scopeAnswers },
-                              question.id,
-                              option.id,
-                              option.label,
-                            ),
-                          })
-                        }
-                      />
-                      <span>
-                        <strong>{option.label}</strong>
-                        {option.description ? <span className="muted"> — {option.description}</span> : null}
-                      </span>
-                    </label>
-                  ))}
-                  {question.allowOther !== false ? (
-                    <label className="groom-option">
-                      <input
-                        type={question.allowMultiple ? 'checkbox' : 'radio'}
-                        name={`scope-${question.id}`}
-                        checked={otherSelected}
-                        onChange={(e) =>
-                          onUpdate({
-                            scopeAnswers: patchScopeToggleOther(
-                              { scopeQuestions, scopeAnswers },
-                              question.id,
-                              e.target.checked,
-                            ),
-                          })
-                        }
-                      />
-                      <span>Other</span>
-                    </label>
-                  ) : null}
-                  {otherSelected ? (
-                    <textarea
-                      className="full-input groom-other-input"
-                      rows={2}
-                      placeholder="Describe your scope preference…"
-                      value={otherRow?.otherText ?? ''}
-                      onChange={(e) =>
-                        onUpdate({
-                          scopeAnswers: patchScopeOther(
-                            { scopeQuestions, scopeAnswers },
-                            question.id,
-                            e.target.value,
-                          ),
-                        })
-                      }
-                    />
-                  ) : null}
-                </div>
-                {!isAnswered(question, scopeAnswers) ? (
-                  <p className="muted groom-question-hint">Pick an option to include this in re-planning.</p>
-                ) : null}
-              </fieldset>
-            )
-          })}
-          <button
-            type="button"
-            className="primary-btn"
-            disabled={scopeClarifyPending || replanningScope || planningScope || !wording}
-            onClick={() => void handleScopeReplan()}
-          >
-            {replanningScope ? 'Re-planning…' : 'Re-plan with these choices'}
-          </button>
-        </div>
-      ) : null}
 
       <JiraPublishStatus
         publish={
