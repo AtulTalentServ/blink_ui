@@ -33,5 +33,5 @@ export function openDeveloperTools(): void {
   if (opened) {
     return
   }
-  window.dispatchEvent(new CustomEvent('blink-developer-inapp-open', { bubbles: true }))
+  window.dispatchEvent(new CustomEvent('blink-developer-inapp-open'))
 }

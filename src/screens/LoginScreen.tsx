@@ -48,10 +48,7 @@ export function LoginScreen() {
         const message =
           err instanceof Error ? err.message : 'Could not reach the Blink API. Check the backend setting below.'
         if (isLocalBackendUnavailableMessage(message)) {
-          setNotice({
-            type: 'error',
-            message,
-          })
+          setNotice({ type: 'error', message })
         }
       })
   }

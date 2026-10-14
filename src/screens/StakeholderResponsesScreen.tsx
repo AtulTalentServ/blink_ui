@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { DocMarkdown } from '../components/DocMarkdown'
 import {
   Bell,
   CheckCircle2,
@@ -895,7 +896,7 @@ export function StakeholderResponsesScreen({
                         <div className="discussion-digest-label">
                           <MessageSquareText size={14} /> {summaryMeta[q.id] || 'Thread digest'}
                         </div>
-                        <pre>{digest}</pre>
+                        <DocMarkdown className="discussion-digest-body" text={digest} />
                       </div>
                     ) : null}
 

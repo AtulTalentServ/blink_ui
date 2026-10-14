@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, Circle, Layers, ListOrdered, Loader2, Play, RefreshCw, User } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Circle, Layers, Loader2, Play, RefreshCw, User } from 'lucide-react'
 import {
   fetchCanonicalSnapshot,
   fetchShipSession,
@@ -7,9 +7,9 @@ import {
   type DraftPullRequest,
   type ShipStepDto,
 } from '../api/blink'
+import { ImplementAllRequirementsPanel } from '../desktop/ImplementAllRequirementsPanel'
 import { patchFromCanonicalSnapshot } from '../wizard/canonical'
 import {
-  excerptRequirements,
   loadImplementRunMode,
   requirementsBatchContext,
   saveImplementRunMode,
@@ -262,7 +262,6 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   const [implementSteps, setImplementSteps] = useState<ShipStepDto[]>([])
   const [selectedIssueId, setSelectedIssueId] = useState<string | undefined>(() => defaultIssueId(state))
   const [runMode, setRunMode] = useState<ImplementRunMode>(() => loadImplementRunMode())
-  const [batchQueueVisible, setBatchQueueVisible] = useState(false)
 
   const readyForAgent = Boolean(state.projectId && (state.planAcknowledged || state.shipPlanAcknowledged))
   const workspaceReady = Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged)
@@ -435,20 +434,6 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   const selectRunMode = (mode: ImplementRunMode) => {
     setRunMode(mode)
     saveImplementRunMode(mode)
-    if (mode === 'individual') {
-      setBatchQueueVisible(false)
-    }
-  }
-
-  const showBatchPlan = () => {
-    if (!batchRequirements) {
-      setMessage(null)
-      setError('Add current requirements (grooming, requirements text, or scope) before implement-all.')
-      return
-    }
-    setBatchQueueVisible(true)
-    setMessage(null)
-    setError(null)
   }
 
   return (
@@ -460,7 +445,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         <p className="status-banner info">Finish Workspace first, then run stories here.</p>
       ) : null}
       {error ? <p className="status-banner error">{error}</p> : null}
-      {message && !error ? (
+      {message && !error && runMode !== 'batch-all' ? (
         <p className="status-banner success">
           {message}
           {selectedPrUrls[0] ? (
@@ -497,13 +482,6 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
             Implement all requirements
           </button>
         </div>
-        {runMode === 'batch-all' ? (
-          <p className="muted small implement-run-mode-hint">
-            Batch mode uses your current requirements text only — not Jira tickets. Preview does not call the agent yet;
-            the desktop app will run the full requirements in Phase 3 (stop on first failure).
-          </p>
-        ) : null}
-
         {runMode === 'individual' ? (
           <>
         <div className="implement-queue-card__meta">
@@ -593,24 +571,11 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         )}
           </>
         ) : (
-          <div className="implement-batch-requirements-card">
-            <div className="implement-queue-card__meta">
-              <span>
-                {batchRequirements
-                  ? `${batchRequirements.sourceLabel} · ${batchRequirements.text.length.toLocaleString()} characters`
-                  : 'No requirements text yet'}
-              </span>
-            </div>
-            {batchRequirements ? (
-              <p className="muted small">
-                Ticket rows are hidden in this mode. Switch to Individual tickets to implement or re-run per story.
-              </p>
-            ) : (
-              <p className="muted small">
-                Finish grooming or scope so Blink has requirements to implement in one batch.
-              </p>
-            )}
-          </div>
+          <ImplementAllRequirementsPanel
+            batchRequirements={batchRequirements}
+            readyForAgent={readyForAgent}
+            workspaceReady={workspaceReady}
+          />
         )}
 
         {runMode === 'individual' && selectedRow?.hasDraft && (selectedRow.lastSummary || selectedPrUrls.length > 0 || (state.implementStep?.issueId === selectedRow.id && state.implementStep?.notes?.length)) ? (
@@ -637,57 +602,9 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
           </div>
         ) : null}
 
-        {runMode === 'batch-all' && batchQueueVisible && batchRequirements ? (
-          <div className="implement-batch-queue" aria-live="polite">
-            <div className="implement-batch-queue__head">
-              <ListOrdered size={16} aria-hidden />
-              <strong>Implement-all plan</strong>
-              <span className="muted">{batchRequirements.sourceLabel}</span>
-            </div>
-            <ol className="implement-batch-queue__list">
-              <li>
-                <span className="implement-batch-queue__step">1</span>
-                <span className="implement-batch-queue__scope-label">Current requirements</span>
-                <span className="muted">Single batch · not split by ticket</span>
-              </li>
-            </ol>
-            <pre className="implement-batch-requirements-preview">
-              {excerptRequirements(batchRequirements.text)}
-            </pre>
-            <p className="muted small implement-batch-queue__note">
-              Phase 3 desktop runner will send this requirements text to the agent in one workspace run. Per-ticket
-              Implement on the hosted API stays under Individual tickets.
-            </p>
-          </div>
-        ) : null}
-
+        {runMode === 'individual' ? (
         <div className="ship-actions implement-queue-actions">
-          {runMode === 'batch-all' ? (
-            <>
-              <button
-                type="button"
-                className="primary-btn"
-                disabled={!readyForAgent || !workspaceReady || !batchRequirements}
-                onClick={showBatchPlan}
-              >
-                <ListOrdered size={16} aria-hidden />
-                <span>
-                  {batchQueueVisible && batchRequirements
-                    ? 'Refresh implement-all plan'
-                    : 'Show implement-all plan'}
-                </span>
-              </button>
-              {batchQueueVisible ? (
-                <button
-                  type="button"
-                  className="secondary-btn"
-                  onClick={() => setBatchQueueVisible(false)}
-                >
-                  Hide plan
-                </button>
-              ) : null}
-            </>
-          ) : nextPending ? (
+          {nextPending ? (
             <button
               type="button"
               className="primary-btn"
@@ -718,14 +635,15 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
               <span>{selectedHasDraft ? 'Re-run selected' : 'Implement selected'}</span>
             </button>
           ) : null}
-          {runMode === 'individual' && selectedHasDraft && onContinueToReview ? (
+          {selectedHasDraft && onContinueToReview ? (
             <button type="button" className="secondary-btn" onClick={onContinueToReview}>
               Continue to Review &amp; PR
             </button>
           ) : null}
         </div>
+        ) : null}
 
-        {!workspaceReady ? (
+        {runMode === 'individual' && !workspaceReady ? (
           <p className="muted small implement-queue-hint">
             <AlertCircle size={14} /> Workspace must be ready before the agent can run.
           </p>
