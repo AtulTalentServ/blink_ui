@@ -6,9 +6,11 @@ import assert from 'node:assert/strict'
 import { defaultWizardState } from './types.ts'
 import { STEP_ORDER } from './steps.ts'
 import {
+  advisoryRequirementText,
   hasWorkPlanArtifacts,
   remapWizardProgress,
   shapeFingerprint,
+  shapeRequirementText,
   shouldAutoAcknowledgeShape,
   shouldAutoConfirmRepoTechnologies,
   validateShapeReview,
@@ -134,5 +136,20 @@ const suggested = {
 }
 assert.equal(shouldAutoConfirmRepoTechnologies(suggested), true)
 assert.equal(shouldAutoAcknowledgeShape(suggested), false)
+
+const advisoryState = {
+  ...defaultWizardState,
+  groomDraft: 'Groomed calculator requirement.',
+  requirementsText: 'Raw upload',
+  description: 'Short blurb',
+  groomQuestions: [{ id: 'q1', text: 'Who is the user?', options: [] }],
+  groomAnswers: [{ questionId: 'q1', optionId: 'o1', optionLabel: 'Receptionist' }],
+  questions: [{ id: 's1', question: 'Scale?' }],
+  responses: [{ questionId: 's1', status: 'answered' as const, response: '10k users' }],
+  productScope: { epics: [{ title: 'Booking' }], stories: [{ title: 'Book a visit' }] },
+}
+assert.equal(advisoryRequirementText(advisoryState), 'Groomed calculator requirement.')
+assert.equal(shapeRequirementText(advisoryState).includes('Receptionist'), true)
+assert.equal(shapeRequirementText(advisoryState).includes('Booking'), true)
 
 console.log('shape.check.ts: ok')

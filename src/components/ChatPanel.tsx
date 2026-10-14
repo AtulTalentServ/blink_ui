@@ -16,6 +16,7 @@ import {
   type ChatMessageDto,
 } from '../api/blink'
 import { WIZARD_STEPS } from '../wizard/steps'
+import { rafCoalesce } from '../utils/uiBatch'
 import { ChatMarkdown } from './ChatMarkdown'
 import { CHAT_MODELS, CHAT_MODEL_STORAGE_KEY } from '../developer/chatModels'
 
@@ -88,6 +89,10 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const streamingDisplayRef = useRef<ReturnType<typeof rafCoalesce<string>> | null>(null)
+  if (!streamingDisplayRef.current) {
+    streamingDisplayRef.current = rafCoalesce((text) => setStreamingText(text))
+  }
 
   const contextLabel = useMemo(() => stepLabel(currentStep), [currentStep])
   const suggestions = useMemo(() => suggestionsForStep(currentStep), [currentStep])
@@ -169,6 +174,7 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
   function stop() {
     abortRef.current?.abort()
     abortRef.current = null
+    streamingDisplayRef.current?.flush()
     setBusy(false)
     setStreamingText(null)
   }
@@ -224,11 +230,12 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
           },
           onToken: (chunk) => {
             localStream += chunk
-            setStreamingText(localStream)
+            streamingDisplayRef.current?.push(localStream)
           },
           onDone: (message, turnId) => {
             gotDone = true
             streamTurnId = turnId || streamTurnId
+            streamingDisplayRef.current?.flush()
             setStreamingText(null)
             setMessages((prev) => {
               const withoutOptimistic = prev.filter((m) => m.id !== optimisticId)
@@ -421,7 +428,7 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
               <article className="chat-msg assistant">
                 <div className="chat-msg-role">Blink</div>
                 <div className={`chat-msg-body is-streaming`}>
-                  <ChatMarkdown text={streamingText} />
+                  <ChatMarkdown text={streamingText} streaming />
                   <span className="chat-caret" aria-hidden />
                 </div>
               </article>

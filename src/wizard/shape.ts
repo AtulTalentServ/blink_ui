@@ -143,7 +143,14 @@ export function topologyConfirmer(state: WizardState): { name: string; email: st
   return { name: lead.personName.trim(), email: lead.personEmail.trim() }
 }
 
-/** Groomed requirement plus later answers, so shape commands see the same story as earlier steps. */
+/** Groomed requirement only — used for Shape / Repositories / Technology LLM calls. */
+export function advisoryRequirementText(
+  state: Pick<WizardState, 'groomDraft' | 'requirementsText' | 'description'>,
+): string {
+  return (state.groomDraft || state.requirementsText || state.description || '').trim()
+}
+
+/** Groomed requirement plus later answers, so confirm/plan steps see the same story as earlier steps. */
 export function shapeRequirementText(state: Pick<
   WizardState,
   'groomDraft' | 'requirementsText' | 'description' | 'groomQuestions' | 'groomAnswers' | 'questions' | 'responses' | 'productScope'
@@ -252,6 +259,18 @@ export function stacksReadyForWorkPlan(state: WizardState): boolean {
   if (!rows.length) return false
   if (!(state.repositories || []).some((repo) => repo.name.trim())) return false
   return rows.every((row) => row.status === 'confirmed')
+}
+
+const EMPTY_STACK_FIELD = new Set(['', '—', '-', 'n/a', 'na', 'tbd'])
+
+/** True when a row has no meaningful language/framework/build (often after a bad confirm or stale draft). */
+export function isIncompleteRepoTechnology(row: {
+  language?: string
+  framework?: string
+  buildTool?: string
+}): boolean {
+  const token = (value?: string) => EMPTY_STACK_FIELD.has(String(value ?? '').trim().toLowerCase())
+  return token(row.language) && token(row.framework) && token(row.buildTool)
 }
 
 /** Suggested stacks from Project Shape — promote them without a second Confirm click. */

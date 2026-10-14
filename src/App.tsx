@@ -528,14 +528,17 @@ export default function App() {
 
   useEffect(() => {
     if (!session?.email) return
-    saveWizardDraft(session.email, {
-      step: wizardBookmark(),
-      completedThrough,
-      state,
-      updatedAt: Date.now(),
-      freshStart: freshStartRef.current && !state.projectId,
-    })
-    saveSessionStep(step)
+    const timer = window.setTimeout(() => {
+      saveWizardDraft(session.email, {
+        step: wizardBookmark(),
+        completedThrough: completedRef.current,
+        state: stateRef.current,
+        updatedAt: Date.now(),
+        freshStart: freshStartRef.current && !stateRef.current.projectId,
+      })
+      saveSessionStep(stepRef.current)
+    }, 500)
+    return () => window.clearTimeout(timer)
   }, [session?.email, step, completedThrough, state, wizardBookmark])
 
   useEffect(() => {
@@ -583,26 +586,27 @@ export default function App() {
   useEffect(() => {
     if (!session?.email) return
     const flush = () => {
+      const latest = stateRef.current
       saveWizardDraft(session.email, {
         step: wizardBookmark(),
         completedThrough: completedRef.current,
-        state,
+        state: latest,
         updatedAt: Date.now(),
-        freshStart: freshStartRef.current && !state.projectId,
+        freshStart: freshStartRef.current && !latest.projectId,
       })
       saveSessionStep(stepRef.current)
-      if (!state.projectId) return
+      if (!latest.projectId) return
       const payload = withDraftProjectPayload(projectPayload())
       const body = JSON.stringify({
         ...payload,
         wizardStep: wizardBookmark(),
         wizardCompletedThrough: completedRef.current,
-        wizardState: serializeWizardState(state),
+        wizardState: serializeWizardState(latest),
       })
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       if (session.token) headers.Authorization = `Bearer ${session.token}`
       try {
-        void fetch(apiUrl(`/projects/${state.projectId}`), {
+        void fetch(apiUrl(`/projects/${latest.projectId}`), {
           method: 'PUT',
           headers,
           body,

@@ -363,6 +363,8 @@ export interface WizardState extends SetupForm {
   repositories: RepoDefinition[]
   repositoriesTouched: boolean
   repoTechnologies: RepoTechnology[]
+  /** True after an LLM stack suggestion. Visiting Technology must not auto-resuggest. */
+  repoTechnologiesSuggested?: boolean
   ideTool: string
   cloudProvider: string
   environments: Record<string, boolean>
@@ -622,6 +624,7 @@ export const defaultWizardState: WizardState = {
   repositories: defaultRepos,
   repositoriesTouched: false,
   repoTechnologies: defaultRepoTechnologies(defaultRepos),
+  repoTechnologiesSuggested: false,
   ideTool: 'cursor',
   cloudProvider: 'aws',
   environments: { dev: true, qa: true, staging: true, prod: true },

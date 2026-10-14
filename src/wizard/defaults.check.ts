@@ -53,4 +53,30 @@ assert.equal(merged[0].framework, 'React + Vite')
 assert.equal(merged[1].framework, 'Spring Boot 3.4')
 assert.equal(merged[1].status, 'confirmed')
 
+const forced = mergeRecommendedRepoTechnologies(
+  mergeCurrent,
+  [
+    {
+      repoId: 'web',
+      language: 'TypeScript',
+      framework: 'React + Vite',
+      database: '—',
+      buildTool: 'npm / Vite',
+      status: 'recommendation',
+    },
+    {
+      repoId: 'api',
+      language: 'Python',
+      framework: 'FastAPI',
+      database: 'PostgreSQL',
+      buildTool: 'pip / uvicorn',
+      status: 'recommendation',
+    },
+  ],
+  mergeRepos,
+  { overwriteConfirmed: true },
+)
+assert.equal(forced[1].framework, 'FastAPI')
+assert.equal(forced[1].status, 'recommendation')
+
 console.log('defaults.check.ts: ok')

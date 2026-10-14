@@ -2,6 +2,8 @@ import { sanitizeDownloadStructure, type RepoDefinition, type RepoTechnology } f
 import type { DesignOption, ProductScopeData, WizardState } from '../wizard/types'
 import { stripExcludedZipFolders } from './stripZipFolders'
 import { loadAuthSession } from '../auth/session'
+import { resolveApiBase, isLocalApiTarget } from '../developer/apiTarget'
+import { logTechStack, summarizeRepoTechnologyRow } from '../developer/techStackDebug'
 import { CHAT_MODEL_STORAGE_KEY } from '../developer/chatModels'
 
 export interface StakeholderRoleDto {
@@ -95,14 +97,8 @@ function authHeaders(json = false): HeadersInit {
   return headers
 }
 
-/** API base. In `npm run dev`, `.env.development` can point at Render or `/api` (Vite proxy). */
-const DEFAULT_API_URL = 'https://blink-backend-af7x.onrender.com/api'
-
 export function apiUrl(path: string): string {
-  let base = (import.meta.env.VITE_API_URL ?? DEFAULT_API_URL).replace(/\/$/, '')
-  if (/^https?:\/\//.test(base) && !base.endsWith('/api')) {
-    base = `${base}/api`
-  }
+  const base = resolveApiBase()
   const suffix = path.startsWith('/') ? path : `/${path}`
   return `${base}${suffix}`
 }
@@ -160,8 +156,7 @@ export function canonicalizeOAuthCallback(url: string): string {
 }
 
 function isLocalApi(): boolean {
-  const base = (import.meta.env.VITE_API_URL ?? DEFAULT_API_URL).replace(/\/$/, '')
-  return base.startsWith('/') || /localhost|127\.0\.0\.1/.test(base)
+  return isLocalApiTarget()
 }
 
 function normalizeGroomQuestions(value: unknown): GroomQuestionDto[] {
@@ -854,6 +849,28 @@ function asRepoTechnology(row: unknown): RepoTechnology | null {
   if (!repoId) return null
   const status =
     item.status === 'confirmed' || item.status === 'tbd' ? item.status : 'recommendation'
+  const rawOptions = item.technologyOptions
+  const technologyOptions = Array.isArray(rawOptions)
+    ? rawOptions
+        .map((opt) => {
+          if (!opt || typeof opt !== 'object') return null
+          const row = opt as Record<string, unknown>
+          const id = String(row.id || '').trim()
+          if (!id) return null
+          return {
+            id,
+            label: String(row.label || id),
+            language: row.language != null ? String(row.language) : undefined,
+            framework: row.framework != null ? String(row.framework) : undefined,
+            database: row.database != null ? String(row.database) : undefined,
+            buildTool: row.buildTool != null ? String(row.buildTool) : undefined,
+            benefits: Array.isArray(row.benefits) ? row.benefits.map(String) : undefined,
+            recommended: row.recommended === true,
+            custom: row.custom === true || id === 'custom',
+          }
+        })
+        .filter((row): row is NonNullable<typeof row> => Boolean(row))
+    : undefined
   return {
     repoId,
     language: String(item.language || '—'),
@@ -861,6 +878,7 @@ function asRepoTechnology(row: unknown): RepoTechnology | null {
     database: String(item.database || '—'),
     buildTool: String(item.buildTool || '—'),
     status,
+    ...(technologyOptions?.length ? { technologyOptions } : {}),
   }
 }
 
@@ -877,6 +895,16 @@ export async function recommendRepoTechnologies(
 ): Promise<RepoTechnology[]> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 90_000)
+  const repoIds = (payload.repositories || []).map((repo) => repo.id)
+  logTechStack('api.request', {
+    projectId,
+    topology: payload.topology,
+    repositoryModel: payload.repositoryModel,
+    architectureStyle: payload.architectureStyle,
+    repoIds,
+    requirementChars: (payload.requirementText || '').length,
+    apiBase: resolveApiBase(),
+  })
   try {
     const response = await fetch(apiUrl(`/projects/${projectId}/recommend-technology-stack`), {
       method: 'POST',
@@ -888,27 +916,64 @@ export async function recommendRepoTechnologies(
         topology: payload.topology,
         repositoryModel: payload.repositoryModel,
         architectureStyle: payload.architectureStyle,
-        repositories: payload.repositories,
+        repositories: (payload.repositories || []).map((repo) => ({
+          id: repo.id,
+          name: repo.name,
+          purpose: repo.purpose,
+        })),
       }),
       signal: controller.signal,
     })
-    if (!response.ok) throw new Error(await readError(response))
+    if (!response.ok) {
+      const errText = await readError(response)
+      logTechStack('api.http_error', { projectId, status: response.status, errText })
+      throw new Error(errText)
+    }
     const result = (await response.json()) as Record<string, unknown>
     const status = String(result.status || '')
+    const rawRows = Array.isArray(result.repoTechnologies) ? result.repoTechnologies : []
+    logTechStack('api.response_raw', {
+      projectId,
+      status: status || '(empty)',
+      message: result.message,
+      rawRowCount: rawRows.length,
+      rawRepoIds: rawRows.map((row) =>
+        row && typeof row === 'object' ? String((row as Record<string, unknown>).repoId || '') : '',
+      ),
+      hasTechnologyOptionsKey: rawRows.some(
+        (row) =>
+          row &&
+          typeof row === 'object' &&
+          Array.isArray((row as Record<string, unknown>).technologyOptions),
+      ),
+    })
     if (status && status !== 'ok') {
       const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
+      logTechStack('api.agent_error', { projectId, status, message: result.message, errors })
       throw new Error(String(result.message || errors || status))
     }
-    const rows = Array.isArray(result.repoTechnologies) ? result.repoTechnologies : []
+    const rows = rawRows
     const mapped = rows.map(asRepoTechnology).filter((row): row is RepoTechnology => Boolean(row))
+    logTechStack('api.response_mapped', {
+      projectId,
+      mappedCount: mapped.length,
+      rows: mapped.map(summarizeRepoTechnologyRow),
+      droppedRowCount: rawRows.length - mapped.length,
+    })
     if (!mapped.length) {
+      logTechStack('api.empty_stacks', { projectId, rawRows })
       throw new Error('Technology recommendation did not include stacks.')
     }
     return mapped
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
+      logTechStack('api.timeout', { projectId })
       throw new Error('Stack suggestion timed out. Using the default stacks.')
     }
+    logTechStack('api.failed', {
+      projectId,
+      error: error instanceof Error ? error.message : String(error),
+    })
     throw error
   } finally {
     window.clearTimeout(timer)

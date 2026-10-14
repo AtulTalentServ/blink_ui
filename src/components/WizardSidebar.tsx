@@ -9,7 +9,7 @@ import {
   X,
 } from 'lucide-react'
 import { useDeveloperMode } from '../developer/DeveloperModeContext'
-import { openDeveloperPopup } from '../developer/window'
+import { openDeveloperTools } from '../developer/window'
 import { TalentServLogo } from './TalentServLogo'
 import { BlinkLogo } from './BlinkLogo'
 import {
@@ -307,7 +307,7 @@ export function WizardSidebar({
             <button
               type="button"
               className={sidebarOpen ? 'account-float-dev is-on' : 'account-dev-btn is-on'}
-              onClick={() => openDeveloperPopup()}
+              onClick={() => openDeveloperTools()}
               title="Developer tools (Ctrl+Shift+D)"
               aria-label="Open developer tools"
             >

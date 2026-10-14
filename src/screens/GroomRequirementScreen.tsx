@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { DocMarkdown } from '../components/DocMarkdown'
 import { Check, ChevronDown, Mail, MessageSquare, Sparkles } from 'lucide-react'
 import { JiraScopePanel } from './JiraScopePanel'
 import { assigneeForQuestion } from '../wizard/questions'
@@ -367,12 +368,12 @@ export function GroomingPanel({
               {state.groomOriginal && state.groomOriginal !== state.groomDraft && (
                 <div>
                   <h4>Before</h4>
-                  <pre className="groom-draft">{state.groomOriginal}</pre>
+                  <DocMarkdown className="groom-draft" text={state.groomOriginal || ''} />
                 </div>
               )}
               <div>
                 {state.groomOriginal && state.groomOriginal !== state.groomDraft ? <h4>Proposed</h4> : null}
-                <pre className="groom-draft">{state.groomDraft}</pre>
+                <DocMarkdown className="groom-draft" text={state.groomDraft || ''} />
               </div>
             </div>
           ) : null}

@@ -26,3 +26,12 @@ export function openDeveloperPopup(): Window | null {
   )
   return popup
 }
+
+/** Popup when allowed; otherwise in-app panel (WebView2 / blocked popups). */
+export function openDeveloperTools(): void {
+  const opened = openDeveloperPopup()
+  if (opened) {
+    return
+  }
+  window.dispatchEvent(new CustomEvent('blink-developer-inapp-open'))
+}

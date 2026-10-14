@@ -400,3 +400,56 @@ body {
 .dev-s3-msg.is-ok {
   color: #047857;
 }
+
+.dev-inapp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem;
+  box-sizing: border-box;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.dev-inapp-shell {
+  position: relative;
+  width: min(440px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  border-radius: 16px;
+  background: #f8fafc;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
+}
+
+.dev-inapp-close {
+  position: sticky;
+  top: 0.55rem;
+  float: right;
+  z-index: 2;
+  margin: 0.55rem 0.55rem 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #334155;
+  cursor: pointer;
+}
+
+.dev-inapp-close:hover {
+  background: rgba(15, 23, 42, 0.1);
+}
+
+.dev-popup-inapp {
+  max-width: none;
+  min-height: auto;
+}
+
+body.blink-dev-inapp-open {
+  overflow: hidden;
+}

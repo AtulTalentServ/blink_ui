@@ -80,6 +80,11 @@ export function normalizeWizardStep(
   return 'welcome'
 }
 
+type LegacyWizardState = {
+  shapeRecommendation?: unknown
+  repositoryRosterSuggested?: unknown
+}
+
 export function serializeWizardState(state: WizardState): WizardState {
   const {
     implementationIssueId: _implementationIssueId,
@@ -90,8 +95,10 @@ export function serializeWizardState(state: WizardState): WizardState {
     implementationExecutionPlan: _implementationExecutionPlan,
     implementationProgressHistory: _implementationProgressHistory,
     implementationResultReviews: _implementationResultReviews,
+    shapeRecommendation: _shapeRecommendation,
+    repositoryRosterSuggested: _repositoryRosterSuggested,
     ...currentState
-  } = state as WizardState & RemovedTicketHandoffState
+  } = state as WizardState & RemovedTicketHandoffState & LegacyWizardState
   return {
     ...currentState,
     requirementFile: null,
@@ -114,8 +121,10 @@ export function restoreWizardState(raw: unknown): WizardState {
     implementationExecutionPlan: _implementationExecutionPlan,
     implementationProgressHistory: _implementationProgressHistory,
     implementationResultReviews: _implementationResultReviews,
+    shapeRecommendation: _shapeRecommendation,
+    repositoryRosterSuggested: _repositoryRosterSuggested,
     ...currentState
-  } = parsed as Partial<WizardState> & RemovedTicketHandoffState
+  } = parsed as Partial<WizardState> & RemovedTicketHandoffState & LegacyWizardState
   const integrationsById = new Map(
     (Array.isArray(currentState.integrations) ? currentState.integrations : []).map((item) => [item.id, item]),
   )

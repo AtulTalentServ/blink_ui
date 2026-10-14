@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, Circle, Loader2, Play, RefreshCw } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Circle, Layers, Loader2, Play, RefreshCw, User } from 'lucide-react'
 import {
   fetchCanonicalSnapshot,
   fetchShipSession,
@@ -7,7 +7,15 @@ import {
   type DraftPullRequest,
   type ShipStepDto,
 } from '../api/blink'
+import { ImplementAllRequirementsPanel } from '../desktop/ImplementAllRequirementsPanel'
 import { patchFromCanonicalSnapshot } from '../wizard/canonical'
+import {
+  loadImplementRunMode,
+  implementArchitectureContext,
+  requirementsBatchContext,
+  saveImplementRunMode,
+  type ImplementRunMode,
+} from '../wizard/implementRunMode'
 import type { StorySummary, WizardState } from '../wizard/types'
 
 interface Props {
@@ -254,6 +262,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   const [prs, setPrs] = useState<DraftPullRequest[]>([])
   const [implementSteps, setImplementSteps] = useState<ShipStepDto[]>([])
   const [selectedIssueId, setSelectedIssueId] = useState<string | undefined>(() => defaultIssueId(state))
+  const [runMode, setRunMode] = useState<ImplementRunMode>(() => loadImplementRunMode())
 
   const readyForAgent = Boolean(state.projectId && (state.planAcknowledged || state.shipPlanAcknowledged))
   const workspaceReady = Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged)
@@ -313,6 +322,20 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   )
 
   const nextPending = rows.find((r) => !r.hasDraft)
+  const batchRequirements = useMemo(() => requirementsBatchContext(state), [
+    state.groomDraft,
+    state.requirementsText,
+    state.productScope?.markdown,
+    state.description,
+  ])
+  const batchArchitecture = useMemo(() => implementArchitectureContext(state), [
+    state.architectureStyle,
+    state.repoTechnologies,
+    state.repositories,
+    state.repositoryModel,
+    state.topology,
+    state.topologyConfirmation,
+  ])
   const selectedRow = rows.find((r) => r.id === selectedIssueId) || rows[0]
   const draftedCount = rows.filter((r) => r.hasDraft).length
   const selectedHasDraft = Boolean(selectedRow?.hasDraft)
@@ -417,6 +440,11 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     onUpdate({ sdlcStartIssueId: id })
   }
 
+  const selectRunMode = (mode: ImplementRunMode) => {
+    setRunMode(mode)
+    saveImplementRunMode(mode)
+  }
+
   return (
     <div className="screen cursor-work-screen">
       {!readyForAgent ? (
@@ -426,7 +454,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         <p className="status-banner info">Finish Workspace first, then run stories here.</p>
       ) : null}
       {error ? <p className="status-banner error">{error}</p> : null}
-      {message && !error ? (
+      {message && !error && runMode !== 'batch-all' ? (
         <p className="status-banner success">
           {message}
           {selectedPrUrls[0] ? (
@@ -441,6 +469,30 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
       ) : null}
 
       <section className="card shape-section implement-queue-card">
+        <div className="implement-run-mode" role="tablist" aria-label="Implementation run mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={runMode === 'individual'}
+            className={`implement-run-mode__btn${runMode === 'individual' ? ' is-active' : ''}`}
+            onClick={() => selectRunMode('individual')}
+          >
+            <User size={15} aria-hidden />
+            Individual tickets
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={runMode === 'batch-all'}
+            className={`implement-run-mode__btn${runMode === 'batch-all' ? ' is-active' : ''}`}
+            onClick={() => selectRunMode('batch-all')}
+          >
+            <Layers size={15} aria-hidden />
+            Implement all requirements
+          </button>
+        </div>
+        {runMode === 'individual' ? (
+          <>
         <div className="implement-queue-card__meta">
           <span>
             {rows.length ? `${draftedCount}/${rows.length} drafted` : 'No stories yet'}
@@ -526,8 +578,17 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         ) : (
           <p className="muted small">Add stories in Scope &amp; tickets first.</p>
         )}
+          </>
+        ) : (
+          <ImplementAllRequirementsPanel
+            batchRequirements={batchRequirements}
+            batchArchitecture={batchArchitecture}
+            readyForAgent={readyForAgent}
+            workspaceReady={workspaceReady}
+          />
+        )}
 
-        {selectedRow?.hasDraft && (selectedRow.lastSummary || selectedPrUrls.length > 0 || (state.implementStep?.issueId === selectedRow.id && state.implementStep?.notes?.length)) ? (
+        {runMode === 'individual' && selectedRow?.hasDraft && (selectedRow.lastSummary || selectedPrUrls.length > 0 || (state.implementStep?.issueId === selectedRow.id && state.implementStep?.notes?.length)) ? (
           <div className="implement-result">
             {selectedRow.lastSummary || (state.implementStep?.issueId === selectedRow.id ? state.implementStep?.summary : null) ? (
               <p className="implement-result__summary">
@@ -551,6 +612,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
           </div>
         ) : null}
 
+        {runMode === 'individual' ? (
         <div className="ship-actions implement-queue-actions">
           {nextPending ? (
             <button
@@ -589,8 +651,9 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
             </button>
           ) : null}
         </div>
+        ) : null}
 
-        {!workspaceReady ? (
+        {runMode === 'individual' && !workspaceReady ? (
           <p className="muted small implement-queue-hint">
             <AlertCircle size={14} /> Workspace must be ready before the agent can run.
           </p>
