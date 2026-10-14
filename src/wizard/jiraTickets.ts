@@ -1,5 +1,4 @@
 import {
-  clarifyProductScope,
   createJiraIssues,
   planProductScope,
   streamCreateJiraIssues,
@@ -7,7 +6,6 @@ import {
   type CreateJiraIssuesPayload,
   type JiraCreatedIssueResult,
 } from '../api/blink'
-import { assignQuestionBands } from './grooming'
 import type { JiraCreatedIssue, ProductScopeData, WizardState } from './types'
 
 let ticketsPipelineBusy = false
@@ -273,9 +271,7 @@ export function toCreateJiraPayload(
 
 export type PlanScopeOptions = {
   productScope?: WizardState['productScope']
-  answers?: WizardState['scopeAnswers']
   refresh?: boolean
-  skipClarify?: boolean
 }
 
 export async function planScopeFromWording(
@@ -294,7 +290,6 @@ export async function planScopeFromWording(
     actor: 'operator',
     refresh: opts?.refresh,
     productScope: opts?.productScope ?? undefined,
-    answers: opts?.answers,
   }
   const scopeRes = onThinking
     ? await streamPlanProductScope(state.projectId, payload, { onThinking })
@@ -308,29 +303,9 @@ export async function planScopeFromWording(
       specification: null,
       technicalPlan: null,
       nextSdlcCommand: scopeRes.nextCommand || '/confirm-product-scope',
-    }
-    if (!opts?.skipClarify && !opts?.refresh) {
-      try {
-        const clarify = await clarifyProductScope(state.projectId, {
-          projectName: state.projectName,
-          requirementText: wording,
-          productScope: scopeRes.productScope,
-        })
-        if (clarify.status === 'need_choices' && (clarify.questions?.length || 0) > 0) {
-          patch.scopeQuestions = assignQuestionBands(clarify.questions || [])
-          patch.scopeClarifyStatus = 'need_choices'
-          patch.scopeAnswers = []
-        } else {
-          patch.scopeQuestions = []
-          patch.scopeClarifyStatus = clarify.status || 'draft_ready'
-        }
-      } catch {
-        patch.scopeClarifyStatus = patch.scopeClarifyStatus ?? null
-      }
-    }
-    if (opts?.refresh) {
-      patch.scopeQuestions = []
-      patch.scopeClarifyStatus = 'draft_ready'
+      scopeQuestions: [],
+      scopeAnswers: [],
+      scopeClarifyStatus: 'draft_ready',
     }
     return patch
   }
