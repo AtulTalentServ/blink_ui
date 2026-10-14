@@ -8,7 +8,8 @@ const LOCAL_API = 'http://localhost:8090'
 
 function localBackendUp(ms = 250): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = net.connect({ port: 8090, host: '127.0.0.1' })
+    // Use localhost (not 127.0.0.1): WSL2 often publishes the API on ::1 only.
+    const socket = net.connect({ port: 8090, host: 'localhost' })
     const finish = (up: boolean) => {
       socket.removeAllListeners()
       socket.destroy()
