@@ -153,10 +153,9 @@ export function ImplementAllRequirementsPanel({
     const timer = window.setInterval(() => {
       void fetchCursorCliInstallLogs().then(setCursorInstallLog)
       void fetchCursorCliInstallStatus().then((s) => setCursorInstalling(s.installing))
-      void refreshSetup()
     }, 2500)
     return () => window.clearInterval(timer)
-  }, [desktop, cursorInstalling, refreshSetup])
+  }, [desktop, cursorInstalling])
 
   useEffect(() => {
     const ws = workspacePath.trim()
@@ -171,9 +170,10 @@ export function ImplementAllRequirementsPanel({
   useEffect(() => {
     const ws = workspacePath.trim()
     if (!ws) return
+    const delayMs = desktopRun.running ? 1200 : 600
     const timer = window.setTimeout(() => {
       saveCursorConversation(ws, desktopRun, { model: cursorModel, continueSession })
-    }, 400)
+    }, delayMs)
     return () => window.clearTimeout(timer)
   }, [workspacePath, desktopRun, cursorModel, continueSession])
 

@@ -9787,6 +9787,11 @@ textarea::placeholder {
   gap: 0.45rem;
 }
 
+.rich-md-stream {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .chat-md-p {
   margin: 0;
 }

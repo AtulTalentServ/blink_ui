@@ -342,7 +342,7 @@ function renderExchangeItems(
         key={`assistant-${nodes.length}`}
         className={`cursor-agent-assistant-text${streamingAssistant ? ' is-streaming' : ''}`}
       >
-        <CursorAgentMarkdown text={text} />
+        <CursorAgentMarkdown text={text} streaming={streamingAssistant} />
       </div>,
     )
     assistantParts = []

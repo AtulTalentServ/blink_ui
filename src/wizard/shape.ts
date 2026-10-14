@@ -143,7 +143,14 @@ export function topologyConfirmer(state: WizardState): { name: string; email: st
   return { name: lead.personName.trim(), email: lead.personEmail.trim() }
 }
 
-/** Groomed requirement plus later answers, so shape commands see the same story as earlier steps. */
+/** Groomed requirement only — used for Shape / Repositories / Technology LLM calls. */
+export function advisoryRequirementText(
+  state: Pick<WizardState, 'groomDraft' | 'requirementsText' | 'description'>,
+): string {
+  return (state.groomDraft || state.requirementsText || state.description || '').trim()
+}
+
+/** Groomed requirement plus later answers, so confirm/plan steps see the same story as earlier steps. */
 export function shapeRequirementText(state: Pick<
   WizardState,
   'groomDraft' | 'requirementsText' | 'description' | 'groomQuestions' | 'groomAnswers' | 'questions' | 'responses' | 'productScope'

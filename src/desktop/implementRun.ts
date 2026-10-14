@@ -1,3 +1,4 @@
+import { rafCoalesce } from '../utils/uiBatch'
 import { canRunDesktopImplementBatch } from './detect'
 import type { ImplementRunState } from './implementRunTypes'
 import { emptyImplementRunState, reduceImplementRunEvent } from './implementRunTypes'
@@ -42,12 +43,13 @@ export async function startDesktopImplementBatch(
     ...options.initialState,
     running: true,
   }
-  onState(state)
+  const emitState = rafCoalesce(onState)
+  emitState.push(state)
 
   const unlisten = await tauri.event.listen('implement-run-event', (event) => {
     const payload = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload)
     state = reduceImplementRunEvent(state, payload)
-    onState({ ...state })
+    emitState.push({ ...state })
   })
 
   await tauri.core.invoke('run_implement_batch', {
@@ -64,13 +66,15 @@ export async function startDesktopImplementBatch(
       continueSession: options.continueSession ?? true,
     },
   })
+  emitState.flush()
 
   return {
     stop: async () => {
       await tauri.core.invoke('stop_implement_batch')
       unlisten()
       state = { ...state, running: false }
-      onState(state)
+      emitState.push({ ...state })
+      emitState.flush()
     },
   }
 }

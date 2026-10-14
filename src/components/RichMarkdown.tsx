@@ -1,8 +1,17 @@
-import type { ReactNode } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
+
+type Props = { text: string; className?: string; /** Skip full parse while tokens stream in. */ streaming?: boolean }
 
 /** Rich Markdown → React (headings, lists, code, tables, quotes; safe links only). */
-export function RichMarkdown({ text, className = '' }: { text: string; className?: string }) {
-  const blocks = splitBlocks(text)
+export const RichMarkdown = memo(function RichMarkdown({ text, className = '', streaming = false }: Props) {
+  const blocks = useMemo(() => (streaming ? [] : splitBlocks(text)), [text, streaming])
+  if (streaming) {
+    return (
+      <div className={`rich-md chat-md rich-md-stream${className ? ` ${className}` : ''}`}>
+        {text}
+      </div>
+    )
+  }
   return (
     <div className={`rich-md chat-md${className ? ` ${className}` : ''}`}>
       {blocks.map((block, i) => {
@@ -85,7 +94,7 @@ export function RichMarkdown({ text, className = '' }: { text: string; className
       })}
     </div>
   )
-}
+})
 
 type Block =
   | { type: 'p'; value: string }

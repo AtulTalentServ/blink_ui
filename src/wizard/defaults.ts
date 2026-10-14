@@ -464,163 +464,24 @@ export function pendingRepoTechnologiesForSuggest(repos: RepoDefinition[]): Repo
 
 export function defaultRepoTechnologies(
   repos: RepoDefinition[],
-  shape: ProjectShapeInput = {},
+  _shape: ProjectShapeInput = {},
 ): RepoTechnology[] {
-  const topology = shape.topology || ''
-  return repos.map((repo) => {
-    const name = repo.name.toLowerCase()
-    const purpose = repo.purpose.toLowerCase()
-    if (isWorkspaceRepo(repo)) {
-      return {
-        repoId: repo.id,
-        language: 'Markdown / YAML',
-        framework: 'AI-SDLC workspace',
-        database: '—',
-        buildTool: '—',
-        status: 'confirmed' as const,
-      }
-    }
-    if (purpose === 'web' || purpose === 'frontend' || name.endsWith('-frontend') || name.endsWith('-web') || name.includes('web')) {
-      return {
-        repoId: repo.id,
-        language: 'TypeScript',
-        framework: 'React 19 + Vite',
-        database: '—',
-        buildTool: 'npm / Vite',
-        status: 'recommendation' as const,
-      }
-    }
-    if (
-      purpose === 'api'
-      || purpose === 'backend'
-      || name.endsWith('-api')
-      || name.endsWith('-backend')
-    ) {
-      return {
-        repoId: repo.id,
-        language: 'Java 21',
-        framework: 'Spring Boot 3.4',
-        database: 'PostgreSQL',
-        buildTool: 'Gradle',
-        status: 'recommendation' as const,
-      }
-    }
-    if (purpose === 'mobile' || name.endsWith('-mobile')) {
-      return {
-        repoId: repo.id,
-        language: 'TypeScript',
-        framework: 'React Native',
-        database: '—',
-        buildTool: 'npm',
-        status: 'recommendation' as const,
-      }
-    }
-    if (purpose === 'admin' || name.endsWith('-admin')) {
-      return {
-        repoId: repo.id,
-        language: 'TypeScript',
-        framework: 'React 19 + Vite',
-        database: '—',
-        buildTool: 'npm / Vite',
-        status: 'recommendation' as const,
-      }
-    }
-    if (purpose === 'database' || name.endsWith('-db') || purpose === 'data') {
-      return {
-        repoId: repo.id,
-        language: purpose === 'data' ? 'Python / SQL' : 'SQL',
-        framework: purpose === 'data' ? 'dbt / Spark jobs' : 'PostgreSQL',
-        database: 'PostgreSQL',
-        buildTool: purpose === 'data' ? 'Airflow / dbt' : 'Flyway / Liquibase',
-        status: 'recommendation' as const,
-      }
-    }
-    if (purpose === 'infrastructure' || name.endsWith('-infra')) {
-      return {
-        repoId: repo.id,
-        language: 'HCL',
-        framework: 'Terraform',
-        database: '—',
-        buildTool: 'Terraform',
-        status: 'recommendation' as const,
-      }
-    }
-    if (purpose === 'ml' || name.endsWith('-ml')) {
-      return {
-        repoId: repo.id,
-        language: 'Python',
-        framework: 'PyTorch / scikit-learn',
-        database: 'Feature store / object storage',
-        buildTool: 'poetry / Docker',
-        status: 'recommendation' as const,
-      }
-    }
-    if (purpose === 'workers' || name.endsWith('-workers')) {
-      return {
-        repoId: repo.id,
-        language: 'TypeScript / Go',
-        framework: 'Queue consumers',
-        database: '—',
-        buildTool: 'Docker',
-        status: 'recommendation' as const,
-      }
-    }
-    if (purpose === 'monorepo' || purpose === 'product' || purpose === 'application') {
-      if (topology === 'frontend-only') {
-        return {
-          repoId: repo.id,
-          language: 'TypeScript',
-          framework: 'React 19 + Vite',
-          database: '—',
-          buildTool: 'npm / Vite',
-          status: 'recommendation' as const,
-        }
-      }
-      if (topology === 'ai-ml') {
-        return {
-          repoId: repo.id,
-          language: 'TypeScript + Python',
-          framework: 'API + model serving',
-          database: 'PostgreSQL',
-          buildTool: 'Docker Compose',
-          status: 'recommendation' as const,
-        }
-      }
-      return {
-        repoId: repo.id,
-        language: 'TypeScript / Java 21',
-        framework: 'Full-stack application',
-        database: 'PostgreSQL',
-        buildTool: 'Docker',
-        status: 'recommendation' as const,
-      }
-    }
-    return {
-      repoId: repo.id,
-      language: topology === 'ai-ml' ? 'Python / Java 21' : 'Java 21',
-      framework: topology === 'data-platform' ? 'Spring Boot 3.4 + data services' : 'Spring Boot 3.4',
-      database: 'PostgreSQL',
-      buildTool: 'Gradle',
-      status: 'recommendation' as const,
-    }
-  })
+  return pendingRepoTechnologiesForSuggest(repos)
 }
 
-/** Agent/Lambda sometimes returns tbd + em-dash fields with no technologyOptions — use shape defaults. */
+/** Prefer LLM option fields. Do not invent a canned stack. */
 export function salvageIncompleteTechnologyRecommendation(
   row: RepoTechnology,
   repo: RepoDefinition,
-  shape: ProjectShapeInput = {},
+  _shape: ProjectShapeInput = {},
 ): RepoTechnology {
   if (!isIncompleteRepoTechnology(row) && row.status !== 'tbd') return row
-  const fallback = defaultRepoTechnologies([repo], shape)[0]
-  logTechStackSalvage(row, fallback)
-  return {
-    ...fallback,
-    repoId: repo.id,
-    ...(row.technologyOptions?.length ? { technologyOptions: row.technologyOptions } : {}),
-    status: 'recommendation',
+  const fromOptions = enrichRepoTechnologyFromOptions(row)
+  if (!isIncompleteRepoTechnology(fromOptions) || fromOptions.status === 'recommendation') {
+    if (fromOptions !== row) logTechStackSalvage(row, fromOptions)
+    return { ...fromOptions, repoId: repo.id }
   }
+  return { ...row, repoId: repo.id }
 }
 
 function logTechStackSalvage(bad: RepoTechnology, fallback: RepoTechnology): void {

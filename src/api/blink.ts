@@ -4,10 +4,6 @@ import { stripExcludedZipFolders } from './stripZipFolders'
 import { loadAuthSession } from '../auth/session'
 import { resolveApiBase, isLocalApiTarget } from '../developer/apiTarget'
 import { logTechStack, summarizeRepoTechnologyRow } from '../developer/techStackDebug'
-import type { ShapeRecommendation } from '../wizard/shapeRecommendation.ts'
-import { parseShapeRecommendation } from '../wizard/shapeRecommendation.ts'
-import type { RepositoryRecommendation } from '../wizard/repositoryRoster.ts'
-import { parseRepositoryRecommendation } from '../wizard/repositoryRoster.ts'
 import { CHAT_MODEL_STORAGE_KEY } from '../developer/chatModels'
 
 export interface StakeholderRoleDto {
@@ -802,100 +798,6 @@ export interface TopologyConfirmationDto {
   technologyStack?: string
 }
 
-export async function recommendRepositoryRoster(
-  projectId: string,
-  payload: {
-    projectName?: string
-    requirementText?: string
-    topology?: string
-    repositoryModel?: string
-    architectureStyle?: string
-    shapeRecommendation?: unknown
-    shapeProposal?: unknown
-  },
-): Promise<RepositoryRecommendation> {
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 90_000)
-  try {
-    const response = await fetch(apiUrl(`/projects/${projectId}/recommend-repository-roster`), {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify({
-        projectId,
-        projectName: payload.projectName,
-        requirementText: payload.requirementText,
-        topology: payload.topology,
-        repositoryModel: payload.repositoryModel,
-        architectureStyle: payload.architectureStyle,
-        shapeRecommendation: payload.shapeRecommendation,
-        architectureProposal: payload.shapeProposal,
-      }),
-      signal: controller.signal,
-    })
-    if (!response.ok) throw new Error(await readError(response))
-    const result = (await response.json()) as Record<string, unknown>
-    const status = String(result.status || '')
-    if (status && status !== 'ok') {
-      const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
-      throw new Error(String(result.message || errors || status))
-    }
-    const parsed = parseRepositoryRecommendation(result.repositoryRecommendation, payload.projectName, {
-      topology: payload.topology,
-      repositoryModel: payload.repositoryModel,
-    })
-    if (!parsed) {
-      throw new Error('Repository recommendation did not include a roster.')
-    }
-    return parsed
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('Repository suggestion timed out. Try again or reset from shape.')
-    }
-    throw error
-  } finally {
-    window.clearTimeout(timer)
-  }
-}
-
-export async function recommendProjectShape(
-  projectId: string,
-  payload: { projectName?: string; requirementText?: string },
-): Promise<ShapeRecommendation> {
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 90_000)
-  try {
-    const response = await fetch(apiUrl(`/projects/${projectId}/recommend-project-shape`), {
-      method: 'POST',
-      headers: authHeaders(true),
-      body: JSON.stringify({
-        projectId,
-        projectName: payload.projectName,
-        requirementText: payload.requirementText,
-      }),
-      signal: controller.signal,
-    })
-    if (!response.ok) throw new Error(await readError(response))
-    const result = (await response.json()) as Record<string, unknown>
-    const status = String(result.status || '')
-    if (status && status !== 'ok') {
-      const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ') : ''
-      throw new Error(String(result.message || errors || status))
-    }
-    const parsed = parseShapeRecommendation(result.shapeRecommendation)
-    if (!parsed) {
-      throw new Error('Project shape recommendation did not include applicable options.')
-    }
-    return parsed
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('Shape suggestion timed out. Keep your selections and confirm the structure.')
-    }
-    throw error
-  } finally {
-    window.clearTimeout(timer)
-  }
-}
-
 export async function proposeProjectShape(
   projectId: string,
   payload: { projectName?: string; requirementText?: string },
@@ -1014,7 +916,11 @@ export async function recommendRepoTechnologies(
         topology: payload.topology,
         repositoryModel: payload.repositoryModel,
         architectureStyle: payload.architectureStyle,
-        repositories: payload.repositories,
+        repositories: (payload.repositories || []).map((repo) => ({
+          id: repo.id,
+          name: repo.name,
+          purpose: repo.purpose,
+        })),
       }),
       signal: controller.signal,
     })

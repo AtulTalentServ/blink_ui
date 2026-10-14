@@ -25,9 +25,6 @@ import {
   type WorkspaceEntry,
 } from './defaults'
 import { assignmentsFromRoles, STAKEHOLDER_ROLES } from './stakeholders'
-import type { ShapeRecommendation } from './shapeRecommendation.ts'
-
-export type { ShapeRecommendation }
 
 export type WizardStep =
   | 'welcome'
@@ -365,8 +362,6 @@ export interface WizardState extends SetupForm {
   architectureStyle: string
   repositories: RepoDefinition[]
   repositoriesTouched: boolean
-  /** True after an LLM roster suggestion (or confirm). Visiting Repositories must not auto-resuggest. */
-  repositoryRosterSuggested?: boolean
   repoTechnologies: RepoTechnology[]
   /** True after an LLM stack suggestion. Visiting Technology must not auto-resuggest. */
   repoTechnologiesSuggested?: boolean
@@ -440,8 +435,6 @@ export interface WizardState extends SetupForm {
   shapeDigest?: string | null
   /** Unconfirmed suggestion from architecture-proposal. */
   shapeProposal?: ShapeProposal | null
-  /** Ranked shape options from recommend-project-shape. */
-  shapeRecommendation?: ShapeRecommendation | null
   /** Human /confirm-topology record. Setup copies this onto canonical intake. */
   topologyConfirmation?: TopologyConfirmation | null
   /** Wizard sidebar order version. 2 = Shape before Work plan. */
@@ -630,7 +623,6 @@ export const defaultWizardState: WizardState = {
   architectureStyle: 'microservices',
   repositories: defaultRepos,
   repositoriesTouched: false,
-  repositoryRosterSuggested: false,
   repoTechnologies: defaultRepoTechnologies(defaultRepos),
   repoTechnologiesSuggested: false,
   ideTool: 'cursor',
@@ -692,7 +684,6 @@ export const defaultWizardState: WizardState = {
   shapeAcknowledged: false,
   shapeDigest: null,
   shapeProposal: null,
-  shapeRecommendation: null,
   topologyConfirmation: null,
   shipSubstage: 'workspace',
   wizardLayoutVersion: 7,
