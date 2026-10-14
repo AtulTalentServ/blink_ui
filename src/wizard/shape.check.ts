@@ -3,7 +3,7 @@
  * Run: node --experimental-strip-types src/wizard/shape.check.ts
  */
 import assert from 'node:assert/strict'
-import { defaultWizardState } from './types.ts'
+import { defaultWizardState, type WizardState } from './types.ts'
 import { STEP_ORDER } from './steps.ts'
 import {
   advisoryRequirementText,
@@ -148,8 +148,9 @@ const advisoryState = {
   responses: [{ questionId: 's1', status: 'answered' as const, response: '10k users' }],
   productScope: { epics: [{ title: 'Booking' }], stories: [{ title: 'Book a visit' }] },
 }
-assert.equal(advisoryRequirementText(advisoryState), 'Groomed calculator requirement.')
-assert.equal(shapeRequirementText(advisoryState).includes('Receptionist'), true)
-assert.equal(shapeRequirementText(advisoryState).includes('Booking'), true)
+const advisoryWizard = advisoryState as unknown as WizardState
+assert.equal(advisoryRequirementText(advisoryWizard), 'Groomed calculator requirement.')
+assert.equal(shapeRequirementText(advisoryWizard).includes('Receptionist'), true)
+assert.equal(shapeRequirementText(advisoryWizard).includes('Booking'), true)
 
 console.log('shape.check.ts: ok')
