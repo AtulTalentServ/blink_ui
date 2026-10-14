@@ -1,23 +1,15 @@
-import { canRunDesktopImplementBatch } from './detect'
+import { canRunDesktopImplementBatch, hasTauriInvoke } from './detect'
+import { logDesktop } from './desktopLog'
 
 type TauriCore = {
   invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
 }
 
-type TauriDialog = {
-  open: (options: {
-    directory?: boolean
-    multiple?: boolean
-    title?: string
-    defaultPath?: string
-  }) => Promise<string | string[] | null>
-}
-
-function tauri(): { core: TauriCore; dialog?: TauriDialog } | null {
+function tauri(): { core: TauriCore } | null {
   if (!canRunDesktopImplementBatch()) return null
-  const root = (window as unknown as { __TAURI__?: { core?: TauriCore; dialog?: TauriDialog } }).__TAURI__
+  const root = (window as unknown as { __TAURI__?: { core?: TauriCore } }).__TAURI__
   if (!root?.core?.invoke) return null
-  return { core: root.core, dialog: root.dialog }
+  return { core: root.core }
 }
 
 export type CursorCliStatus = { state: 'found' | 'missing'; version?: string | null; path?: string | null }
@@ -27,8 +19,16 @@ export type CursorCliModelOption = { id: string; label: string; group: CursorCli
 
 export async function fetchCursorCliStatus(): Promise<CursorCliStatus> {
   const api = tauri()
-  if (!api) return { state: 'missing' }
-  return api.core.invoke<CursorCliStatus>('cursor_cli_status')
+  if (!api) {
+    logDesktop('cli-status', 'Tauri invoke unavailable (not in desktop shell?)')
+    return { state: 'missing' }
+  }
+  try {
+    return await api.core.invoke<CursorCliStatus>('cursor_cli_status')
+  } catch (err) {
+    logDesktop('cli-status', err)
+    throw err
+  }
 }
 
 export async function fetchCursorCliAuthStatus(): Promise<CursorCliAuthStatus> {
@@ -99,18 +99,29 @@ export async function fetchCursorCliModels(): Promise<CursorCliModelOption[]> {
   }
 }
 
-/** Native folder picker (Tauri dialog plugin). */
+/** Native folder picker (Tauri 2 dialog plugin via invoke). */
 export async function pickLocalWorkspaceFolder(currentPath?: string): Promise<string | null> {
-  const api = tauri()
-  if (!api?.dialog?.open) {
-    throw new Error('Folder picker requires the Blink desktop app with dialog support.')
+  if (!hasTauriInvoke()) {
+    throw new Error('Folder picker requires the Blink desktop app (restart the desktop shell after updating).')
   }
-  const selected = await api.dialog.open({
+  const invoke = (window as unknown as { __TAURI__?: { core?: TauriCore } }).__TAURI__!.core!.invoke
+  const options = {
     directory: true,
     multiple: false,
     title: 'Choose local git workspace',
     defaultPath: currentPath?.trim() || undefined,
-  })
-  if (selected == null) return null
-  return Array.isArray(selected) ? selected[0] ?? null : selected
+  }
+  try {
+    const selected = await invoke<string | string[] | null>('plugin:dialog|open', { options })
+    if (selected == null) return null
+    return Array.isArray(selected) ? selected[0] ?? null : selected
+  } catch (err) {
+    logDesktop('folder-picker', err)
+    const msg = err instanceof Error ? err.message : String(err)
+    throw new Error(
+      msg.includes('not allowed') || msg.includes('Forbidden')
+        ? 'Folder picker blocked by desktop permissions. Restart Blink desktop (npm run dev in desktop/) after a git pull.'
+        : `Folder picker failed: ${msg}`,
+    )
+  }
 }

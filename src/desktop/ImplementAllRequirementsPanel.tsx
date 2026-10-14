@@ -161,9 +161,12 @@ export function ImplementAllRequirementsPanel({
     const ws = workspacePath.trim()
     if (!ws) return
     const persisted = loadCursorConversation(ws)
-    if (!persisted) return
+    if (!persisted) {
+      setContinueSession(false)
+      return
+    }
     setCursorModel(persisted.model || 'auto')
-    setContinueSession(persisted.continueSession ?? true)
+    setContinueSession(Boolean(persisted.sessionId) && (persisted.continueSession ?? true))
     setDesktopRun((prev) => mergePersistedIntoRunState(prev, persisted))
   }, [workspacePath])
 
@@ -198,7 +201,8 @@ export function ImplementAllRequirementsPanel({
         saveDesktopWorkspacePath(picked)
       }
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Could not open folder picker.', 'error')
+      const message = err instanceof Error ? err.message : 'Could not open folder picker.'
+      pushToast(`${message} Open devtools (F12) for [blink-desktop:folder-picker] logs.`, 'error')
     } finally {
       setSetupBusy(null)
     }

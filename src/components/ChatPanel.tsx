@@ -112,8 +112,9 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
   }, [projectId])
 
   useEffect(() => {
+    if (!open || !projectId) return
     void load()
-  }, [load])
+  }, [open, projectId, load])
 
   useEffect(() => {
     if (open) {
@@ -128,6 +129,7 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
   }, [messages.length])
 
   useEffect(() => {
+    if (!open) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingText, open])
 
@@ -146,30 +148,6 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
     window.addEventListener('storage', syncModel)
     return () => window.removeEventListener('storage', syncModel)
   }, [])
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && open) {
-        const target = event.target as HTMLElement | null
-        if (target === inputRef.current || !target?.closest?.('input, textarea, [contenteditable="true"]')) {
-          event.preventDefault()
-          onOpenChange(false)
-        }
-        return
-      }
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'l') return
-      if (event.shiftKey) return
-      event.preventDefault()
-      if (!open) {
-        onOpenChange(true)
-        return
-      }
-      // Panel already open: focus composer (Cursor Ctrl+L behavior).
-      inputRef.current?.focus()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onOpenChange])
 
   function stop() {
     abortRef.current?.abort()
@@ -519,6 +497,28 @@ export function ChatPanel({ projectId, currentStep, onNavigate, open, onOpenChan
       )}
     </aside>
   )
+}
+
+/** Ctrl+L toggle / Escape close — keep mounted when chat panel is lazy-loaded. */
+export function useChatPanelHotkeys(open: boolean, onOpenChange: (open: boolean) => void): void {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && open) {
+        const target = event.target as HTMLElement | null
+        if (!target?.closest?.('input, textarea, [contenteditable="true"]')) {
+          event.preventDefault()
+          onOpenChange(false)
+        }
+        return
+      }
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'l') return
+      if (event.shiftKey) return
+      event.preventDefault()
+      onOpenChange(!open)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onOpenChange])
 }
 
 export function useChatPanelOpen(): [boolean, (open: boolean) => void] {
