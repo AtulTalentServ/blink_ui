@@ -254,6 +254,18 @@ export function stacksReadyForWorkPlan(state: WizardState): boolean {
   return rows.every((row) => row.status === 'confirmed')
 }
 
+const EMPTY_STACK_FIELD = new Set(['', '—', '-', 'n/a', 'na', 'tbd'])
+
+/** True when a row has no meaningful language/framework/build (often after a bad confirm or stale draft). */
+export function isIncompleteRepoTechnology(row: {
+  language?: string
+  framework?: string
+  buildTool?: string
+}): boolean {
+  const token = (value?: string) => EMPTY_STACK_FIELD.has(String(value ?? '').trim().toLowerCase())
+  return token(row.language) && token(row.framework) && token(row.buildTool)
+}
+
 /** Suggested stacks from Project Shape — promote them without a second Confirm click. */
 export function shouldAutoConfirmRepoTechnologies(state: WizardState): boolean {
   const rows = state.repoTechnologies || []

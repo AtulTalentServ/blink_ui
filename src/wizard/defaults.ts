@@ -1,3 +1,5 @@
+import { isIncompleteRepoTechnology } from './shape.ts'
+
 export interface RepoDefinition {
   id: string
   name: string
@@ -60,6 +62,18 @@ export function buildDownloadStructure(repositories: { name: string }[] = []): W
 
 export const NEXT_SDLC_COMMAND = '/configure-stakeholders'
 
+export interface TechnologyStackOption {
+  id: string
+  label: string
+  language?: string
+  framework?: string
+  database?: string
+  buildTool?: string
+  benefits?: string[]
+  recommended?: boolean
+  custom?: boolean
+}
+
 export interface RepoTechnology {
   repoId: string
   language: string
@@ -67,6 +81,9 @@ export interface RepoTechnology {
   database: string
   buildTool: string
   status: 'confirmed' | 'recommendation' | 'tbd'
+  /** Last stack card the user picked (for highlighting vs AI top pick). */
+  selectedStackOptionId?: string
+  technologyOptions?: TechnologyStackOption[]
 }
 
 export interface IntegrationItem {
@@ -415,6 +432,36 @@ export function defaultRepositories(
   return applyRepoModel(variants, repositoryModel, slug)
 }
 
+export function isWorkspaceRepo(repo: Pick<RepoDefinition, 'name' | 'purpose'>): boolean {
+  const name = repo.name.toLowerCase()
+  const purpose = repo.purpose.toLowerCase()
+  return purpose === 'workspace' || name.endsWith('-workspace') || name.includes('workspace')
+}
+
+/** Empty / workspace-only rows until Technology runs AI-SDLC stack suggest. */
+export function pendingRepoTechnologiesForSuggest(repos: RepoDefinition[]): RepoTechnology[] {
+  return repos.map((repo) => {
+    if (isWorkspaceRepo(repo)) {
+      return {
+        repoId: repo.id,
+        language: 'Markdown / YAML',
+        framework: 'AI-SDLC workspace',
+        database: '—',
+        buildTool: '—',
+        status: 'confirmed' as const,
+      }
+    }
+    return {
+      repoId: repo.id,
+      language: '',
+      framework: '',
+      database: '—',
+      buildTool: '',
+      status: 'tbd' as const,
+    }
+  })
+}
+
 export function defaultRepoTechnologies(
   repos: RepoDefinition[],
   shape: ProjectShapeInput = {},
@@ -423,7 +470,7 @@ export function defaultRepoTechnologies(
   return repos.map((repo) => {
     const name = repo.name.toLowerCase()
     const purpose = repo.purpose.toLowerCase()
-    if (purpose === 'workspace' || name.endsWith('-workspace') || name.includes('workspace')) {
+    if (isWorkspaceRepo(repo)) {
       return {
         repoId: repo.id,
         language: 'Markdown / YAML',
@@ -559,31 +606,138 @@ export function defaultRepoTechnologies(
   })
 }
 
-/** Overlay AI-SDLC stack suggestions onto unconfirmed rows; keep confirmed stacks. */
+/** Agent/Lambda sometimes returns tbd + em-dash fields with no technologyOptions — use shape defaults. */
+export function salvageIncompleteTechnologyRecommendation(
+  row: RepoTechnology,
+  repo: RepoDefinition,
+  shape: ProjectShapeInput = {},
+): RepoTechnology {
+  if (!isIncompleteRepoTechnology(row) && row.status !== 'tbd') return row
+  const fallback = defaultRepoTechnologies([repo], shape)[0]
+  logTechStackSalvage(row, fallback)
+  return {
+    ...fallback,
+    repoId: repo.id,
+    ...(row.technologyOptions?.length ? { technologyOptions: row.technologyOptions } : {}),
+    status: 'recommendation',
+  }
+}
+
+function logTechStackSalvage(bad: RepoTechnology, fallback: RepoTechnology): void {
+  if (!import.meta.env.DEV) return
+  console.warn('[blink:tech-stack] salvageIncompleteRecommendation', {
+    repoId: bad.repoId,
+    before: { status: bad.status, language: bad.language, framework: bad.framework },
+    after: { status: fallback.status, language: fallback.language, framework: fallback.framework },
+  })
+}
+
+/** When the API returns options but blank/TBD fields, pre-fill from the top suggestion. */
+export function enrichRepoTechnologyFromOptions(row: RepoTechnology): RepoTechnology {
+  const options = row.technologyOptions
+  if (!options?.length) return row
+  if (!isIncompleteRepoTechnology(row) && row.status !== 'tbd') return row
+  const picked = options.find((opt) => opt.recommended && !opt.custom) ?? options.find((opt) => !opt.custom)
+  if (!picked) return row
+  return {
+    ...row,
+    language: picked.language?.trim() || row.language,
+    framework: picked.framework?.trim() || row.framework,
+    database: picked.database?.trim() || row.database,
+    buildTool: picked.buildTool?.trim() || row.buildTool,
+    status: row.status === 'confirmed' ? 'confirmed' : 'recommendation',
+    selectedStackOptionId: row.selectedStackOptionId || picked.id,
+  }
+}
+
+export function productRepositories(repos: RepoDefinition[]): RepoDefinition[] {
+  return repos.filter((repo) => !isWorkspaceRepo(repo))
+}
+
+export function primaryProductRepo(repos: RepoDefinition[]): RepoDefinition | undefined {
+  return productRepositories(repos)[0]
+}
+
+export function productStackFromRows(
+  rows: RepoTechnology[],
+  repos: RepoDefinition[],
+): RepoTechnology | null {
+  const primary = primaryProductRepo(repos)
+  if (!primary) return null
+  return rows.find((row) => row.repoId === primary.id) ?? null
+}
+
+/** Mirror the primary product stack onto every non-workspace repo (wizard stores per-repo for topology). */
+export function syncProductStackAcrossRepos(
+  rows: RepoTechnology[],
+  repos: RepoDefinition[],
+): RepoTechnology[] {
+  const primary = primaryProductRepo(repos)
+  if (!primary) return rows
+  const template = rows.find((row) => row.repoId === primary.id)
+  if (!template) return rows
+  return rows.map((row) => {
+    const repo = repos.find((item) => item.id === row.repoId)
+    if (!repo || isWorkspaceRepo(repo)) return row
+    return {
+      ...template,
+      repoId: row.repoId,
+    }
+  })
+}
+
+export function applyProductStackPatch(
+  rows: RepoTechnology[],
+  repos: RepoDefinition[],
+  patch: Partial<RepoTechnology>,
+): RepoTechnology[] {
+  return rows.map((row) => {
+    const repo = repos.find((item) => item.id === row.repoId)
+    if (!repo || isWorkspaceRepo(repo)) return row
+    return { ...row, ...patch }
+  })
+}
+
+export function stackOptionMatchesRow(option: TechnologyStackOption, row: RepoTechnology): boolean {
+  if (option.custom) return false
+  if (row.selectedStackOptionId) return row.selectedStackOptionId === option.id
+  const norm = (value: string | undefined) => (value || '').trim().toLowerCase()
+  return (
+    norm(row.language) === norm(option.language) &&
+    norm(row.framework) === norm(option.framework) &&
+    norm(row.buildTool) === norm(option.buildTool)
+  )
+}
+
+/** Overlay AI-SDLC stack suggestions onto unconfirmed rows; keep confirmed stacks unless resuggesting. */
 export function mergeRecommendedRepoTechnologies(
   current: RepoTechnology[],
   recommended: RepoTechnology[],
   repos: RepoDefinition[],
+  options?: { overwriteConfirmed?: boolean; shape?: ProjectShapeInput },
 ): RepoTechnology[] {
+  const shape = options?.shape ?? {}
   const recById = new Map(recommended.map((row) => [row.repoId, row]))
   const currentById = new Map(current.map((row) => [row.repoId, row]))
   return repos.map((repo) => {
     const existing = currentById.get(repo.id)
-    if (existing?.status === 'confirmed') return existing
+    if (existing?.status === 'confirmed' && !options?.overwriteConfirmed) return existing
     const next = recById.get(repo.id)
     if (!next) {
       return existing ?? defaultRepoTechnologies([repo])[0]
     }
     const status =
       next.status === 'confirmed' || next.status === 'tbd' ? next.status : 'recommendation'
-    return {
+    const enriched = enrichRepoTechnologyFromOptions({
       repoId: repo.id,
       language: next.language,
       framework: next.framework,
       database: next.database,
       buildTool: next.buildTool,
       status,
-    }
+      ...(next.technologyOptions?.length ? { technologyOptions: next.technologyOptions } : {}),
+    })
+    return salvageIncompleteTechnologyRecommendation(enriched, repo, shape)
   })
 }
 

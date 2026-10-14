@@ -10,6 +10,8 @@ export interface StartImplementBatchOptions {
   workspace: string
   runMode?: DesktopRunMode
   requirements?: string
+  /** Project shape, repositories, and technology (Blink wizard). */
+  architectureContext?: string
   chatMessage?: string
   useWorktree?: boolean
   worktreeName?: string
@@ -53,6 +55,7 @@ export async function startDesktopImplementBatch(
       workspace: options.workspace,
       runMode: options.runMode ?? 'batch',
       requirements: options.requirements ?? '',
+      architectureContext: options.architectureContext ?? '',
       chatMessage: options.chatMessage ?? '',
       useWorktree: options.useWorktree ?? true,
       worktreeName: options.worktreeName ?? 'blink-implement',

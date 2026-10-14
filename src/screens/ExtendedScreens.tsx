@@ -3,29 +3,24 @@ import {
   AlertTriangle,
   Boxes,
   Bot,
-  Brain,
   CheckCircle2,
   ChevronLeft,
   Cloud,
   Code2,
   Copy,
   Cpu,
-  Database,
   ExternalLink,
   File,
   Folder,
-  GitBranch,
   Layers,
   Loader2,
   Monitor,
-  Network,
   Plus,
+  RefreshCw,
   Server,
-  Smartphone,
   Sparkles,
   Terminal,
   Trash2,
-  Workflow,
   XCircle,
 } from 'lucide-react'
 import {
@@ -38,7 +33,14 @@ import {
   TOPOLOGY_OPTIONS,
   defaultRepositories,
   defaultRepoTechnologies,
+  applyProductStackPatch,
   mergeRecommendedRepoTechnologies,
+  pendingRepoTechnologiesForSuggest,
+  productRepositories,
+  productStackFromRows,
+  stackOptionMatchesRow,
+  syncProductStackAcrossRepos,
+  type TechnologyStackOption,
   repositoriesFromComponents,
   ensurePlatformDefaults,
   githubRepoSlug,
@@ -51,7 +53,8 @@ import {
   confirmProjectTopology,
   isNotProjectOwnerError,
   pauseAutosave,
-  proposeProjectShape,
+  recommendProjectShape,
+  recommendRepositoryRoster,
   recommendRepoTechnologies,
   rehomeProject,
   syncCanonicalWizardDraft,
@@ -71,6 +74,7 @@ import {
   shapeFingerprint,
   shapeRequirementText,
   shouldAutoAcknowledgeShape,
+  isIncompleteRepoTechnology,
   shouldAutoConfirmRepoTechnologies,
   stacksReadyForWorkPlan,
   topologyConfirmer,
@@ -78,6 +82,15 @@ import {
 } from '../wizard/shape'
 import { computeReadiness, type WizardState, type WizardStep } from '../wizard/types'
 import { buildReviewIssues } from '../wizard/reviewIssues'
+import { logTechStack, summarizeRepoTechnologyRow } from '../developer/techStackDebug'
+import { ShapeRecommendationSections } from '../wizard/ShapeRecommendationSections.tsx'
+import {
+  hasUsableShapeRecommendation,
+  PROJECT_SHAPE_SECTION_IDS,
+  shapeProposalFromRecommendation,
+  type ShapeChoiceOption,
+  type ShapeRecommendationSectionId,
+} from '../wizard/shapeRecommendation.ts'
 
 interface ScreenProps {
   state: WizardState
@@ -90,15 +103,6 @@ export type ShapeConfirmAction = {
   pending: boolean
   confirmed: boolean
 }
-
-const TOPOLOGY_ICONS = {
-  'single-app': Smartphone,
-  'frontend-only': Monitor,
-  'full-stack': Layers,
-  'data-platform': Database,
-  microservices: Network,
-  'ai-ml': Brain,
-} as const
 
 const CLOUD_OPTIONS = [
   { id: 'aws', label: 'AWS', hint: 'EKS, ECS, Lambda' },
@@ -146,14 +150,75 @@ function shapeFrom(state: Pick<WizardState, 'topology' | 'repositoryModel' | 'ar
   }
 }
 
-/** True once architecture-proposal returned the three shape fields (components may be empty). */
-function hasReadyShapeProposal(proposal: WizardState['shapeProposal']) {
+function hasReadyShapeSuggestion(state: Pick<WizardState, 'shapeRecommendation'>) {
+  return hasUsableShapeRecommendation(state.shapeRecommendation)
+}
+
+function hasReadyRosterSuggestion(
+  state: Pick<WizardState, 'repositoryRosterSuggested' | 'repoTechnologiesSuggested' | 'repoTechnologies' | 'repositories'>,
+) {
+  return Boolean(state.repositoryRosterSuggested) || hasReadyStackSuggestion(state)
+}
+
+function hasReadyStackSuggestion(
+  state: Pick<WizardState, 'repoTechnologiesSuggested' | 'repoTechnologies' | 'repositories'>,
+) {
+  if (state.repoTechnologiesSuggested) return true
+  const product = productStackFromRows(state.repoTechnologies || [], state.repositories || [])
   return Boolean(
-    proposal
-    && proposal.topology
-    && proposal.repositoryModel
-    && proposal.architectureStyle,
+    product?.technologyOptions?.length
+    || (product && product.status === 'confirmed' && !isIncompleteRepoTechnology(product)),
   )
+}
+
+/** Survives tab unmount — avoid re-running LLM advisory on every visit. */
+const shapeAutoSuggestDone = new Set<string>()
+const rosterAutoSuggestDone = new Set<string>()
+const stackAutoSuggestDone = new Set<string>()
+
+function shapeAutoSuggestKey(projectId: string | undefined, requirementText: string) {
+  return `${projectId || 'local'}|${requirementText.trim()}`
+}
+
+function rosterAutoSuggestKey(
+  projectId: string | undefined,
+  shape: Pick<WizardState, 'topology' | 'repositoryModel' | 'architectureStyle'>,
+) {
+  return `${projectId || 'local'}|${shape.topology}|${shape.repositoryModel}|${shape.architectureStyle}`
+}
+
+function stackAutoSuggestKey(
+  projectId: string | undefined,
+  topology: string | undefined,
+  repositoryIds: string[],
+) {
+  return `${projectId || 'local'}|${repositoryIds.join(',')}|${topology || ''}`
+}
+
+function patchFromShapeRecommendation(
+  rec: NonNullable<WizardState['shapeRecommendation']>,
+  state: WizardState,
+): Partial<WizardState> {
+  const proposal = shapeProposalFromRecommendation(rec)
+  const nextShape = {
+    topology: rec.topology,
+    repositoryModel: rec.repositoryModel,
+    architectureStyle: rec.architectureStyle,
+  }
+  const fromRequirement = rec.components?.length
+    ? repositoriesFromComponents(state.projectName, rec.repositoryModel, rec.components)
+    : []
+  const repos = fromRequirement.length ? fromRequirement : defaultRepositories(state.projectName, nextShape)
+  const patch: Partial<WizardState> = {
+    shapeRecommendation: rec,
+    shapeProposal: proposal,
+    ...nextShape,
+    repositories: repos,
+    repositoryRosterSuggested: false,
+    repoTechnologies: defaultRepoTechnologies(repos, nextShape),
+    repoTechnologiesSuggested: false,
+  }
+  return patch
 }
 
 function statusTone(status: string | undefined) {
@@ -172,66 +237,84 @@ export function ProjectShapeScreen({
 }: ScreenProps & {
   onShapeConfirm?: (action: ShapeConfirmAction | null) => void
 }) {
-  const suggested = (state.repositories || []).some((repo) => repo.name.trim())
-    ? state.repositories
-    : plannedRepositories(state)
-  const topologyLabel = TOPOLOGY_OPTIONS.find((t) => t.id === state.topology)?.label
-  const modelLabel = REPO_MODEL_OPTIONS.find((m) => m.id === state.repositoryModel)?.label
-  const archLabel = ARCHITECTURE_OPTIONS.find((a) => a.id === state.architectureStyle)?.label
   const requirementText = shapeRequirementText(state)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [confirmError, setConfirmError] = useState<string | null>(null)
-  const [proposalNote, setProposalNote] = useState<string | null>(state.shapeProposal?.rationale || null)
   const [proposalError, setProposalError] = useState<string | null>(null)
   const [proposing, setProposing] = useState(
     () => Boolean(
       state.projectId
       && requirementText
-      && !hasReadyShapeProposal(state.shapeProposal)
+      && !hasReadyShapeSuggestion(state)
       && !state.topologyConfirmation,
     ),
   )
+  const [shapeSuggestGeneration, setShapeSuggestGeneration] = useState(0)
+  const forceShapeSuggestRef = useRef(false)
   const userEditedShape = useRef(false)
+  const shapeRecommendation = state.shapeRecommendation
+  const showRecommendationUi = hasUsableShapeRecommendation(shapeRecommendation)
+
+  const resuggestShape = useCallback(() => {
+    if (!state.projectId) {
+      setProposalError('Save the project before resuggesting shape.')
+      return
+    }
+    if (!requirementText.trim()) {
+      setProposalError('Add a requirement before resuggesting shape.')
+      return
+    }
+    setProposalError(null)
+    userEditedShape.current = false
+    forceShapeSuggestRef.current = true
+    shapeAutoSuggestDone.delete(shapeAutoSuggestKey(state.projectId, requirementText))
+    onUpdate({ shapeRecommendation: null, shapeProposal: null })
+    setShapeSuggestGeneration((value) => value + 1)
+  }, [onUpdate, requirementText, state.projectId])
 
   useEffect(() => {
     // Manual picks (or repo edits) win — do not keep "Reading…" or overwrite the blueprint.
-    if (userEditedShape.current || state.repositoriesTouched) {
+    if (!forceShapeSuggestRef.current && (userEditedShape.current || state.repositoriesTouched)) {
       setProposing(false)
       return
     }
     // Stop after any usable proposal — components may be [] (UI falls back to defaultRepositories).
-    if (!state.projectId || state.topologyConfirmation || !requirementText || hasReadyShapeProposal(state.shapeProposal)) {
+    const projectId = state.projectId
+    const autoKey = shapeAutoSuggestKey(projectId, requirementText)
+    if (
+      !forceShapeSuggestRef.current
+      && (
+        !projectId
+        || state.topologyConfirmation
+        || !requirementText
+        || hasReadyShapeSuggestion(state)
+        || shapeAutoSuggestDone.has(autoKey)
+      )
+    ) {
       setProposing(false)
       return
     }
     let cancelled = false
+    const overwrite = forceShapeSuggestRef.current
+    forceShapeSuggestRef.current = false
     setProposing(true)
     setProposalError(null)
-    void proposeProjectShape(state.projectId, {
+    if (!projectId) {
+      setProposing(false)
+      return
+    }
+    void recommendProjectShape(projectId, {
       projectName: state.projectName,
       requirementText,
     })
-      .then((proposal) => {
-        if (cancelled || userEditedShape.current) return
-        setProposalNote(proposal.rationale)
-        const patch: Partial<WizardState> = { shapeProposal: proposal }
+      .then((rec) => {
+        if (cancelled || (userEditedShape.current && !overwrite)) return
+        shapeAutoSuggestDone.add(autoKey)
         if (!userEditedShape.current && !state.repositoriesTouched) {
-          const nextShape = {
-            topology: proposal.topology,
-            repositoryModel: proposal.repositoryModel,
-            architectureStyle: proposal.architectureStyle,
-          }
-          const fromRequirement = proposal.components?.length
-            ? repositoriesFromComponents(state.projectName, proposal.repositoryModel, proposal.components)
-            : []
-          const repos = fromRequirement.length ? fromRequirement : defaultRepositories(state.projectName, nextShape)
-          Object.assign(patch, {
-            ...nextShape,
-            repositories: repos,
-            repoTechnologies: defaultRepoTechnologies(repos, nextShape),
-          })
+          onUpdate(patchFromShapeRecommendation(rec, state))
+          return
         }
-        onUpdate(patch)
+        onUpdate({ shapeRecommendation: rec, shapeProposal: shapeProposalFromRecommendation(rec) })
       })
       .catch(async (cause) => {
         if (cancelled || userEditedShape.current) return
@@ -261,8 +344,9 @@ export function ProjectShapeScreen({
     state.projectId,
     state.projectName,
     state.repositoriesTouched,
-    state.shapeProposal,
+    state.shapeRecommendation,
     state.topologyConfirmation,
+    shapeSuggestGeneration,
   ])
 
   const applyShape = (patch: Partial<WizardState>) => {
@@ -278,7 +362,9 @@ export function ProjectShapeScreen({
     onUpdate({
       ...patch,
       repositories: repos,
+      repositoryRosterSuggested: false,
       repoTechnologies: defaultRepoTechnologies(repos, nextShape),
+      repoTechnologiesSuggested: false,
     })
   }
 
@@ -328,11 +414,13 @@ export function ProjectShapeScreen({
           ? {}
           : {
               repositories: reposForConfirm,
+              repositoryRosterSuggested: false,
               repoTechnologies: defaultRepoTechnologies(reposForConfirm, {
                 topology: state.topology,
                 repositoryModel: state.repositoryModel,
                 architectureStyle: state.architectureStyle,
               }),
+              repoTechnologiesSuggested: false,
             }),
       })
     } catch (cause) {
@@ -357,6 +445,33 @@ export function ProjectShapeScreen({
     state.topology,
   ])
 
+  const activeShapeBySection = useMemo(
+    () => ({
+      topology: state.topology,
+      repositoryModel: canonicalRepositoryStructure(state.repositoryModel),
+      architectureStyle: state.architectureStyle,
+    }),
+    [state.architectureStyle, state.repositoryModel, state.topology],
+  )
+
+  const onShapeOptionSelect = (sectionId: string, option: ShapeChoiceOption) => {
+    userEditedShape.current = true
+    setProposing(false)
+    if (option.custom) return
+    const id = sectionId as ShapeRecommendationSectionId
+    if (id === 'topology') {
+      applyShape({ topology: option.id })
+      return
+    }
+    if (id === 'repositoryModel') {
+      applyShape({ repositoryModel: option.id })
+      return
+    }
+    if (id === 'architectureStyle') {
+      applyShape({ architectureStyle: option.id })
+    }
+  }
+
   useEffect(() => {
     onShapeConfirm?.({
       run: confirmStructure,
@@ -370,222 +485,93 @@ export function ProjectShapeScreen({
 
   return (
     <div className="screen shape-screen">
-      <div className="screen-header">
-        <h2>Project Shape</h2>
-        <p>
-          {proposing
-            ? 'Reading the groomed requirement…'
-            : proposalNote || 'Choose how the product is structured.'}
-        </p>
+      <div className="screen-header screen-header-row">
+        <div>
+          <h2>Project Shape</h2>
+          <p>
+            {proposing ? 'Suggesting shape options…' : 'Choose how the product is structured.'}
+          </p>
+        </div>
+        {state.projectId && requirementText.trim() ? (
+          <div className="screen-header-actions">
+            <button
+              type="button"
+              className="secondary-btn"
+              disabled={proposing}
+              onClick={() => resuggestShape()}
+            >
+              {proposing ? (
+                <>
+                  <Loader2 className="spin" size={16} />
+                  Suggesting…
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={16} />
+                  Resuggest shape
+                </>
+              )}
+            </button>
+          </div>
+        ) : null}
       </div>
       {confirmError ? <p className="sdlc-timeline__outcome is-blocked">{confirmError}</p> : null}
       {proposalError ? <p className="screen-note is-warn">{proposalError}</p> : null}
 
-      <div className="shape-layout">
+      <div className="shape-layout shape-layout--single">
         <div className="shape-controls">
-          <section className="card shape-section">
-            <div className="shape-section-head">
-              <h3 className="card-title">Application topology</h3>
-              <span className="shape-section-meta">What you are building</span>
-            </div>
-            <div className="topology-grid">
-              {TOPOLOGY_OPTIONS.map((opt) => {
-                const Icon = TOPOLOGY_ICONS[opt.id as keyof typeof TOPOLOGY_ICONS] ?? Boxes
-                const active = state.topology === opt.id
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    className={`topology-card ${active ? 'active' : ''}`}
-                    onClick={() => applyShape({ topology: opt.id })}
-                    aria-pressed={active}
-                  >
-                    <span className="topo-icon" aria-hidden="true">
-                      <Icon size={20} />
-                    </span>
-                    <span className="topo-label">{opt.label}</span>
-                    {'hint' in opt && opt.hint ? <span className="topo-hint">{opt.hint}</span> : null}
-                  </button>
-                )
-              })}
-            </div>
-          </section>
-
-          <div className="setup-grid-2 shape-choice-grid">
-            <section className="card shape-section">
-              <div className="shape-section-head">
-                <h3 className="card-title">Repository model</h3>
-                <span className="shape-section-meta">How code is split</span>
-              </div>
-              <div className="choice-tile-list">
-                {REPO_MODEL_OPTIONS.map((opt) => {
-                  const active = state.repositoryModel === opt.id
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      className={`choice-tile ${active ? 'active' : ''}`}
-                      onClick={() => applyShape({ repositoryModel: opt.id })}
-                      aria-pressed={active}
-                    >
-                      <span className="choice-tile-check" aria-hidden="true">
-                        {active ? <CheckCircle2 size={16} /> : <GitBranch size={16} />}
-                      </span>
-                      <span>
-                        <strong>{opt.label}</strong>
-                        {'hint' in opt && opt.hint ? <small className="option-hint">{opt.hint}</small> : null}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </section>
-
-            <section className="card shape-section">
-              <div className="shape-section-head">
-                <h3 className="card-title">Architecture style</h3>
-                <span className="shape-section-meta">Internal boundaries</span>
-              </div>
-              <div className="choice-tile-list">
-                {ARCHITECTURE_OPTIONS.map((opt) => {
-                  const active = state.architectureStyle === opt.id
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      className={`choice-tile ${active ? 'active' : ''}`}
-                      onClick={() => applyShape({ architectureStyle: opt.id })}
-                      aria-pressed={active}
-                    >
-                      <span className="choice-tile-check" aria-hidden="true">
-                        {active ? <CheckCircle2 size={16} /> : <Workflow size={16} />}
-                      </span>
-                      <span>
-                        <strong>{opt.label}</strong>
-                        {'hint' in opt && opt.hint ? <small className="option-hint">{opt.hint}</small> : null}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </section>
-          </div>
-
-          <section className="card shape-section">
-            <div className="shape-section-head">
-              <h3 className="card-title">IDE &amp; platform</h3>
-              <span className="shape-section-meta">
-                {IDE_TOOL_OPTIONS.find((opt) => opt.id === state.ideTool)?.label ?? 'IDE'}
-                {' · '}
-                {CLOUD_OPTIONS.find((opt) => opt.id === state.cloudProvider)?.label ?? 'Cloud'}
-                {' · '}
-                {platformOptionsForCloud(state.cloudProvider).cicd.find((opt) => opt.id === state.cicd)?.label ?? 'CI/CD'}
-              </span>
-            </div>
-            <div className="shape-platform">
-              <div>
-                <p className="shape-platform-label">IDE</p>
-                <div className="shape-chip-row">
-                  {IDE_TOOL_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      className={`shape-chip ${state.ideTool === opt.id ? 'active' : ''}`}
-                      disabled={!opt.enabled}
-                      aria-pressed={state.ideTool === opt.id}
-                      onClick={() => onUpdate({ ideTool: opt.id })}
-                    >
-                      {opt.label}{opt.enabled ? '' : ' · soon'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="shape-platform-label">Cloud</p>
-                <div className="cloud-card-grid">
-                  {CLOUD_OPTIONS.map((opt) => {
-                    const active = state.cloudProvider === opt.id
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        className={`cloud-card ${active ? 'active' : ''}`}
-                        aria-pressed={active}
-                        onClick={() => {
-                          const cloudProvider = opt.id
-                          onUpdate({
-                            cloudProvider,
-                            ...ensurePlatformDefaults(cloudProvider, {
-                              deploymentModel: state.deploymentModel,
-                              iac: state.iac,
-                              secretsManagement: state.secretsManagement,
-                              cicd: state.cicd,
-                            }),
-                          })
-                        }}
-                      >
-                        <Cloud size={18} />
-                        <strong>{opt.label}</strong>
-                        <span>{opt.hint}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-              <div>
-                <p className="shape-platform-label">CI/CD</p>
-                <div className="shape-chip-row">
-                  {platformOptionsForCloud(state.cloudProvider).cicd.map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      className={`shape-chip ${state.cicd === opt.id ? 'active' : ''}`}
-                      aria-pressed={state.cicd === opt.id}
-                      onClick={() => onUpdate({ cicd: opt.id })}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        <aside className="card shape-blueprint" aria-live="polite">
-          <div className="shape-blueprint-head">
-            <div>
-              <p className="shape-kicker">Live blueprint</p>
-              <h3>{state.projectName || 'Your project'}</h3>
-            </div>
-            <span className="shape-count-pill">{suggested.length} repo{suggested.length === 1 ? '' : 's'}</span>
-          </div>
-          <p className="shape-blueprint-summary">
-            {topologyLabel} · {modelLabel} · {archLabel}
-          </p>
-          <ul className="shape-repo-preview">
-            {suggested.map((repo, index) => (
-              <li key={repo.id} style={{ '--i': index } as CSSProperties}>
-                <span className="shape-repo-index">{index + 1}</span>
-                <div className="shape-repo-body">
-                  <code>{repo.name}</code>
-                  <span className="shape-repo-purpose">{repo.purpose}</span>
-                  <span className="muted">{repo.description}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-          {state.repositoriesTouched ? (
-            <p className="shape-lock-note">
-              Repositories were edited later — changing shape here no longer rewrites that list.
-            </p>
+          {showRecommendationUi && shapeRecommendation ? (
+            <ShapeRecommendationSections
+              sections={shapeRecommendation.sections.filter((section) =>
+                PROJECT_SHAPE_SECTION_IDS.has(section.id),
+              )}
+              activeBySection={activeShapeBySection}
+              onSelect={onShapeOptionSelect}
+              disabled={proposing}
+            />
           ) : (
-            <p className="shape-lock-note soft">Continue to edit planned names. Remotes are created on Ship after G-BOOTSTRAP.</p>
+            <section className="card empty-panel shape-suggest-placeholder">
+              {proposing ? (
+                <>
+                  <Loader2 className="spin" size={28} />
+                  <h3>Suggesting shape options</h3>
+                  <p>Ranked options for this project.</p>
+                </>
+              ) : (
+                <>
+                  <Layers size={28} />
+                  <h3>Shape suggestions</h3>
+                  <p>
+                    Click <strong>Resuggest shape</strong> to generate ranked options for topology, repository model,
+                    and architecture style.
+                  </p>
+                </>
+              )}
+            </section>
           )}
-        </aside>
+        </div>
       </div>
     </div>
   )
+}
+
+function mergeRosterWithExisting(
+  suggested: WizardState['repositories'],
+  existing: WizardState['repositories'],
+): WizardState['repositories'] {
+  const byId = new Map(existing.map((repo) => [repo.id, repo]))
+  const byName = new Map(existing.filter((repo) => repo.name.trim()).map((repo) => [repo.name, repo]))
+  return suggested.map((repo) => {
+    const prior = byId.get(repo.id) || byName.get(repo.name)
+    if (!prior) return repo
+    return {
+      ...repo,
+      htmlUrl: prior.htmlUrl,
+      createStatus: prior.createStatus,
+      createMessage: prior.createMessage,
+      owner: prior.owner || repo.owner,
+    }
+  })
 }
 
 export function RepositoriesScreen({
@@ -597,9 +583,108 @@ export function RepositoriesScreen({
 }) {
   const [rosterBusy, setRosterBusy] = useState(false)
   const [rosterError, setRosterError] = useState<string | null>(null)
+  const [rosterNote, setRosterNote] = useState<string | null>(null)
+  const [suggestingRoster, setSuggestingRoster] = useState(false)
+  const rosterSuggestRunRef = useRef(0)
+  const repositoriesRef = useRef(state.repositories)
+  repositoriesRef.current = state.repositories
+  const requirementText = shapeRequirementText(state)
+
+  const rosterAutoKey = rosterAutoSuggestKey(state.projectId, state)
+
+  const suggestRepositoryRoster = useCallback(
+    async (options?: { force?: boolean }) => {
+      const force = Boolean(options?.force)
+      if (!force && (state.repositoriesTouched || hasReadyRosterSuggestion(state))) return
+      if (!state.projectId) {
+        setRosterError('Save the project before resuggesting repositories.')
+        return
+      }
+      if (!requirementText.trim()) {
+        setRosterError('Add a requirement before resuggesting repositories.')
+        return
+      }
+      if (!state.repositoryModel?.trim()) {
+        setRosterError('Confirm project shape (repository model) first.')
+        return
+      }
+      const runId = ++rosterSuggestRunRef.current
+      const cacheKey = rosterAutoSuggestKey(state.projectId, state)
+      setSuggestingRoster(true)
+      setRosterError(null)
+      try {
+        const rec = await recommendRepositoryRoster(state.projectId, {
+          projectName: state.projectName,
+          requirementText,
+          topology: state.topology,
+          repositoryModel: state.repositoryModel,
+          architectureStyle: state.architectureStyle,
+          shapeRecommendation: state.shapeRecommendation,
+          shapeProposal: state.shapeProposal,
+        })
+        if (runId !== rosterSuggestRunRef.current) return
+        const merged = mergeRosterWithExisting(rec.repositories, repositoriesRef.current || [])
+        rosterAutoSuggestDone.add(cacheKey)
+        setRosterNote(rec.rationale.trim() || null)
+        onUpdate({
+          repositories: merged,
+          repositoriesTouched: false,
+          repositoryRosterSuggested: true,
+          repoTechnologies: pendingRepoTechnologiesForSuggest(merged),
+          repoTechnologiesSuggested: false,
+        })
+      } catch (cause) {
+        if (runId !== rosterSuggestRunRef.current) return
+        rosterAutoSuggestDone.delete(cacheKey)
+        if (!force) {
+          const fallback = plannedRepositories(state)
+          onUpdate({
+            repositories: fallback,
+            repoTechnologies: pendingRepoTechnologiesForSuggest(fallback),
+          })
+        }
+        setRosterError(cause instanceof Error ? cause.message : 'Repository suggestion is unavailable.')
+      } finally {
+        if (runId === rosterSuggestRunRef.current) setSuggestingRoster(false)
+      }
+    },
+    [
+      onUpdate,
+      requirementText,
+      state,
+    ],
+  )
+
+  const resuggestRoster = useCallback(() => {
+    setRosterError(null)
+    rosterAutoSuggestDone.delete(rosterAutoKey)
+    void suggestRepositoryRoster({ force: true })
+  }, [rosterAutoKey, suggestRepositoryRoster])
+
+  const suggestRosterRef = useRef(suggestRepositoryRoster)
+  suggestRosterRef.current = suggestRepositoryRoster
+  const hasRequirement = Boolean(requirementText.trim())
 
   useEffect(() => {
-    if (state.repositoriesTouched) return
+    if (state.repositoriesTouched || hasReadyRosterSuggestion(state)) return
+    if (!state.projectId || !hasRequirement || !state.repositoryModel?.trim()) return
+    if (rosterAutoSuggestDone.has(rosterAutoKey)) return
+    void suggestRosterRef.current()
+    // Only auto-run when this tab is first eligible — not when the callback identity changes.
+  }, [
+    hasRequirement,
+    rosterAutoKey,
+    state.projectId,
+    state.repositoriesTouched,
+    state.repositoryModel,
+    state.repositoryRosterSuggested,
+    state.repoTechnologiesSuggested,
+  ])
+
+  useEffect(() => {
+    if (state.repositoriesTouched || suggestingRoster || hasReadyRosterSuggestion(state)) return
+    if (rosterAutoSuggestDone.has(rosterAutoKey)) return
+    if (state.projectId && requirementText.trim() && state.repositoryModel?.trim()) return
     const shape = shapeFrom(state)
     const repos = plannedRepositories(state)
     const current = state.repositories || []
@@ -609,11 +694,16 @@ export function RepositoriesScreen({
     if (unchanged) return
     onUpdate({ repositories: repos, repoTechnologies: defaultRepoTechnologies(repos, shape) })
   }, [
+    suggestingRoster,
+    requirementText,
+    state.projectId,
     state.projectName,
     state.topology,
     state.repositoryModel,
     state.architectureStyle,
     state.repositoriesTouched,
+    state.repositoryRosterSuggested,
+    rosterAutoKey,
     state.repositories,
     state.shapeProposal,
     onUpdate,
@@ -648,13 +738,8 @@ export function RepositoriesScreen({
   }
 
   const restoreFromShape = () => {
-    const shape = shapeFrom(state)
-    const repos = plannedRepositories({ ...state, repositoriesTouched: false })
-    onUpdate({
-      repositories: repos,
-      repositoriesTouched: false,
-      repoTechnologies: defaultRepoTechnologies(repos, shape),
-    })
+    setRosterNote(null)
+    resuggestRoster()
   }
 
   const namedCount = repositories.filter((r) => r.name.trim()).length
@@ -674,6 +759,7 @@ export function RepositoriesScreen({
     // Local confirm first — never hold "Confirming…" on Neon.
     onUpdate({
       repositoriesTouched: true,
+      repositoryRosterSuggested: true,
       ...(topologyConfirmation ? { topologyConfirmation } : {}),
     })
     setRosterBusy(false)
@@ -701,19 +787,48 @@ export function RepositoriesScreen({
 
   return (
     <div className="screen screen-project">
-      <div className="screen-header">
-        <h2>Repositories</h2>
-        <p>Names follow the project shape. Rename them if you need to, then confirm.</p>
+      <div className="screen-header screen-header-row">
+        <div>
+          <h2>Repositories</h2>
+          <p>
+            {suggestingRoster
+              ? 'Suggesting repositories from your requirement and shape…'
+              : rosterNote || 'Suggested roster from requirement and project shape. Rename if needed, then confirm.'}
+          </p>
+        </div>
+        {state.projectId && requirementText.trim() && state.repositoryModel?.trim() ? (
+          <div className="screen-header-actions">
+            <button
+              type="button"
+              className="secondary-btn"
+              disabled={suggestingRoster}
+              onClick={() => resuggestRoster()}
+            >
+              {suggestingRoster ? (
+                <>
+                  <Loader2 className="spin" size={16} />
+                  Suggesting…
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={16} />
+                  Resuggest repositories
+                </>
+              )}
+            </button>
+          </div>
+        ) : null}
       </div>
+      {rosterError ? <p className="screen-note is-warn">{rosterError}</p> : null}
 
       {repositories.length === 0 ? (
         <section className="card empty-panel">
           <Boxes size={28} />
           <h3>No repositories yet</h3>
-          <p>Restore the shape suggestion or add a repository.</p>
+          <p>{suggestingRoster ? 'Loading suggestions…' : 'Resuggest from requirement and shape, or add a repository.'}</p>
           <div className="row-actions">
-            <button type="button" className="primary-btn" onClick={restoreFromShape}>
-              Restore from shape
+            <button type="button" className="primary-btn" onClick={restoreFromShape} disabled={suggestingRoster}>
+              Resuggest repositories
             </button>
             <button type="button" className="secondary-btn" onClick={addRepo}>
               Add repository
@@ -725,8 +840,8 @@ export function RepositoriesScreen({
           <div className="field-label-row">
             <label>Repositories</label>
             <span className="shape-label-actions">
-              <button type="button" className="text-btn" onClick={restoreFromShape}>
-                Reset from shape
+              <button type="button" className="text-btn" onClick={restoreFromShape} disabled={suggestingRoster}>
+                Resuggest repositories
               </button>
               <button type="button" className="text-btn" onClick={addRepo}>
                 <Plus size={14} /> Add repository
@@ -866,24 +981,88 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
   const techRows = state.repoTechnologies || []
   const [techBusy, setTechBusy] = useState(false)
   const [techError, setTechError] = useState<string | null>(null)
-  const [stackReady, setStackReady] = useState(
-    () => techRows.length > 0 && techRows.every((row) => row.status === 'confirmed'),
-  )
+  const [suggestGeneration, setSuggestGeneration] = useState(0)
+  const forceSuggestRef = useRef(false)
+  const [stackReady, setStackReady] = useState(() => {
+    if (productRepositories(repositories).length === 0) return true
+    return hasReadyStackSuggestion({ ...state, repoTechnologies: techRows, repositories })
+  })
   const autoConfirm = stackReady && shouldAutoConfirmRepoTechnologies(state)
   const autoAck = shouldAutoAcknowledgeShape(state)
   const setupReady = stacksReadyForWorkPlan(state) && Boolean(state.shapeAcknowledged)
   const techRowsRef = useRef(techRows)
   techRowsRef.current = techRows
+  const onUpdateRef = useRef(onUpdate)
+  onUpdateRef.current = onUpdate
+  const stateRef = useRef(state)
+  stateRef.current = state
   const requirementText = shapeRequirementText(state)
-  const stackSuggestKey = `${state.projectId || ''}|${repositories.map((repo) => repo.id).join(',')}|${requirementText}|${state.topology || ''}`
+  const stackCacheKey = stackAutoSuggestKey(
+    state.projectId,
+    state.topology,
+    repositories.map((repo) => repo.id),
+  )
+  const stackSuggestKey = `${stackCacheKey}|${suggestGeneration}`
+  const productTech = useMemo(
+    () => productStackFromRows(techRows, repositories),
+    [repositories, techRows],
+  )
+  const productRepoCount = productRepositories(repositories).length
+  const incompleteStacks = Boolean(productTech && isIncompleteRepoTechnology(productTech))
+
+  useEffect(() => {
+    logTechStack('screen.state', {
+      projectId: state.projectId,
+      stackReady,
+      techBusy,
+      incompleteStacks,
+      pending: techRows.filter((t) => t.status !== 'confirmed').length,
+      tbdCount: techRows.filter((t) => t.status === 'tbd').length,
+      suggestGeneration,
+      rows: techRows.map(summarizeRepoTechnologyRow),
+      repositoryIds: repositories.map((repo) => repo.id),
+    })
+  }, [
+    incompleteStacks,
+    repositories,
+    stackReady,
+    state.projectId,
+    suggestGeneration,
+    techBusy,
+    techRows,
+  ])
+
+  const resuggestStacks = useCallback(() => {
+    if (!state.projectId) {
+      setTechError('Save the project before resuggesting stacks.')
+      return
+    }
+    if (!repositories.length) {
+      setTechError('Add repositories before resuggesting stacks.')
+      return
+    }
+    setTechError(null)
+    const autoKey = `${state.projectId}:tech:${techRows.map((row) => row.repoId).join(',')}`
+    autoTechConfirmed.delete(autoKey)
+    stackAutoSuggestDone.delete(stackCacheKey)
+    forceSuggestRef.current = true
+    logTechStack('screen.resuggest', {
+      projectId: state.projectId,
+      rowsBefore: techRows.map(summarizeRepoTechnologyRow),
+    })
+    setSuggestGeneration((value) => value + 1)
+  }, [repositories.length, stackCacheKey, state.projectId, techRows])
 
   useEffect(() => {
     const missing = repositories.filter((repo) => !techRows.some((t) => t.repoId === repo.id))
     const stale = techRows.filter((t) => !repositories.some((repo) => repo.id === t.repoId))
     if (!missing.length && !stale.length) return
     const kept = techRows.filter((t) => repositories.some((repo) => repo.id === t.repoId))
+    const pending = state.projectId
+      ? pendingRepoTechnologiesForSuggest(missing)
+      : defaultRepoTechnologies(missing, shape)
     onUpdate({
-      repoTechnologies: [...kept, ...defaultRepoTechnologies(missing, shape)],
+      repoTechnologies: [...kept, ...pending],
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- shape fields listed explicitly
   }, [
@@ -896,38 +1075,86 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
   ])
 
   useEffect(() => {
-    const repos = state.repositories || []
+    const current = stateRef.current
+    const repos = current.repositories || []
     if (!repos.length) {
       setStackReady(true)
       return
     }
-    if (techRowsRef.current.length > 0 && techRowsRef.current.every((row) => row.status === 'confirmed')) {
+    const forceSuggest = forceSuggestRef.current
+    const cacheKey = stackAutoSuggestKey(
+      current.projectId,
+      current.topology,
+      repos.map((repo) => repo.id),
+    )
+    if (!forceSuggest && (hasReadyStackSuggestion(current) || stackAutoSuggestDone.has(cacheKey))) {
+      logTechStack('suggest.skip', { reason: 'already_suggested', projectId: current.projectId, cacheKey })
       setStackReady(true)
       return
     }
-    if (!state.projectId) {
+    if (
+      !forceSuggest &&
+      techRowsRef.current.length > 0 &&
+      techRowsRef.current.every((row) => row.status === 'confirmed') &&
+      !techRowsRef.current.some(isIncompleteRepoTechnology)
+    ) {
+      logTechStack('suggest.skip', { reason: 'all_confirmed_complete', projectId: current.projectId })
+      setStackReady(true)
+      return
+    }
+    if (!current.projectId) {
+      logTechStack('suggest.skip', { reason: 'no_project_id' })
       setStackReady(true)
       return
     }
     let cancelled = false
+    const overwriteConfirmed = forceSuggest
+    forceSuggestRef.current = false
     setStackReady(false)
     setTechBusy(true)
     setTechError(null)
-    void recommendRepoTechnologies(state.projectId, {
-      projectName: state.projectName,
-      requirementText,
-      topology: state.topology,
-      repositoryModel: state.repositoryModel,
-      architectureStyle: state.architectureStyle,
+    logTechStack('suggest.start', {
+      projectId: current.projectId,
+      overwriteConfirmed,
+      stackSuggestKey,
+      rowsBefore: techRowsRef.current.map(summarizeRepoTechnologyRow),
+    })
+    const projectId = current.projectId
+    void recommendRepoTechnologies(projectId, {
+      projectName: current.projectName,
+      requirementText: shapeRequirementText(current),
+      topology: current.topology,
+      repositoryModel: current.repositoryModel,
+      architectureStyle: current.architectureStyle,
       repositories: repos,
     })
       .then((rows) => {
         if (cancelled) return
-        onUpdate({
-          repoTechnologies: mergeRecommendedRepoTechnologies(techRowsRef.current, rows, repos),
+        const merged = mergeRecommendedRepoTechnologies(techRowsRef.current, rows, repos, {
+          overwriteConfirmed,
+          shape: shapeFrom(current),
+        })
+        logTechStack('suggest.merged', {
+          projectId,
+          recommended: rows.map(summarizeRepoTechnologyRow),
+          merged: merged.map(summarizeRepoTechnologyRow),
+          repoIdMismatch: repos
+            .filter((repo) => !rows.some((row) => row.repoId === repo.id))
+            .map((repo) => repo.id),
+        })
+        stackAutoSuggestDone.add(cacheKey)
+        onUpdateRef.current({
+          repoTechnologies: syncProductStackAcrossRepos(merged, repos),
+          repoTechnologiesSuggested: true,
         })
       })
-      .catch(() => undefined)
+      .catch((error: unknown) => {
+        if (cancelled) return
+        stackAutoSuggestDone.delete(cacheKey)
+        const message = error instanceof Error ? error.message : 'Could not suggest stacks.'
+        logTechStack('suggest.error', { projectId, message })
+        setTechError(message)
+      })
       .finally(() => {
         if (cancelled) return
         setStackReady(true)
@@ -936,23 +1163,33 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     return () => {
       cancelled = true
     }
-  }, [
-    stackSuggestKey,
-    onUpdate,
-    requirementText,
-    state.architectureStyle,
-    state.projectId,
-    state.projectName,
-    state.repositories,
-    state.repositoryModel,
-    state.topology,
-  ])
+    // Revisit must not retrigger — only first eligible visit or explicit Resuggest.
+  }, [stackSuggestKey, suggestGeneration, state.projectId])
 
-  const updateTech = (repoId: string, field: string, value: string) => {
+  const updateProductStackField = (field: string, value: string) => {
     onUpdate({
-      repoTechnologies: techRows.map((t) =>
-        t.repoId === repoId ? { ...t, [field]: value } : t,
-      ),
+      repoTechnologies: applyProductStackPatch(techRows, repositories, { [field]: value }),
+    })
+  }
+
+  const applyProductStackOption = (option: TechnologyStackOption) => {
+    if (option.custom) {
+      onUpdate({
+        repoTechnologies: applyProductStackPatch(techRows, repositories, {
+          status: productTech?.status === 'confirmed' ? 'confirmed' : 'tbd',
+        }),
+      })
+      return
+    }
+    onUpdate({
+      repoTechnologies: applyProductStackPatch(techRows, repositories, {
+        language: option.language?.trim() || productTech?.language || '',
+        framework: option.framework?.trim() || productTech?.framework || '',
+        database: option.database?.trim() || productTech?.database || '',
+        buildTool: option.buildTool?.trim() || productTech?.buildTool || '',
+        status: 'recommendation',
+        selectedStackOptionId: option.id,
+      }),
     })
   }
 
@@ -964,6 +1201,7 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     const topologyConfirmation = nextTopologyConfirmation(state, { repoTechnologies: nextRows })
     onUpdate({
       repoTechnologies: nextRows,
+      repoTechnologiesSuggested: true,
       ...(topologyConfirmation ? { topologyConfirmation } : {}),
     })
     if (!projectId) return
@@ -1004,6 +1242,7 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     // Local confirm first — never hold "Confirming…" on Neon.
     onUpdate({
       repoTechnologies: nextRows,
+      repoTechnologiesSuggested: true,
       ...(topologyConfirmation ? { topologyConfirmation } : {}),
     })
     setTechBusy(false)
@@ -1056,111 +1295,182 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
       .catch(() => autoShapeAcked.delete(key))
   }, [autoAck, onUpdate, state])
 
-  const pending = techRows.filter((t) => t.status !== 'confirmed').length
-  const tbdCount = techRows.filter((t) => t.status === 'tbd').length
+  const pending = productTech && productTech.status !== 'confirmed' ? 1 : 0
+  const tbdCount = productTech?.status === 'tbd' ? 1 : 0
 
   return (
     <div className="screen shape-screen">
       <div className="screen-header screen-header-row">
         <div>
           <h2>Technology</h2>
-          <p>Stacks are suggested from the requirement via AI-SDLC. Suggested ones lock automatically.</p>
+          <p>
+            One product technology stack for the whole app. AI-SDLC suggests options from your requirement and shape;
+            the same stack is applied to every product repository behind the scenes.
+          </p>
         </div>
-        {!stackReady ? (
-          <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
-            <Loader2 className="spin" size={16} />
-            Suggesting stacks from the requirement…
-          </p>
-        ) : tbdCount > 0 ? (
-          <button type="button" className="primary-btn" disabled={techBusy} onClick={() => void confirmAll()}>
-            {techBusy ? 'Confirming…' : `Confirm all (${pending})`}
-          </button>
-        ) : pending > 0 ? (
-          <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
-            <Loader2 className="spin" size={16} />
-            Confirming stacks…
-          </p>
-        ) : techRows.length > 0 ? (
-          <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
-            <CheckCircle2 size={16} className="check-green" />
-            All stacks confirmed
-          </p>
-        ) : null}
+        <div className="screen-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {productRepoCount > 0 ? (
+            <button
+              type="button"
+              className="secondary-btn"
+              disabled={techBusy || !stackReady}
+              onClick={() => resuggestStacks()}
+            >
+              {techBusy ? (
+                <>
+                  <Loader2 className="spin" size={16} />
+                  Suggesting…
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={16} />
+                  Resuggest stacks
+                </>
+              )}
+            </button>
+          ) : null}
+          {!stackReady ? (
+            <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+              <Loader2 className="spin" size={16} />
+              Suggesting stacks from the requirement…
+            </p>
+          ) : tbdCount > 0 ? (
+            <button type="button" className="primary-btn" disabled={techBusy} onClick={() => void confirmAll()}>
+              {techBusy ? 'Confirming…' : `Confirm all (${pending})`}
+            </button>
+          ) : pending > 0 ? (
+            <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+              <Loader2 className="spin" size={16} />
+              Confirming stacks…
+            </p>
+          ) : techRows.length > 0 && !incompleteStacks ? (
+            <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+              <CheckCircle2 size={16} className="check-green" />
+              All stacks confirmed
+            </p>
+          ) : null}
+        </div>
       </div>
+      {incompleteStacks && stackReady ? (
+        <p className="sdlc-timeline__outcome is-blocked">
+          Stack fields look incomplete (often from an earlier save). Click <strong>Resuggest stacks</strong> to fetch
+          options again from the requirement.
+        </p>
+      ) : null}
       {techError ? <p className="sdlc-timeline__outcome is-blocked">{techError}</p> : null}
 
-      {techRows.length === 0 ? (
+      {productRepoCount === 0 ? (
         <section className="card empty-panel">
           <Cpu size={28} />
-          <h3>No repositories to configure</h3>
-          <p>Add repositories first, then return here to lock the stack.</p>
+          <h3>No product to configure</h3>
+          <p>Confirm repositories on the previous step, then return here to choose the product stack.</p>
+        </section>
+      ) : !stackReady || techBusy || !productTech ? (
+        <section className="card empty-panel">
+          <Loader2 className="spin" size={28} />
+          <h3>Suggesting technology stack</h3>
+          <p>Loading AI-SDLC options for your product…</p>
         </section>
       ) : (
-        <div className="tech-card-grid">
-          {techRows.map((tech) => {
-            const repo = repositories.find((r) => r.id === tech.repoId)
-            return (
-              <article key={tech.repoId} className={`card tech-card status-${tech.status}`}>
-                <header className="tech-card-head">
-                  <div>
-                    <p className="shape-kicker">Repository</p>
-                    <h3>{repo?.name || tech.repoId}</h3>
-                    <span className="muted">{repo?.purpose}</span>
-                  </div>
-                  <div className="status-seg" role="group" aria-label="Technology status">
-                    {(['confirmed', 'recommendation', 'tbd'] as const).map((status) => (
+        <section
+          className={`card tech-stack-panel status-${productTech.status}${
+            productTech.technologyOptions?.length ? '' : ' tech-stack-panel--fields-only'
+          }`}
+        >
+          <header className="tech-stack-panel__head">
+            <h3 className="tech-stack-panel__title">{state.projectName.trim() || 'Product'} stack</h3>
+            {productRepoCount > 1 ? (
+              <span className="tech-stack-panel__purpose muted">
+                Applies to {productRepoCount} product repositories
+              </span>
+            ) : null}
+          </header>
+          <div className="tech-stack-panel__layout">
+            <div className="tech-stack-panel__fields">
+              <p className="tech-stack-panel__col-label">Stack</p>
+              <label className="field-group">
+                <span>Language</span>
+                <input
+                  className="table-input"
+                  value={productTech.language}
+                  onChange={(e) => updateProductStackField('language', e.target.value)}
+                />
+              </label>
+              <label className="field-group">
+                <span>Framework / tech</span>
+                <input
+                  className="table-input"
+                  value={productTech.framework}
+                  onChange={(e) => updateProductStackField('framework', e.target.value)}
+                />
+              </label>
+              <label className="field-group">
+                <span>Database</span>
+                <input
+                  className="table-input"
+                  value={productTech.database}
+                  onChange={(e) => updateProductStackField('database', e.target.value)}
+                />
+              </label>
+              <label className="field-group">
+                <span>Build / testing</span>
+                <input
+                  className="table-input"
+                  value={productTech.buildTool}
+                  onChange={(e) => updateProductStackField('buildTool', e.target.value)}
+                />
+              </label>
+            </div>
+            {productTech.technologyOptions?.length ? (
+              <div className="tech-stack-panel__options">
+                <p className="tech-stack-panel__col-label">Suggested stacks</p>
+                <div
+                  className="tech-option-grid tech-option-grid--panel"
+                  role="list"
+                  aria-label="Suggested technology stacks"
+                >
+                  {productTech.technologyOptions.map((option) => {
+                    const active = stackOptionMatchesRow(option, productTech)
+                    const aiTopPick = Boolean(option.recommended && !option.custom)
+                    const hasPick =
+                      Boolean(productTech.selectedStackOptionId) || !isIncompleteRepoTechnology(productTech)
+                    return (
                       <button
-                        key={status}
+                        key={option.id}
                         type="button"
-                        className={tech.status === status ? 'active' : ''}
-                        onClick={() => updateTech(tech.repoId, 'status', status)}
+                        role="listitem"
+                        aria-pressed={active}
+                        className={`tech-option-card${active ? ' is-active' : ''}${
+                          aiTopPick && !active && !hasPick ? ' is-recommended' : ''
+                        }${option.custom ? ' is-custom' : ''}`}
+                        onClick={() => applyProductStackOption(option)}
                       >
-                        {status === 'confirmed' ? 'Confirmed' : status === 'recommendation' ? 'Suggested' : 'TBD'}
+                        <div className="tech-option-card__head">
+                          <strong>{option.label}</strong>
+                          {active ? (
+                            <span className="tech-option-tag tech-option-tag--selected">Selected</span>
+                          ) : aiTopPick && !hasPick ? (
+                            <span className="tech-option-tag">AI top pick</span>
+                          ) : null}
+                        </div>
+                        {option.benefits?.length ? (
+                          <ul className="tech-option-benefits">
+                            {option.benefits.slice(0, 3).map((benefit) => (
+                              <li key={benefit}>{benefit}</li>
+                            ))}
+                          </ul>
+                        ) : null}
                       </button>
-                    ))}
-                  </div>
-                </header>
-                <div className="tech-card-fields">
-                  <label className="field-group">
-                    <span>Language</span>
-                    <input
-                      className="table-input"
-                      value={tech.language}
-                      onChange={(e) => updateTech(tech.repoId, 'language', e.target.value)}
-                    />
-                  </label>
-                  <label className="field-group">
-                    <span>Framework / tech</span>
-                    <input
-                      className="table-input"
-                      value={tech.framework}
-                      onChange={(e) => updateTech(tech.repoId, 'framework', e.target.value)}
-                    />
-                  </label>
-                  <label className="field-group">
-                    <span>Database</span>
-                    <input
-                      className="table-input"
-                      value={tech.database}
-                      onChange={(e) => updateTech(tech.repoId, 'database', e.target.value)}
-                    />
-                  </label>
-                  <label className="field-group">
-                    <span>Build / testing</span>
-                    <input
-                      className="table-input"
-                      value={tech.buildTool}
-                      onChange={(e) => updateTech(tech.repoId, 'buildTool', e.target.value)}
-                    />
-                  </label>
+                    )
+                  })}
                 </div>
-              </article>
-            )
-          })}
-        </div>
+              </div>
+            ) : null}
+          </div>
+        </section>
       )}
 
-      {techRows.length > 0 ? (
+      {productRepoCount > 0 ? (
         <section
           className={`auto-run-status${setupReady ? ' is-done' : ''}${tbdCount ? ' is-error' : ''}${autoConfirm || autoAck ? ' is-running' : ''}`}
           style={{ marginTop: '1rem' }}

@@ -24,7 +24,7 @@ import {
   toggleThinkingCollapsed,
   type ImplementRunState,
 } from './implementRunTypes'
-import type { RequirementsBatchContext } from '../wizard/implementRunMode'
+import type { ImplementArchitectureContext, RequirementsBatchContext } from '../wizard/implementRunMode'
 import { DocMarkdown } from '../components/DocMarkdown'
 import { excerptRequirements } from '../wizard/implementRunMode'
 import { loadDesktopWorkspacePath, saveDesktopWorkspacePath } from './workspacePath'
@@ -45,6 +45,7 @@ import {
 
 type Props = {
   batchRequirements: RequirementsBatchContext | null
+  batchArchitecture: ImplementArchitectureContext | null
   readyForAgent: boolean
   workspaceReady: boolean
 }
@@ -81,6 +82,7 @@ function SetupRow({
 
 export function ImplementAllRequirementsPanel({
   batchRequirements,
+  batchArchitecture,
   readyForAgent,
   workspaceReady,
 }: Props) {
@@ -252,6 +254,7 @@ export function ImplementAllRequirementsPanel({
           workspace: ws,
           runMode: mode,
           requirements: mode === 'batch' ? batchRequirements?.text ?? '' : '',
+          architectureContext: batchArchitecture?.markdown ?? '',
           chatMessage: mode === 'chat' ? chatMessage ?? '' : '',
           useWorktree: true,
           provider: 'cursor-cli',
@@ -316,10 +319,25 @@ export function ImplementAllRequirementsPanel({
       <header className="implement-all-panel__head">
         <h3>Implement all requirements</h3>
         <p className="muted small">
-          One batch over your current requirements text — not Jira tickets. Cursor CLI applies code changes directly in
-          your workspace.
+          One batch over your requirements plus confirmed shape, repositories, and technology — not Jira tickets.
+          Cursor CLI applies code changes directly in your workspace.
         </p>
       </header>
+
+      <section className="implement-all-section">
+        <h4>Architecture constraints</h4>
+        {batchArchitecture ? (
+          <>
+            <p className="muted small">From Project Shape, Repositories, and Technology · {batchArchitecture.summaryLabel}</p>
+            <DocMarkdown
+              className="implement-batch-requirements-preview"
+              text={excerptRequirements(batchArchitecture.markdown, 1600)}
+            />
+          </>
+        ) : (
+          <p className="status-banner info">Confirm project shape and repositories (and technology stacks) in Blink first.</p>
+        )}
+      </section>
 
       <section className="implement-all-section">
         <h4>Requirements</h4>

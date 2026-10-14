@@ -31,6 +31,11 @@ function proxyTimeoutMs(url: string | undefined): number {
     path.includes('/clarify') ||
     path.includes('/plan-product-scope') ||
     path.includes('/confirm-product-scope') ||
+    path.includes('/recommend-technology-stack') ||
+    path.includes('/architecture-proposal') ||
+    path.includes('/recommend-project-shape') ||
+    path.includes('/recommend-repository-roster') ||
+    path.includes('/confirm-topology') ||
     path.includes('/sdlc-') ||
     path.includes('/classify-work') ||
     path.includes('/create-spec') ||

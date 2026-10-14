@@ -11,6 +11,7 @@ import { ImplementAllRequirementsPanel } from '../desktop/ImplementAllRequiremen
 import { patchFromCanonicalSnapshot } from '../wizard/canonical'
 import {
   loadImplementRunMode,
+  implementArchitectureContext,
   requirementsBatchContext,
   saveImplementRunMode,
   type ImplementRunMode,
@@ -327,6 +328,14 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     state.productScope?.markdown,
     state.description,
   ])
+  const batchArchitecture = useMemo(() => implementArchitectureContext(state), [
+    state.architectureStyle,
+    state.repoTechnologies,
+    state.repositories,
+    state.repositoryModel,
+    state.topology,
+    state.topologyConfirmation,
+  ])
   const selectedRow = rows.find((r) => r.id === selectedIssueId) || rows[0]
   const draftedCount = rows.filter((r) => r.hasDraft).length
   const selectedHasDraft = Boolean(selectedRow?.hasDraft)
@@ -573,6 +582,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         ) : (
           <ImplementAllRequirementsPanel
             batchRequirements={batchRequirements}
+            batchArchitecture={batchArchitecture}
             readyForAgent={readyForAgent}
             workspaceReady={workspaceReady}
           />
