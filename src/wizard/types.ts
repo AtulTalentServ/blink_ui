@@ -208,6 +208,7 @@ export interface ProductScopeData {
   epics?: EpicSummary[]
   stories?: StorySummary[]
   markdown?: string
+  requirementSnapshot?: string
 }
 
 export interface ScopeOverlayFile {

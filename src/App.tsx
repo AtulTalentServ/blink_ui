@@ -56,6 +56,7 @@ import {
 } from './wizard/shape'
 import { buildDownloadStructure, defaultRepositories, NEXT_SDLC_COMMAND } from './wizard/defaults'
 import { mergeSavedIntegrations } from './wizard/mergeIntegrations'
+import { scopeConfirmed } from './wizard/scopeGate'
 import {
   clearGroomingPatch,
   defaultWizardState,
@@ -2137,6 +2138,9 @@ export default function App() {
                 repoTechnologies: state.repoTechnologies,
               }
             : undefined,
+          ...(scopeConfirmed(state) && state.scopeOverlays?.length
+            ? { productScope: state.productScope, scopeOverlays: state.scopeOverlays }
+            : {}),
           repositories,
           integrations: state.integrations
             .filter((integration) => integration.connected)
