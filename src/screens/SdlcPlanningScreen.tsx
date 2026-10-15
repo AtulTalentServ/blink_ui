@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { LucideIcon } from 'lucide-react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -6,6 +7,7 @@ import {
   ClipboardList,
   FileText,
   Loader2,
+  Map,
   Play,
   Sparkles,
 } from 'lucide-react'
@@ -38,7 +40,7 @@ interface PlanStep {
   title: string
   command: string
   plain: string
-  icon: typeof Layers
+  icon: LucideIcon
 }
 
 const WORK_PLAN_STEPS: PlanStep[] = [
