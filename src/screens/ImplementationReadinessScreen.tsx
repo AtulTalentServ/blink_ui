@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, CheckCircle2, Circle, Layers, Loader2, Play, RefreshCw, User } from 'lucide-react'
+import {
+  AlertCircle,
+  CheckCircle2,
+  Circle,
+  ExternalLink,
+  Layers,
+  ListChecks,
+  Loader2,
+  Play,
+  RefreshCw,
+  User,
+} from 'lucide-react'
 import {
   fetchCanonicalSnapshot,
   fetchShipSession,
@@ -214,7 +225,7 @@ function buildStoryRows(
     return {
       id: story.id,
       title: cleanTitle(story.title || story.id, story.id),
-      hasDraft: Boolean(hit),
+      hasDraft: (hit?.prUrls.length || 0) > 0,
       lastSummary: hit?.summary,
       prCount: hit?.prCount || 0,
       prUrls: hit?.prUrls || [],
@@ -227,7 +238,7 @@ function buildStoryRows(
     rows.push({
       id,
       title: cleanTitle(id, id),
-      hasDraft: true,
+      hasDraft: hit.prUrls.length > 0,
       lastSummary: hit.summary,
       prCount: hit.prCount,
       prUrls: hit.prUrls,
@@ -235,6 +246,11 @@ function buildStoryRows(
     })
   }
   return rows
+}
+
+function prLabel(url: string): string {
+  const match = url.match(/\/pull\/(\d+)/i)
+  return match ? `PR #${match[1]}` : 'PR'
 }
 
 function draftedSkipMessage(reason: string | undefined): string {
@@ -263,6 +279,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   const [implementSteps, setImplementSteps] = useState<ShipStepDto[]>([])
   const [selectedIssueId, setSelectedIssueId] = useState<string | undefined>(() => defaultIssueId(state))
   const [runMode, setRunMode] = useState<ImplementRunMode>(() => loadImplementRunMode())
+  const [runningAll, setRunningAll] = useState(false)
 
   const readyForAgent = Boolean(state.projectId && (state.planAcknowledged || state.shipPlanAcknowledged))
   const workspaceReady = Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged)
@@ -339,6 +356,13 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   const selectedRow = rows.find((r) => r.id === selectedIssueId) || rows[0]
   const draftedCount = rows.filter((r) => r.hasDraft).length
   const selectedHasDraft = Boolean(selectedRow?.hasDraft)
+  const pendingIds = rows.filter((r) => !r.hasDraft).map((r) => r.id)
+  const implementAllIds = pendingIds.length ? pendingIds : rows.map((r) => r.id)
+  const implementAllLabel = pendingIds.length && pendingIds.length < rows.length
+    ? `Implement all · ${pendingIds.length} left`
+    : pendingIds.length
+      ? 'Implement all'
+      : 'Re-run all'
   const selectedPrUrls = useMemo(() => {
     if (!selectedRow) return [] as string[]
     if (selectedRow.id === state.implementStep?.issueId) {
@@ -346,6 +370,34 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     }
     return selectedRow.prUrls
   }, [selectedRow, state.implementStep?.issueId, latestSessionPrUrls])
+
+  const implementPayload = useCallback(
+    (issueId: string, overlayFiles: WizardState['scopeOverlays']) => {
+      const tier = state.workClassification?.tier
+      return {
+        confirm: true,
+        gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
+        requirementText: requirementTextOf(state),
+        productScope: state.productScope,
+        workClassification: state.workClassification,
+        specification: state.specification,
+        technicalPlan: state.technicalPlan,
+        overlayFiles: overlayFiles || [],
+        repositories: (state.repositories || []).map((r) => ({
+          name: r.name,
+          htmlUrl: r.htmlUrl,
+          purpose: r.purpose,
+        })),
+        issueId,
+        issueKey: issueId,
+        planAcknowledged: Boolean(state.planAcknowledged || state.shipPlanAcknowledged),
+        shipPlanAcknowledged: Boolean(state.shipPlanAcknowledged),
+        implementationAuthorized: true,
+        impactAnalysisSkipped: Boolean(state.impactAnalysisSkipped || (typeof tier === 'number' && tier >= 2)),
+      }
+    },
+    [state],
+  )
 
   const runImplement = useCallback(
     async (issueId: string) => {
@@ -363,23 +415,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
       setError(null)
       setMessage(null)
       try {
-        const res = await implementStep(state.projectId, {
-          confirm: true,
-          gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
-          requirementText: requirementTextOf(state),
-          productScope: state.productScope,
-          workClassification: state.workClassification,
-          specification: state.specification,
-          technicalPlan: state.technicalPlan,
-          overlayFiles: state.scopeOverlays || [],
-          repositories: (state.repositories || []).map((r) => ({
-            name: r.name,
-            htmlUrl: r.htmlUrl,
-            purpose: r.purpose,
-          })),
-          issueId,
-          issueKey: issueId,
-        })
+        const res = await implementStep(state.projectId, implementPayload(issueId, state.scopeOverlays))
         if (res.status !== 'ok') {
           throw new Error(res.message || res.errors?.join('; ') || 'Implementation agent failed')
         }
@@ -432,7 +468,93 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         setBusyIssueId(null)
       }
     },
-    [onUpdate, refreshShipProgress, state],
+    [implementPayload, onUpdate, refreshShipProgress, state],
+  )
+
+  const runImplementAll = useCallback(
+    async (issueIds: string[]) => {
+      if (!state.projectId) {
+        setError('Save the project before running implementation.')
+        return
+      }
+      if (!issueIds.length) {
+        setError('Add stories in Scope & tickets before implementing the project.')
+        return
+      }
+      setBusy(true)
+      setRunningAll(true)
+      setError(null)
+      setMessage(null)
+      let overlays = state.scopeOverlays || []
+      const failures: string[] = []
+      let completed = 0
+      try {
+        for (let index = 0; index < issueIds.length; index += 1) {
+          const issueId = issueIds[index]
+          setBusyIssueId(issueId)
+          setSelectedIssueId(issueId)
+          setMessage(`Implementing ${shortStoryLabel(issueId)} (${index + 1}/${issueIds.length})…`)
+          try {
+            const res = await implementStep(state.projectId, implementPayload(issueId, overlays))
+            if (res.status !== 'ok') {
+              throw new Error(res.message || res.errors?.join('; ') || 'Implementation agent failed')
+            }
+            const draftPrs = res.draftPullRequests || []
+            setPrs(draftPrs)
+            const impl = res.implementStep
+            const resolvedIssue = impl?.issueId || res.issueId || issueId
+            onUpdate({
+              implementStep: impl || { issueId: resolvedIssue, summary: res.message },
+              draftPullRequests: draftPrs,
+              sdlcStartIssueId: resolvedIssue,
+              implementationAuthorized: true,
+              scopeOverlays: res.overlayFiles || overlays,
+              nextSdlcCommand: res.nextCommand || '/qa-validation',
+            })
+            overlays = res.overlayFiles || overlays
+            setSelectedIssueId(resolvedIssue)
+            await refreshShipProgress()
+            if (!draftPrs.length) {
+              const evidence = res.evidence && typeof res.evidence === 'object'
+                ? res.evidence as Record<string, unknown>
+                : null
+              const skipReason = typeof evidence?.draftPrSkipped === 'string'
+                ? evidence.draftPrSkipped
+                : typeof evidence?.draftPrError === 'string'
+                  ? evidence.draftPrError
+                  : undefined
+              failures.push(`${shortStoryLabel(issueId)}: ${draftedSkipMessage(skipReason)}`)
+              continue
+            }
+            completed += 1
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : 'Could not run implementation.'
+            failures.push(`${shortStoryLabel(issueId)}: ${reason}`)
+          }
+        }
+        try {
+          const snap = await fetchCanonicalSnapshot(state.projectId)
+          onUpdate(patchFromCanonicalSnapshot(snap, {
+            ...state,
+            shipSubstage: 'implementation',
+            gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
+          }))
+        } catch {
+          /* best-effort */
+        }
+        if (completed) {
+          setMessage(`Opened draft PRs for ${completed} ${completed === 1 ? 'story' : 'stories'}`)
+        } else {
+          setMessage(null)
+        }
+        if (failures.length) setError(failures.join(' '))
+      } finally {
+        setBusy(false)
+        setRunningAll(false)
+        setBusyIssueId(null)
+      }
+    },
+    [implementPayload, onUpdate, refreshShipProgress, state],
   )
 
   const selectStory = (id: string) => {
@@ -509,53 +631,46 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
             {rows.map((row) => {
               const isSelected = row.id === selectedIssueId
               const isBusy = busy && busyIssueId === row.id
-              const draftPrUrl = row.prUrls[0]
               return (
                 <li
                   key={row.id}
                   className={`implement-story-queue__item${isSelected ? ' is-selected' : ''}${row.hasDraft ? ' is-drafted' : ''}`}
                 >
-                  <button
-                    type="button"
-                    className="implement-story-queue__select"
-                    onClick={() => selectStory(row.id)}
-                    disabled={busy}
-                  >
-                    <span className="implement-story-queue__icon" aria-hidden>
-                      {row.hasDraft ? <CheckCircle2 size={16} /> : <Circle size={16} />}
-                    </span>
-                    <span className="implement-story-queue__copy">
-                      <code className="implement-story-queue__id">{shortStoryLabel(row.id)}</code>
-                      <span className="implement-story-queue__title">{row.title}</span>
-                    </span>
-                  </button>
-                  {row.hasDraft && draftPrUrl ? (
-                    <a
-                      className="implement-story-queue__badge is-drafted is-link"
-                      href={draftPrUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Open draft PR on GitHub"
-                    >
-                      Drafted
-                    </a>
-                  ) : row.hasDraft ? (
+                  <div className="implement-story-queue__lead">
                     <button
                       type="button"
-                      className="implement-story-queue__badge is-drafted is-link"
-                      title="No PR URL — click for details"
-                      onClick={() => {
-                        setMessage(null)
-                        setError(draftedSkipMessage(row.skipReason))
-                      }}
+                      className="implement-story-queue__select"
+                      onClick={() => selectStory(row.id)}
+                      disabled={busy}
                     >
-                      Drafted
+                      <span className="implement-story-queue__icon" aria-hidden>
+                        {row.hasDraft ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+                      </span>
+                      <span className="implement-story-queue__copy">
+                        <code className="implement-story-queue__id">{shortStoryLabel(row.id)}</code>
+                        <span className="implement-story-queue__title">{row.title}</span>
+                      </span>
                     </button>
-                  ) : (
-                    <span className={`implement-story-queue__badge is-${isSelected ? 'selected' : 'pending'}`}>
-                      {isSelected ? 'Selected' : 'Pending'}
-                    </span>
-                  )}
+                    {row.prUrls.length ? (
+                      <span className="implement-story-queue__prs">
+                        {row.prUrls.map((url) => (
+                          <a
+                            key={url}
+                            className="implement-story-queue__pr"
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {prLabel(url)}
+                            <ExternalLink size={12} />
+                          </a>
+                        ))}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className={`implement-story-queue__badge is-${row.hasDraft ? 'drafted' : isSelected ? 'selected' : 'pending'}`}>
+                    {row.hasDraft ? 'Drafted' : isSelected ? 'Selected' : 'Pending'}
+                  </span>
                   <button
                     type="button"
                     className={`implement-story-queue__action${row.hasDraft ? ' is-rerun' : ' is-implement'}`}
@@ -614,14 +729,25 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
 
         {runMode === 'individual' ? (
         <div className="ship-actions implement-queue-actions">
-          {nextPending ? (
+          {rows.length ? (
             <button
               type="button"
               className="primary-btn"
               disabled={busy || !readyForAgent || !workspaceReady}
+              onClick={() => void runImplementAll(implementAllIds)}
+            >
+              {runningAll ? <Loader2 className="spin" size={16} aria-hidden /> : <ListChecks size={16} aria-hidden />}
+              <span>{implementAllLabel}</span>
+            </button>
+          ) : null}
+          {nextPending ? (
+            <button
+              type="button"
+              className="secondary-btn"
+              disabled={busy || !readyForAgent || !workspaceReady}
               onClick={() => void runImplement(nextPending.id)}
             >
-              {busy && busyIssueId === nextPending.id ? (
+              {busy && !runningAll && busyIssueId === nextPending.id ? (
                 <Loader2 className="spin" size={16} aria-hidden />
               ) : (
                 <Play size={16} aria-hidden />
@@ -631,7 +757,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
           ) : selectedIssueId ? (
             <button
               type="button"
-              className="primary-btn"
+              className="secondary-btn"
               disabled={busy || !readyForAgent || !workspaceReady}
               onClick={() => void runImplement(selectedIssueId)}
             >
