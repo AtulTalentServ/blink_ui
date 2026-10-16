@@ -406,6 +406,7 @@ export default function App() {
   }, [state.projectId, persistProject])
 
   const goToStep = useCallback((next: WizardStep, historyMode: 'push' | 'replace' | 'silent' = 'push') => {
+    setKitResultOpen(false)
     const mapped = normalizeWizardStep(next, stateRef.current)
     if (next !== mapped && mapped === 'ship') {
       patch({ shipSubstage: substageFromLegacyStep(next) })
