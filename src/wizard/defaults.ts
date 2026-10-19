@@ -438,6 +438,32 @@ export function isWorkspaceRepo(repo: Pick<RepoDefinition, 'name' | 'purpose'>):
   return purpose === 'workspace' || name.endsWith('-workspace') || name.includes('workspace')
 }
 
+/** UI + suggestions: only backend/data/full-stack repos need a database column. */
+export function repoUsesDatabaseField(repo: Pick<RepoDefinition, 'name' | 'purpose'>): boolean {
+  const purpose = repo.purpose.toLowerCase().trim()
+  const name = repo.name.toLowerCase()
+  if (isWorkspaceRepo(repo)) return false
+  if (
+    purpose.includes('frontend') ||
+    purpose === 'web' ||
+    purpose.includes('admin') ||
+    purpose.includes('mobile') ||
+    purpose.includes('infra')
+  ) {
+    return false
+  }
+  if (purpose.includes('database') || purpose === 'data' || name.endsWith('-db') || name.includes('database')) {
+    return true
+  }
+  if (purpose.includes('backend') || purpose.includes('api') || purpose.includes('worker')) {
+    return true
+  }
+  if (purpose === 'product' || purpose === 'application' || purpose === 'monorepo') {
+    return true
+  }
+  return false
+}
+
 /** Empty / workspace-only rows until Technology runs AI-SDLC stack suggest. */
 export function pendingRepoTechnologiesForSuggest(repos: RepoDefinition[]): RepoTechnology[] {
   return repos.map((repo) => {
@@ -476,7 +502,7 @@ export function salvageIncompleteTechnologyRecommendation(
   _shape: ProjectShapeInput = {},
 ): RepoTechnology {
   if (!isIncompleteRepoTechnology(row) && row.status !== 'tbd') return row
-  const fromOptions = enrichRepoTechnologyFromOptions(row)
+  const fromOptions = enrichRepoTechnologyFromOptions(row, repo)
   if (!isIncompleteRepoTechnology(fromOptions) || fromOptions.status === 'recommendation') {
     if (fromOptions !== row) logTechStackSalvage(row, fromOptions)
     return { ...fromOptions, repoId: repo.id }
@@ -494,17 +520,21 @@ function logTechStackSalvage(bad: RepoTechnology, fallback: RepoTechnology): voi
 }
 
 /** When the API returns options but blank/TBD fields, pre-fill from the top suggestion. */
-export function enrichRepoTechnologyFromOptions(row: RepoTechnology): RepoTechnology {
+export function enrichRepoTechnologyFromOptions(
+  row: RepoTechnology,
+  repo?: Pick<RepoDefinition, 'name' | 'purpose'>,
+): RepoTechnology {
   const options = row.technologyOptions
   if (!options?.length) return row
   if (!isIncompleteRepoTechnology(row) && row.status !== 'tbd') return row
   const picked = options.find((opt) => opt.recommended && !opt.custom) ?? options.find((opt) => !opt.custom)
   if (!picked) return row
+  const usesDb = repo ? repoUsesDatabaseField(repo) : true
   return {
     ...row,
     language: picked.language?.trim() || row.language,
     framework: picked.framework?.trim() || row.framework,
-    database: picked.database?.trim() || row.database,
+    database: usesDb ? picked.database?.trim() || row.database : '—',
     buildTool: picked.buildTool?.trim() || row.buildTool,
     status: row.status === 'confirmed' ? 'confirmed' : 'recommendation',
     selectedStackOptionId: row.selectedStackOptionId || picked.id,
@@ -589,15 +619,19 @@ export function mergeRecommendedRepoTechnologies(
     }
     const status =
       next.status === 'confirmed' || next.status === 'tbd' ? next.status : 'recommendation'
-    const enriched = enrichRepoTechnologyFromOptions({
-      repoId: repo.id,
-      language: next.language,
-      framework: next.framework,
-      database: next.database,
-      buildTool: next.buildTool,
-      status,
-      ...(next.technologyOptions?.length ? { technologyOptions: next.technologyOptions } : {}),
-    })
+    const usesDb = repoUsesDatabaseField(repo)
+    const enriched = enrichRepoTechnologyFromOptions(
+      {
+        repoId: repo.id,
+        language: next.language,
+        framework: next.framework,
+        database: usesDb ? next.database : '—',
+        buildTool: next.buildTool,
+        status,
+        ...(next.technologyOptions?.length ? { technologyOptions: next.technologyOptions } : {}),
+      },
+      repo,
+    )
     return salvageIncompleteTechnologyRecommendation(enriched, repo, shape)
   })
 }
