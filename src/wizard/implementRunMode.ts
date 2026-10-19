@@ -98,19 +98,19 @@ export function implementArchitectureContext(
     (repo) =>
       !repo.purpose.toLowerCase().includes('workspace') && !repo.name.toLowerCase().includes('workspace'),
   )
-  const primaryRepo = productRepos[0]
-  const productStack = primaryRepo ? techRows.find((row) => row.repoId === primaryRepo.id) : undefined
-  if (productStack) {
-    lines.push('## Product technology stack', '')
-    lines.push(`- **Status:** ${productStack.status}`)
-    if (productStack.language?.trim()) lines.push(`- **Language:** ${productStack.language.trim()}`)
-    if (productStack.framework?.trim()) lines.push(`- **Framework:** ${productStack.framework.trim()}`)
-    if (productStack.database?.trim()) lines.push(`- **Database:** ${productStack.database.trim()}`)
-    if (productStack.buildTool?.trim()) lines.push(`- **Build / tooling:** ${productStack.buildTool.trim()}`)
-    if (productRepos.length > 1) {
-      lines.push(`- **Applies to product repos:** ${productRepos.map((repo) => repo.name.trim()).join(', ')}`)
+  if (productRepos.length) {
+    lines.push('## Technology stacks (per repository)', '')
+    for (const repo of productRepos) {
+      const stack = techRows.find((row) => row.repoId === repo.id)
+      if (!stack) continue
+      lines.push(`### ${repo.name.trim()} (\`${repo.id}\`)`)
+      lines.push(`- **Status:** ${stack.status}`)
+      if (stack.language?.trim()) lines.push(`- **Language:** ${stack.language.trim()}`)
+      if (stack.framework?.trim()) lines.push(`- **Framework:** ${stack.framework.trim()}`)
+      if (stack.database?.trim()) lines.push(`- **Database:** ${stack.database.trim()}`)
+      if (stack.buildTool?.trim()) lines.push(`- **Build / tooling:** ${stack.buildTool.trim()}`)
+      lines.push('')
     }
-    lines.push('')
   }
 
   const confirmation = state.topologyConfirmation

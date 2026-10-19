@@ -39,13 +39,12 @@ import {
   TOPOLOGY_OPTIONS,
   defaultRepositories,
   defaultRepoTechnologies,
-  applyProductStackPatch,
   mergeRecommendedRepoTechnologies,
   pendingRepoTechnologiesForSuggest,
   productRepositories,
-  productStackFromRows,
+  repoUsesDatabaseField,
   stackOptionMatchesRow,
-  syncProductStackAcrossRepos,
+  type RepoTechnology,
   type TechnologyStackOption,
   ensurePlatformDefaults,
   githubRepoSlug,
@@ -148,11 +147,17 @@ function hasReadyStackSuggestion(
   state: Pick<WizardState, 'repoTechnologiesSuggested' | 'repoTechnologies' | 'repositories'>,
 ) {
   if (state.repoTechnologiesSuggested) return true
-  const product = productStackFromRows(state.repoTechnologies || [], state.repositories || [])
-  return Boolean(
-    product?.technologyOptions?.length
-    || (product && product.status === 'confirmed' && !isIncompleteRepoTechnology(product)),
-  )
+  const repos = productRepositories(state.repositories || [])
+  if (!repos.length) return true
+  const rows = state.repoTechnologies || []
+  return repos.every((repo) => {
+    const row = rows.find((item) => item.repoId === repo.id)
+    if (!row) return false
+    return Boolean(
+      row.technologyOptions?.length
+      || (row.status === 'confirmed' && !isIncompleteRepoTechnology(row)),
+    )
+  })
 }
 
 /** Survives tab unmount — avoid re-running LLM advisory on every visit. */
@@ -729,6 +734,18 @@ export function RepositoriesScreen({
 const autoTechConfirmed = new Set<string>()
 const autoShapeAcked = new Set<string>()
 
+/** Pending recommendation rows — auto-confirm must re-run when the user picks a different stack. */
+function techAutoConfirmCacheKey(projectId: string | undefined, rows: RepoTechnology[]) {
+  const signature = rows
+    .filter((row) => row.status === 'recommendation')
+    .map(
+      (row) =>
+        `${row.repoId}:${row.selectedStackOptionId ?? ''}:${row.framework}:${row.language}:${row.buildTool}`,
+    )
+    .join(';')
+  return `${projectId || 'local'}:tech-pending:${signature}`
+}
+
 export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
   const shape = shapeFrom(state)
   const repositories = state.repositories || []
@@ -737,6 +754,7 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
   const [techError, setTechError] = useState<string | null>(null)
   const [suggestGeneration, setSuggestGeneration] = useState(0)
   const forceSuggestRef = useRef(false)
+  const productRepos = useMemo(() => productRepositories(repositories), [repositories])
   const [stackReady, setStackReady] = useState(() => {
     if (productRepositories(repositories).length === 0) return true
     return hasReadyStackSuggestion({ ...state, repoTechnologies: techRows, repositories })
@@ -756,12 +774,15 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     repositories.map((repo) => repo.id),
   )
   const stackSuggestKey = `${stackCacheKey}|${suggestGeneration}`
-  const productTech = useMemo(
-    () => productStackFromRows(techRows, repositories),
-    [repositories, techRows],
+  const productRepoCount = productRepos.length
+  const incompleteStacks = useMemo(
+    () =>
+      productRepos.some((repo) => {
+        const row = techRows.find((item) => item.repoId === repo.id)
+        return !row || isIncompleteRepoTechnology(row)
+      }),
+    [productRepos, techRows],
   )
-  const productRepoCount = productRepositories(repositories).length
-  const incompleteStacks = Boolean(productTech && isIncompleteRepoTechnology(productTech))
 
   useEffect(() => {
     logTechStack('screen.state', {
@@ -799,12 +820,13 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     autoTechConfirmed.delete(autoKey)
     stackAutoSuggestDone.delete(stackCacheKey)
     forceSuggestRef.current = true
+    onUpdate({ repoTechnologiesSuggested: false })
     logTechStack('screen.resuggest', {
       projectId: state.projectId,
       rowsBefore: techRows.map(summarizeRepoTechnologyRow),
     })
     setSuggestGeneration((value) => value + 1)
-  }, [repositories.length, stackCacheKey, state.projectId, techRows])
+  }, [onUpdate, repositories.length, stackCacheKey, state.projectId, techRows])
 
   useEffect(() => {
     const missing = repositories.filter((repo) => !techRows.some((t) => t.repoId === repo.id))
@@ -897,7 +919,7 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
         })
         stackAutoSuggestDone.add(cacheKey)
         onUpdateRef.current({
-          repoTechnologies: syncProductStackAcrossRepos(merged, repos),
+          repoTechnologies: merged,
           repoTechnologiesSuggested: true,
         })
       })
@@ -919,29 +941,30 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
     // Revisit must not retrigger — only first eligible visit or explicit Resuggest.
   }, [stackSuggestKey, suggestGeneration, state.projectId])
 
-  const updateProductStackField = (field: string, value: string) => {
+  const updateTech = (repoId: string, field: string, value: string) => {
     onUpdate({
-      repoTechnologies: applyProductStackPatch(techRows, repositories, { [field]: value }),
+      repoTechnologies: techRows.map((t) => (t.repoId === repoId ? { ...t, [field]: value } : t)),
     })
   }
 
-  const applyProductStackOption = (option: TechnologyStackOption) => {
-    if (option.custom) {
-      onUpdate({
-        repoTechnologies: applyProductStackPatch(techRows, repositories, {
-          status: productTech?.status === 'confirmed' ? 'confirmed' : 'tbd',
-        }),
-      })
-      return
-    }
+  const applyStackOption = (repoId: string, option: TechnologyStackOption) => {
     onUpdate({
-      repoTechnologies: applyProductStackPatch(techRows, repositories, {
-        language: option.language?.trim() || productTech?.language || '',
-        framework: option.framework?.trim() || productTech?.framework || '',
-        database: option.database?.trim() || productTech?.database || '',
-        buildTool: option.buildTool?.trim() || productTech?.buildTool || '',
-        status: 'recommendation',
-        selectedStackOptionId: option.id,
+      repoTechnologies: techRows.map((t) => {
+        if (t.repoId !== repoId) return t
+        if (option.custom) {
+          return { ...t, status: t.status === 'confirmed' ? 'confirmed' : 'tbd' }
+        }
+        const repo = repositories.find((item) => item.id === repoId)
+        const usesDb = repo ? repoUsesDatabaseField(repo) : true
+        return {
+          ...t,
+          language: option.language?.trim() || t.language,
+          framework: option.framework?.trim() || t.framework,
+          database: usesDb ? option.database?.trim() || t.database : '—',
+          buildTool: option.buildTool?.trim() || t.buildTool,
+          status: 'confirmed',
+          selectedStackOptionId: option.id,
+        }
       }),
     })
   }
@@ -1023,7 +1046,7 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
 
   useEffect(() => {
     if (!autoConfirm) return
-    const key = `${state.projectId || 'local'}:tech:${techRows.map((row) => row.repoId).join(',')}`
+    const key = techAutoConfirmCacheKey(state.projectId, techRows)
     if (autoTechConfirmed.has(key)) return
     autoTechConfirmed.add(key)
     void confirmRecommendations()
@@ -1048,8 +1071,13 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
       .catch(() => autoShapeAcked.delete(key))
   }, [autoAck, onUpdate, state])
 
-  const pending = productTech && productTech.status !== 'confirmed' ? 1 : 0
-  const tbdCount = productTech?.status === 'tbd' ? 1 : 0
+  const productRepoIds = useMemo(() => new Set(productRepos.map((repo) => repo.id)), [productRepos])
+  const productTechRows = useMemo(
+    () => techRows.filter((row) => productRepoIds.has(row.repoId)),
+    [productRepoIds, techRows],
+  )
+  const pending = productTechRows.filter((t) => t.status !== 'confirmed').length
+  const tbdCount = productTechRows.filter((t) => t.status === 'tbd').length
 
   return (
     <div className="screen shape-screen">
@@ -1057,8 +1085,8 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
         <div>
           <h2>Technology</h2>
           <p>
-            One product technology stack for the whole app. AI-SDLC suggests options from your requirement and shape;
-            the same stack is applied to every product repository behind the scenes.
+            Each repository from the previous step gets its own stack suggestion (frontend, backend, database, etc.)
+            from your requirement and project shape.
           </p>
         </div>
         <div className="screen-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1115,112 +1143,107 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
       {productRepoCount === 0 ? (
         <section className="card empty-panel">
           <Cpu size={28} />
-          <h3>No product to configure</h3>
-          <p>Confirm repositories on the previous step, then return here to choose the product stack.</p>
+          <h3>No repositories to configure</h3>
+          <p>Confirm repositories on the previous step, then return here for per-repo stack suggestions.</p>
         </section>
-      ) : !stackReady || techBusy || !productTech ? (
+      ) : !stackReady || techBusy ? (
         <section className="card empty-panel">
           <Loader2 className="spin" size={28} />
-          <h3>Suggesting technology stack</h3>
-          <p>Loading AI-SDLC options for your product…</p>
+          <h3>Suggesting technology stacks</h3>
+          <p>Loading AI-SDLC options for each repository…</p>
         </section>
       ) : (
-        <section
-          className={`card tech-stack-panel status-${productTech.status}${
-            productTech.technologyOptions?.length ? '' : ' tech-stack-panel--fields-only'
-          }`}
-        >
-          <header className="tech-stack-panel__head">
-            <h3 className="tech-stack-panel__title">{state.projectName.trim() || 'Product'} stack</h3>
-            {productRepoCount > 1 ? (
-              <span className="tech-stack-panel__purpose muted">
-                Applies to {productRepoCount} product repositories
-              </span>
-            ) : null}
-          </header>
-          <div className="tech-stack-panel__layout">
-            <div className="tech-stack-panel__fields">
-              <p className="tech-stack-panel__col-label">Stack</p>
-              <label className="field-group">
-                <span>Language</span>
-                <input
-                  className="table-input"
-                  value={productTech.language}
-                  onChange={(e) => updateProductStackField('language', e.target.value)}
-                />
-              </label>
-              <label className="field-group">
-                <span>Framework / tech</span>
-                <input
-                  className="table-input"
-                  value={productTech.framework}
-                  onChange={(e) => updateProductStackField('framework', e.target.value)}
-                />
-              </label>
-              <label className="field-group">
-                <span>Database</span>
-                <input
-                  className="table-input"
-                  value={productTech.database}
-                  onChange={(e) => updateProductStackField('database', e.target.value)}
-                />
-              </label>
-              <label className="field-group">
-                <span>Build / testing</span>
-                <input
-                  className="table-input"
-                  value={productTech.buildTool}
-                  onChange={(e) => updateProductStackField('buildTool', e.target.value)}
-                />
-              </label>
-            </div>
-            {productTech.technologyOptions?.length ? (
-              <div className="tech-stack-panel__options">
-                <p className="tech-stack-panel__col-label">Suggested stacks</p>
-                <div
-                  className="tech-option-grid tech-option-grid--panel"
-                  role="list"
-                  aria-label="Suggested technology stacks"
-                >
-                  {productTech.technologyOptions.map((option) => {
-                    const active = stackOptionMatchesRow(option, productTech)
-                    const aiTopPick = Boolean(option.recommended && !option.custom)
-                    const hasPick =
-                      Boolean(productTech.selectedStackOptionId) || !isIncompleteRepoTechnology(productTech)
-                    return (
-                      <button
-                        key={option.id}
-                        type="button"
-                        role="listitem"
-                        aria-pressed={active}
-                        className={`tech-option-card${active ? ' is-active' : ''}${
-                          aiTopPick && !active && !hasPick ? ' is-recommended' : ''
-                        }${option.custom ? ' is-custom' : ''}`}
-                        onClick={() => applyProductStackOption(option)}
-                      >
-                        <div className="tech-option-card__head">
-                          <strong>{option.label}</strong>
-                          {active ? (
-                            <span className="tech-option-tag tech-option-tag--selected">Selected</span>
-                          ) : aiTopPick && !hasPick ? (
-                            <span className="tech-option-tag">AI top pick</span>
+        <div className="tech-card-grid">
+          {productRepos.map((repo) => {
+            const tech =
+              techRows.find((row) => row.repoId === repo.id)
+              ?? pendingRepoTechnologiesForSuggest([repo])[0]
+            return (
+              <article key={repo.id} className={`card tech-card status-${tech.status}`}>
+                <header className="tech-card-head">
+                  <div>
+                    <p className="shape-kicker">Repository</p>
+                    <h3>{repo.name || repo.id}</h3>
+                    <span className="muted">{repo.purpose}</span>
+                  </div>
+                </header>
+                {tech.technologyOptions?.length ? (
+                  <div className="tech-option-grid" role="list" aria-label={`Suggested stacks for ${repo.name}`}>
+                    {tech.technologyOptions.map((option) => {
+                      const active = stackOptionMatchesRow(option, tech)
+                      const aiTopPick = Boolean(option.recommended && !option.custom)
+                      const hasPick = Boolean(tech.selectedStackOptionId) || !isIncompleteRepoTechnology(tech)
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          role="listitem"
+                          aria-pressed={active}
+                          className={`tech-option-card${active ? ' is-active' : ''}${
+                            aiTopPick && !active && !hasPick ? ' is-recommended' : ''
+                          }${option.custom ? ' is-custom' : ''}`}
+                          onClick={() => applyStackOption(repo.id, option)}
+                        >
+                          <div className="tech-option-card__head">
+                            <strong>{option.label}</strong>
+                            {active ? (
+                              <span className="tech-option-tag tech-option-tag--selected">Selected</span>
+                            ) : aiTopPick && !hasPick ? (
+                              <span className="tech-option-tag">AI top pick</span>
+                            ) : null}
+                          </div>
+                          {option.benefits?.length ? (
+                            <ul className="tech-option-benefits">
+                              {option.benefits.slice(0, 3).map((benefit) => (
+                                <li key={benefit}>{benefit}</li>
+                              ))}
+                            </ul>
                           ) : null}
-                        </div>
-                        {option.benefits?.length ? (
-                          <ul className="tech-option-benefits">
-                            {option.benefits.slice(0, 3).map((benefit) => (
-                              <li key={benefit}>{benefit}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </button>
-                    )
-                  })}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null}
+                <div className="tech-card-fields">
+                  <label className="field-group">
+                    <span>Language</span>
+                    <input
+                      className="table-input"
+                      value={tech.language}
+                      onChange={(e) => updateTech(repo.id, 'language', e.target.value)}
+                    />
+                  </label>
+                  <label className="field-group">
+                    <span>Framework / tech</span>
+                    <input
+                      className="table-input"
+                      value={tech.framework}
+                      onChange={(e) => updateTech(repo.id, 'framework', e.target.value)}
+                    />
+                  </label>
+                  {repoUsesDatabaseField(repo) ? (
+                    <label className="field-group">
+                      <span>Database</span>
+                      <input
+                        className="table-input"
+                        value={tech.database}
+                        onChange={(e) => updateTech(repo.id, 'database', e.target.value)}
+                      />
+                    </label>
+                  ) : null}
+                  <label className="field-group">
+                    <span>Build / testing</span>
+                    <input
+                      className="table-input"
+                      value={tech.buildTool}
+                      onChange={(e) => updateTech(repo.id, 'buildTool', e.target.value)}
+                    />
+                  </label>
                 </div>
-              </div>
-            ) : null}
-          </div>
-        </section>
+              </article>
+            )
+          })}
+        </div>
       )}
 
       {productRepoCount > 0 && (setupReady || autoConfirm || autoAck || tbdCount === 0) ? (
