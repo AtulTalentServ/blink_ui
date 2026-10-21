@@ -1,5 +1,5 @@
 import type { GroomAnswer, GroomQuestion, WizardState } from './types'
-import { hasRequirementSource } from './groomingEligibility'
+import { hasRequirementSource } from './groomingEligibility.ts'
 
 export type GroomPriority = 'need_clarification' | 'important' | 'suggestion'
 
@@ -29,6 +29,23 @@ export const GROOM_BANDS: {
   },
 ]
 
+const CATEGORY_PREFIX = /^\s*(?:\[[^\]]{1,48}\]\s*|[A-Za-z][A-Za-z /&]{0,40}:\s+)/
+const STACKED_ASK =
+  /(?:(?<=[.?])|(?<=,))\s+(?:also|additionally)\s+(?:confirm|specify|include|choose|decide|clarify|ask)\b.*$/is
+
+/** Drop [Category] prefixes and stacked "also confirm" clauses from MCQ text. */
+export function compactQuestionText(text: string): string {
+  const original = (text || '').trim()
+  if (!original) return original
+  let cleaned = original.replace(CATEGORY_PREFIX, '').trim()
+  cleaned = cleaned.replace(STACKED_ASK, '').trim()
+  cleaned = cleaned.replace(CATEGORY_PREFIX, '').trim()
+  cleaned = cleaned.replace(/\s+/g, ' ')
+  const qmark = cleaned.indexOf('?')
+  if (qmark >= 0) cleaned = cleaned.slice(0, qmark + 1).trim()
+  return cleaned || original
+}
+
 export function questionPriority(question: GroomQuestion): GroomPriority {
   const value = question.priority
   if (value === 'important' || value === 'suggestion') return value
@@ -45,9 +62,14 @@ type IncomingQuestion = Omit<GroomQuestion, 'priority'> & { priority?: GroomPrio
 export function assignQuestionBands(questions: IncomingQuestion[]): GroomQuestion[] {
   const explicit = questions.some((question) => Boolean(question.priority))
   const mapped: GroomQuestion[] = explicit
-    ? questions.map((question) => ({ ...question, priority: questionPriority(question as GroomQuestion) }))
+    ? questions.map((question) => ({
+        ...question,
+        text: compactQuestionText(question.text),
+        priority: questionPriority(question as GroomQuestion),
+      }))
     : questions.map((question, index) => ({
         ...question,
+        text: compactQuestionText(question.text),
         priority: (index < 2 ? 'need_clarification' : index < 5 ? 'important' : 'suggestion') as GroomPriority,
       }))
   if (mapped.length === 0) return mapped
@@ -83,6 +105,27 @@ export function unansweredRequired(state: Pick<WizardState, 'groomQuestions' | '
   return requiredGroomQuestions(state.groomQuestions).filter(
     (question) => !isResolvedForWording(question, state.groomAnswers),
   )
+}
+
+/** Append a second clarify round without duplicating round-1 questions. */
+export function mergeFollowUpQuestions(
+  existing: GroomQuestion[],
+  incoming: GroomQuestion[],
+): GroomQuestion[] {
+  const usedIds = new Set(existing.map((question) => question.id))
+  const usedText = new Set(existing.map((question) => question.text.trim().toLowerCase()).filter(Boolean))
+  const extra: GroomQuestion[] = []
+  for (const question of incoming) {
+    const textKey = question.text.trim().toLowerCase()
+    if (!textKey || usedText.has(textKey)) continue
+    let id = question.id.trim() || `r2-${extra.length + 1}`
+    if (usedIds.has(id)) id = `r2-${id}`
+    usedIds.add(id)
+    usedText.add(textKey)
+    extra.push({ ...question, id, priority: 'need_clarification' })
+    if (extra.length >= 3) break
+  }
+  return extra.length ? [...existing, ...extra] : existing
 }
 
 export function groomingComplete(state: WizardState): boolean {

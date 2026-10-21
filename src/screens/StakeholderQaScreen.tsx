@@ -14,6 +14,7 @@ import {
   validateStakeholderResponses,
 } from './StakeholderResponsesScreen'
 import type { QuestionResponse, StakeholderQuestion, WizardState, WizardStep } from '../wizard/types'
+import { applyImplicitGroomAck, groomQaGateSatisfied } from '../wizard/groomGate'
 import { shouldAutoStartClarify, type JiraPublishState } from '../wizard/thinking'
 
 type QaTab = 'clarify' | 'stakeholders' | 'tickets'
@@ -29,7 +30,7 @@ const QA_STEPS: { id: QaTab; label: string; title: string; detail: string }[] = 
     id: 'stakeholders',
     label: 'Stakeholders',
     title: 'Stakeholders',
-    detail: 'Send questions, collect answers, then acknowledge G-GROOM.',
+    detail: 'Send questions, collect answers, then plan scope and tickets.',
   },
   {
     id: 'tickets',
@@ -71,7 +72,7 @@ interface Props {
 /**
  Ideal SDLC order for this step:
  1) Clarify wording with the agent
- 2) Stakeholders — send questions, resolve answers, acknowledge G-GROOM
+ 2) Stakeholders — send questions and resolve answers
  3) Scope & tickets — propose epics/stories from confirmed requirement
 */
 function defaultTab(state: WizardState): QaTab {
@@ -91,8 +92,7 @@ export function StakeholderQaScreen(props: Props) {
     hasTextSource &&
     Boolean(props.onAsk && props.onPick && props.onOther && props.onToggleOther && props.onUseWording && props.onStartOver)
   const canUseStakeholderWorkflow = wordingConfirmed
-  /** Tickets only after stakeholders confirmed (G-GROOM). */
-  const canPlanTickets = wordingConfirmed && Boolean(state.groomAcknowledged)
+  const canPlanTickets = wordingConfirmed && groomQaGateSatisfied(state)
 
   useEffect(() => {
     if (shouldAutoRunGroomingLoop(state) && !state.groomAcknowledged) setTab('stakeholders')
@@ -132,7 +132,7 @@ export function StakeholderQaScreen(props: Props) {
   }
   const stepDone = (id: QaTab) => {
     if (id === 'clarify') return wordingConfirmed
-    if (id === 'stakeholders') return Boolean(state.groomAcknowledged)
+    if (id === 'stakeholders') return groomQaGateSatisfied(state)
     return hasDraftTickets(state) || (scopeConfirmed(state) && Boolean(state.sdlcStartIssueId))
   }
 
@@ -158,10 +158,14 @@ export function StakeholderQaScreen(props: Props) {
                   enabled
                     ? undefined
                     : step.id === 'tickets'
-                      ? 'Acknowledge G-GROOM on Stakeholders first'
+                      ? 'Finish Stakeholders first'
                       : 'Confirm wording on Clarify first'
                 }
-                onClick={() => enabled && setTab(step.id)}
+                onClick={() => {
+                  if (!enabled) return
+                  if (step.id === 'tickets') applyImplicitGroomAck(state, props.onUpdate)
+                  setTab(step.id)
+                }}
               >
                 <span className="ship-step-index">{index + 1}</span>
                 <span className="ship-step-label">{step.label}</span>
@@ -214,7 +218,7 @@ export function StakeholderQaScreen(props: Props) {
         {tab === 'stakeholders' ? (
           <div className="req-tickets stakeholder-merged">
             <p className="muted small" style={{ marginBottom: '0.75rem' }}>
-              1) Send leftover questions by email or Jira · 2) Resolve answers below · 3) Acknowledge G-GROOM
+              1) Send leftover questions by email or Jira · 2) Resolve answers below · 3) Open Scope &amp; tickets
             </p>
             <StakeholderQuestionsScreen
               embedded
@@ -243,9 +247,6 @@ export function StakeholderQaScreen(props: Props) {
               refreshing={props.refreshing}
               simulating={props.simulating}
               resetting={props.resetting}
-              onOpenTickets={() => {
-                if (canPlanTickets) setTab('tickets')
-              }}
             />
           </div>
         ) : null}
@@ -267,9 +268,9 @@ export function StakeholderQaScreen(props: Props) {
             ) : (
               <section className="card shape-section">
                 <div className="empty-state-block">
-                  <h3>Tickets unlock after G-GROOM</h3>
+                  <h3>Tickets unlock after Stakeholders</h3>
                   <p className="muted">
-                    Finish Stakeholders first, then acknowledge G-GROOM so epics match stakeholder answers.
+                    Finish Stakeholders first so epics match stakeholder answers.
                   </p>
                   <button
                     type="button"
@@ -303,10 +304,10 @@ export function validateStakeholderQa(state: WizardState): string | null {
   const responses = validateStakeholderResponses(state)
   if (responses) return responses
   if (state.groomRejectPending && !state.groomingRevision) {
-    return 'G-GROOM was rejected — wait for grooming to refresh, then acknowledge again.'
+    return 'Requirement refresh is still running — wait a moment, then continue.'
   }
-  if (!state.groomAcknowledged) {
-    return 'Acknowledge G-GROOM on Stakeholders before Scope & tickets.'
+  if (!groomQaGateSatisfied(state)) {
+    return 'Resolve mandatory stakeholder answers before continuing.'
   }
   const scope = validateSdlcScope(state)
   if (scope) return scope

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DocMarkdown } from '../components/DocMarkdown'
 import { Check, ChevronDown, Mail, MessageSquare, Sparkles } from 'lucide-react'
 import { JiraScopePanel } from './JiraScopePanel'
@@ -7,6 +7,7 @@ import { roleLabel, STAKEHOLDER_ROLES } from '../wizard/stakeholders'
 import type { GroomQuestion, WizardState, WizardStep } from '../wizard/types'
 import {
   GROOM_BANDS,
+  compactQuestionText,
   isAnswered,
   isDeferredToJira,
   isResolvedForWording,
@@ -92,7 +93,7 @@ function QuestionCard({
   return (
     <fieldset className="groom-question">
       <legend className="groom-question-legend">
-        <span className="groom-question-text">{question.text}</span>
+        <span className="groom-question-text">{compactQuestionText(question.text)}</span>
         <span className="groom-question-badge">
           {isMultiple ? 'Select all that apply' : 'Select one'}
         </span>
@@ -239,8 +240,14 @@ function Band({
   onNavigate?: Props['onNavigate']
 }) {
   const [open, setOpen] = useState(defaultOpen)
-  if (!questions.length) return null
   const resolved = questions.filter((question) => isResolvedForWording(question, state.groomAnswers)).length
+  const unresolved = questions.length - resolved
+  const prevUnresolved = useRef(unresolved)
+  useEffect(() => {
+    if (band.required && unresolved > prevUnresolved.current) setOpen(true)
+    prevUnresolved.current = unresolved
+  }, [band.required, unresolved])
+  if (!questions.length) return null
   return (
     <section className={`groom-band ${band.required ? 'required' : 'optional'} ${open ? 'open' : ''}`}>
       <button type="button" className="groom-band-header" onClick={() => setOpen((value) => !value)}>
@@ -292,7 +299,6 @@ export function GroomingPanel({
   const questions = state.groomQuestions
   const missingRequired = unansweredRequired(state)
   const asked = questions.length > 0 || state.groomStatus === 'draft_ready' || state.groomStatus === 'error'
-  const showDraft = Boolean(state.groomDraft && (state.groomStatus === 'draft_ready' || state.groomConfirmed))
   const required = questionsInBand(questions, 'need_clarification')
   const optional = questions.filter((question) => questionPriority(question) !== 'need_clarification')
   const requiredResolved = required.filter((question) =>
@@ -303,13 +309,21 @@ export function GroomingPanel({
   ).length
   const canSave = missingRequired.length === 0 || state.groomStatus === 'error'
   const [wordingOpen, setWordingOpen] = useState(false)
+  const followUpRound = state.groomRound === 2 && !state.groomConfirmed
+  const showDraft = Boolean(
+    state.groomDraft && (state.groomStatus === 'draft_ready' || state.groomConfirmed || followUpRound),
+  )
 
   return (
     <div className="groom-panel">
       <div className="groom-panel-intro">
         <div className="req-section-head">
-          <h3>Make it clearer</h3>
-          <p>Answer required questions, or mark Jira later to follow up after tickets exist.</p>
+          <h3>{followUpRound ? 'Still a few gaps' : 'Make it clearer'}</h3>
+          <p>
+            {followUpRound
+              ? 'Answer this second round so the wording is specific enough to plan tickets.'
+              : 'Answer required questions, or mark Jira later to follow up after tickets exist.'}
+          </p>
         </div>
         {asked && questions.length > 0 ? (
           <p className="groom-progress">

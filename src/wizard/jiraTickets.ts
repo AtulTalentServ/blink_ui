@@ -7,6 +7,7 @@ import {
   type JiraCreatedIssueResult,
 } from '../api/blink'
 import type { JiraCreatedIssue, ProductScopeData, WizardState } from './types'
+import { scopePlanAgentPayload } from './workPlanContext'
 
 let ticketsPipelineBusy = false
 let jiraCreateBusy = false
@@ -245,12 +246,19 @@ export function toCreateJiraPayload(
   return {
     projectId: state.projectId,
     projectKey: jira.projectKey,
-    epics: epics.map((epic) => ({
-      id: epic.id,
-      title: epic.title,
-      objective: epic.objective,
-      storyIds: epic.storyIds,
-    })),
+    epics: epics.map((epic) => {
+      const childTitles = stories
+        .filter((story) => story.epicId === epic.id || epic.storyIds?.includes(story.id))
+        .map((story) => story.title.trim())
+        .filter(Boolean)
+      return {
+        id: epic.id,
+        title: epic.title,
+        objective: epic.objective,
+        storyIds: epic.storyIds,
+        storyTitles: childTitles,
+      }
+    }),
     stories: stories.map((story) => {
       const epicId = story.epicId || epics.find((epic) => epic.storyIds?.includes(story.id))?.id
       const parent = epicId ? createdBySource.get(epicId) : undefined
@@ -285,31 +293,28 @@ export async function planScopeFromWording(
     throw new Error('Add a cleared requirement first so Blink can propose epics and stories.')
   }
   const payload = {
-    projectName: state.projectName,
-    requirementText: wording,
-    actor: 'operator',
+    ...scopePlanAgentPayload(state, wording),
     refresh: opts?.refresh,
     productScope: opts?.productScope ?? undefined,
   }
   const scopeRes = onThinking
     ? await streamPlanProductScope(state.projectId, payload, { onThinking })
     : await planProductScope(state.projectId, payload)
-  if (scopeRes?.status === 'ok' && scopeRes.productScope) {
-    const patch: Partial<WizardState> = {
-      productScope: scopeRes.productScope,
-      scopeDigest: scopeRes.proposalDigest,
-      scopeOverlays: scopeRes.overlayFiles || [],
-      workClassification: null,
-      specification: null,
-      technicalPlan: null,
-      nextSdlcCommand: scopeRes.nextCommand || '/confirm-product-scope',
-      scopeQuestions: [],
-      scopeAnswers: [],
-      scopeClarifyStatus: 'draft_ready',
-    }
-    return patch
+  if (scopeRes?.status !== 'ok' || !scopeRes.productScope) {
+    throw new Error(scopeRes?.message || 'Product scope planning did not return epics yet.')
   }
-  throw new Error(scopeRes?.message || 'Product scope planning did not return epics yet.')
+  return {
+    productScope: scopeRes.productScope,
+    scopeDigest: scopeRes.proposalDigest,
+    scopeOverlays: scopeRes.overlayFiles || [],
+    workClassification: null,
+    specification: null,
+    technicalPlan: null,
+    nextSdlcCommand: scopeRes.nextCommand || '/confirm-product-scope',
+    scopeQuestions: [],
+    scopeAnswers: [],
+    scopeClarifyStatus: 'draft_ready',
+  }
 }
 
 export async function createJiraIssuesFromState(

@@ -391,6 +391,8 @@ export interface WizardState extends SetupForm {
   groomDraft: string
   groomOriginal: string
   groomConfirmed: boolean
+  /** 1 = first clarify round; 2 = follow-up round after answers. */
+  groomRound: 1 | 2
   setupStatus: string | null
   setupValidated: boolean
   setupIdentitySource: string | null
@@ -651,6 +653,7 @@ export const defaultWizardState: WizardState = {
   groomDraft: '',
   groomOriginal: '',
   groomConfirmed: false,
+  groomRound: 1,
   setupStatus: null,
   setupValidated: false,
   setupIdentitySource: null,
@@ -813,6 +816,7 @@ export function clearGroomingPatch(): Partial<WizardState> {
     groomDraft: '',
     groomOriginal: '',
     groomConfirmed: false,
+    groomRound: 1,
     requirementsAnalyzed: false,
     questions: [],
     responses: [],

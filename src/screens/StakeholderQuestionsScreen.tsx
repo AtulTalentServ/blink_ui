@@ -204,7 +204,7 @@ export function StakeholderQuestionsScreen({
         {state.questions.length === 0 ? (
           <div className="empty-state-block">
             <h3>Nothing left to ask</h3>
-            <p>All clarification items are resolved. Resolve answers and acknowledge G-GROOM below, or return to Clarify if you need to queue more.</p>
+            <p>All clarification items are resolved. Open Scope &amp; tickets or Continue when answers are ready, or return to Clarify to queue more.</p>
           </div>
         ) : (
           <div className="person-groups">
