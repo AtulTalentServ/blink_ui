@@ -35,13 +35,29 @@ export function stakeholderFeedbackFromState(state: WizardState): string {
     .join('\n\n')
 }
 
+function stakeholderAnswerResolved(
+  q: StakeholderQuestion,
+  response: QuestionResponse | undefined,
+): boolean {
+  const text = response?.response?.trim() || q.jiraReplyBody?.trim() || ''
+  return response?.status === 'answered' && Boolean(text)
+}
+
+export function mandatoryResponsesReady(state: WizardState): boolean {
+  if (state.questions.length === 0) return true
+  return !state.questions.some((q) => {
+    if (!q.mandatory) return false
+    const response = state.responses.find((r) => r.questionId === q.id)
+    return !stakeholderAnswerResolved(q, response)
+  })
+}
+
 export function mandatoryStakeholderQuestionsResolved(state: WizardState): boolean {
   const mandatory = state.questions.filter((q) => q.mandatory)
   if (!mandatory.length) return false
   return mandatory.every((q) => {
     const response = state.responses.find((r) => r.questionId === q.id)
-    const text = response?.response?.trim() || q.jiraReplyBody?.trim() || ''
-    return response?.status === 'answered' && Boolean(text)
+    return stakeholderAnswerResolved(q, response)
   })
 }
 

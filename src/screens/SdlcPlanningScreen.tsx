@@ -24,7 +24,7 @@ import {
   technicalPlan,
 } from '../api/blink'
 import type { WizardState } from '../wizard/types'
-import { shapePlanContext } from '../wizard/shape'
+import { workPlanAgentPayload } from '../wizard/workPlanContext'
 import { hasDraftTickets, scopeConfirmed, validateSdlcScope } from '../wizard/scopeGate'
 
 interface Props {
@@ -330,7 +330,7 @@ function blockReason(id: StepId, state: WizardState): string | null {
       return 'Review Project Shape (topology, repositories, stack) before classify.'
     }
     if (!state.groomAcknowledged) {
-      return 'Acknowledge G-GROOM on Stakeholder Q&A before classify.'
+      return 'Finish Stakeholder Q&A before classify.'
     }
   }
   if (id === 'plan') {
@@ -464,6 +464,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
           productScope: state.productScope,
           overlayFiles: overlays,
           issueId: state.sdlcStartIssueId || state.workClassification?.issueId || state.productScope?.storyIds?.[0],
+          ...workPlanAgentPayload(state),
         })
         if (res.status !== 'ok') throw new Error(res.message || res.errors?.join('; ') || 'Classify failed')
         classification = res.workClassification || res.classification || null
@@ -494,6 +495,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
           workClassification: classification,
           overlayFiles: overlays,
           issueId: state.sdlcStartIssueId || classification?.issueId || state.specification?.issueId,
+          ...workPlanAgentPayload(state),
         })
         if (res.status !== 'ok') throw new Error(res.message || res.errors?.join('; ') || 'Create spec failed')
         overlays = res.overlayFiles || overlays
@@ -531,7 +533,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
         specification: state.specification,
         overlayFiles: state.scopeOverlays || [],
         issueId: state.sdlcStartIssueId || state.specification?.issueId || state.workClassification?.issueId,
-        ...shapePlanContext(state),
+        ...workPlanAgentPayload(state),
       })
       if (res.status !== 'ok') throw new Error(res.message || res.errors?.join('; ') || 'Technical plan failed')
       onUpdate({
@@ -707,7 +709,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
 }
 
 export function validateSdlcPlan(state: WizardState): string | null {
-  if (!state.groomAcknowledged) return 'Acknowledge G-GROOM on Stakeholder Q&A before the work plan.'
+  if (!state.groomAcknowledged) return 'Finish Stakeholder Q&A before the work plan.'
   if (!state.shapeAcknowledged) return 'Review Project Shape before the work plan.'
   if (!specReady(state)) return 'Wait for the specification to finish drafting.'
   if (!state.acceptanceCriteriaAcknowledged) {

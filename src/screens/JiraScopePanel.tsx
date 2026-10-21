@@ -11,6 +11,7 @@ import {
 } from '../api/blink'
 import type { FigmaScreenBinding, JiraCreatedIssue, WizardState } from '../wizard/types'
 import { autoLinkFigmaScreens, designFromBinding, figmaJiraRefs, figmaStoryRefs } from '../wizard/figmaDesign'
+import { groomQaGateSatisfied } from '../wizard/groomGate'
 import {
   beginJiraCreate,
   createdTicketsOnScreen,
@@ -244,8 +245,7 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
   const busyDbError = /database busy|deadline exceeded|timeout/i.test(scopeError || '')
   const autoPlan =
     allowAutoPlan &&
-    // Match Tickets unlock: G-GROOM ack is enough. Do not wait on Neon confirm-stakeholders.
-    Boolean(state.groomAcknowledged) &&
+    groomQaGateSatisfied(state) &&
     shouldAutoStartTickets({
       hasWording: Boolean(wording),
       epicCount: epics.length,
@@ -304,12 +304,10 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
     markTicketsPipelineBusy(true)
     try {
       const hasScope = (state.productScope?.epics?.length || 0) + (state.productScope?.stories?.length || 0) > 0
-      const patch = await planScopeFromWording(
-        state,
-        wording,
-        undefined,
-        hasScope ? { refresh: true, productScope: state.productScope ?? undefined } : undefined,
-      )
+      const patch = await planScopeFromWording(state, wording, undefined, {
+        refresh: hasScope,
+        productScope: hasScope ? state.productScope ?? undefined : undefined,
+      })
       onUpdate(patch)
     } catch (err) {
       setScopeError(err instanceof Error ? err.message : 'Could not plan product scope.')
@@ -655,7 +653,16 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
                           className={`jira-row${storyCreated?.status === 'created' ? ' is-linked' : ''}`}
                         >
                           <span className="jira-type story">Story</span>
-                          <span className="jira-row-title">{story.title}</span>
+                          <span className="jira-row-title">
+                            {story.title}
+                            {story.asA && story.iWant ? (
+                              <span className="muted">
+                                {' '}
+                                As a {story.asA}, I want {story.iWant}
+                                {story.soThat ? `, so that ${story.soThat}` : ''}
+                              </span>
+                            ) : null}
+                          </span>
                           <div className="jira-row-meta">
                             <TicketBadge created={storyCreated} baseUrl={jira?.baseUrl} />
                             {(state.figmaDesign?.screens || []).length > 0 ? (

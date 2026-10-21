@@ -66,7 +66,7 @@ import {
   type WizardState,
   type WizardStep,
 } from './wizard/types'
-import { assignQuestionBands, groomingComplete, unansweredRequired } from './wizard/grooming'
+import { assignQuestionBands, groomingComplete, mergeFollowUpQuestions, unansweredRequired } from './wizard/grooming'
 import { type JiraPublishState } from './wizard/thinking'
 import { autoMapQuestionsToJira } from './wizard/jiraMatch'
 import {
@@ -917,6 +917,12 @@ export default function App() {
       const ok = await handleGroomLooksGoodRef.current()
       if (!ok) return
     }
+    if (step === 'stakeholder-qa' && !skipStepValidation) {
+      const { applyImplicitGroomAck } = await import('./wizard/groomGate.ts')
+      const cur = stateRef.current
+      const ack = applyImplicitGroomAck(cur, patch)
+      if (ack) stateRef.current = { ...cur, ...ack }
+    }
     const err = skipStepValidation ? null : validateCurrentStep()
     if (err) {
       setStatus({ type: 'error', message: err })
@@ -1084,6 +1090,7 @@ export default function App() {
         groomOriginal: stateRef.current.groomOriginal || result.originalRequirement || text,
         groomAnswers: [],
         groomConfirmed: false,
+        groomRound: 1,
       })
       setStatus({
         type: 'info',
@@ -1190,6 +1197,7 @@ export default function App() {
     const answers = current.groomAnswers.filter(
       (item) => item.optionId !== 'other' || Boolean(item.otherText?.trim()),
     )
+    const round: 1 | 2 = current.groomRound === 2 ? 2 : 1
     let draft = (current.groomDraft || current.requirementsText).trim()
     if (answers.length && current.groomStatus !== 'error') {
       // Prefer a fast JSON rewrite. If Neon/auth is busy, keep the current draft so Start over / Continue aren't blocked.
@@ -1206,6 +1214,11 @@ export default function App() {
             projectName: current.projectName,
             requirementText: original || draft,
             answers,
+            clarifyRound: round,
+            previousQuestions: current.groomQuestions.map((question) => ({
+              id: question.id,
+              text: question.text,
+            })),
           },
           controller.signal,
         )
@@ -1213,6 +1226,29 @@ export default function App() {
           setStatus({ type: 'info', message: `${result.message} Using the current draft.` })
         } else {
           draft = (result.requirementDraft || draft).trim()
+          if (round < 2 && result.status === 'need_choices') {
+            const merged = mergeFollowUpQuestions(
+              current.groomQuestions,
+              assignQuestionBands(result.questions ?? []),
+            )
+            if (merged.length > current.groomQuestions.length) {
+              const followPatch: Partial<WizardState> = {
+                groomDraft: draft,
+                groomStatus: 'need_choices',
+                groomMessage: result.message || 'A few more questions to lock the wording.',
+                groomQuestions: merged,
+                groomConfirmed: false,
+                groomRound: 2,
+              }
+              patch(followPatch)
+              stateRef.current = { ...current, ...followPatch }
+              setStatus({
+                type: 'info',
+                message: 'A few more questions to lock the wording.',
+              })
+              return false
+            }
+          }
         }
       } catch {
         setStatus({

@@ -9,7 +9,7 @@ import { hasDraftTickets, scopeConfirmed, validateSdlcScope } from './scopeGate.
 assert.equal(hasDraftTickets({}), false)
 assert.equal(
   validateSdlcScope({ groomAcknowledged: true }),
-  'Open Scope & tickets after G-GROOM so Blink can propose epics and stories, then continue.',
+  'Propose epics and stories on Scope & tickets, then continue.',
 )
 
 const drafts = {

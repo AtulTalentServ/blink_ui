@@ -1763,6 +1763,7 @@ export interface CreateJiraIssuesPayload {
     title: string
     objective?: string
     storyIds?: string[]
+    storyTitles?: string[]
   }[]
   stories?: {
     id?: string
@@ -2343,6 +2344,8 @@ export async function clarifyRequirement(
     projectName?: string
     requirementText: string
     answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
+    clarifyRound?: 1 | 2
+    previousQuestions?: { id: string; text: string }[]
   },
   signal?: AbortSignal,
 ): Promise<GroomClarifyResult> {
@@ -2355,6 +2358,8 @@ export async function clarifyRequirement(
     projectName: options.projectName || undefined,
     requirementText: options.requirementText,
     answers: answers?.length ? answers : undefined,
+    clarifyRound: options.clarifyRound,
+    previousQuestions: options.previousQuestions?.length ? options.previousQuestions : undefined,
   }
   const controller = new AbortController()
   const onAbort = () => controller.abort()
@@ -2406,6 +2411,8 @@ export async function streamClarifyRequirement(
     projectName?: string
     requirementText: string
     answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
+    clarifyRound?: 1 | 2
+    previousQuestions?: { id: string; text: string }[]
   },
   handlers: { onThinking?: (text: string) => void } = {},
   signal?: AbortSignal,
@@ -2418,6 +2425,8 @@ export async function streamClarifyRequirement(
     projectName: options.projectName || undefined,
     requirementText: options.requirementText,
     answers: answers?.length ? answers : undefined,
+    clarifyRound: options.clarifyRound,
+    previousQuestions: options.previousQuestions?.length ? options.previousQuestions : undefined,
   }
   try {
     const done = await postSseJson<GroomClarifyResult>(
@@ -2466,6 +2475,10 @@ export type PlanProductScopePayload = {
   refresh?: boolean
   scopeFeedback?: string
   productScope?: ProductScopeData | null
+  projectDescription?: string
+  originalRequirement?: string
+  stakeholderFeedback?: string
+  stakeholders?: { role_id?: string; name?: string; email?: string }[]
   answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
 }
 
@@ -2486,6 +2499,10 @@ export async function planProductScope(
       refresh: payload?.refresh || undefined,
       scopeFeedback: payload?.scopeFeedback,
       productScope: payload?.productScope || undefined,
+      projectDescription: payload?.projectDescription,
+      originalRequirement: payload?.originalRequirement,
+      stakeholderFeedback: payload?.stakeholderFeedback,
+      stakeholders: payload?.stakeholders,
       answers: payload?.answers,
     }),
   })
@@ -2511,6 +2528,10 @@ export async function streamPlanProductScope(
         refresh: payload.refresh || undefined,
         scopeFeedback: payload.scopeFeedback,
         productScope: payload.productScope || undefined,
+        projectDescription: payload.projectDescription,
+        originalRequirement: payload.originalRequirement,
+        stakeholderFeedback: payload.stakeholderFeedback,
+        stakeholders: payload.stakeholders,
         answers: payload.answers,
       },
       { onThinking: handlers.onThinking },
@@ -2681,6 +2702,16 @@ export function confirmProductScope(
   return postAdvisory(projectId, 'confirm-product-scope', payload)
 }
 
+export type WorkPlanAdvisoryContext = {
+  topology?: string
+  repositoryModel?: string
+  architectureStyle?: string
+  repositories?: WizardState['repositories']
+  repoTechnologies?: WizardState['repoTechnologies']
+  stakeholderFeedback?: string
+  scopeFeedback?: string
+}
+
 export function classifyWork(
   projectId: string,
   payload: {
@@ -2690,7 +2721,7 @@ export function classifyWork(
     overlayFiles?: OverlayFilePayload[]
     issueId?: string
     actor?: string
-  },
+  } & WorkPlanAdvisoryContext,
 ) {
   return postAdvisory(projectId, 'classify-work', payload)
 }
@@ -2732,7 +2763,7 @@ export function createSpec(
     overlayFiles?: OverlayFilePayload[]
     issueId?: string
     actor?: string
-  },
+  } & WorkPlanAdvisoryContext,
 ) {
   return postAdvisory(projectId, 'create-spec', payload)
 }
@@ -2748,12 +2779,7 @@ export function technicalPlan(
     overlayFiles?: OverlayFilePayload[]
     issueId?: string
     actor?: string
-    topology?: string
-    repositoryModel?: string
-    architectureStyle?: string
-    repositories?: WizardState['repositories']
-    repoTechnologies?: WizardState['repoTechnologies']
-  },
+  } & WorkPlanAdvisoryContext,
 ) {
   return postAdvisory(projectId, 'technical-plan', payload)
 }

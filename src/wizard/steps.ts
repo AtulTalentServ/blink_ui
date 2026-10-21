@@ -11,6 +11,7 @@ import {
   Rocket,
   Users,
 } from 'lucide-react'
+import { groomQaGateSatisfied } from './groomGate'
 import type { WizardState, WizardStep } from './types'
 
 export interface StepDefinition {
@@ -157,7 +158,7 @@ export function stepAttention(
   if (idx <= completedThrough || (generationComplete && stepId === 'ship')) {
     if (stepId === 'technology-per-repo' && !state.shapeAcknowledged) return 'attention'
     if (stepId === 'stakeholder-qa') {
-      if (!state.groomAcknowledged) return 'attention'
+      if (!groomQaGateSatisfied(state)) return 'attention'
       const outboundPending = state.questions.filter((q) => {
         const emailed = q.sent
         const jiraDone =
