@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { DocMarkdown } from '../components/DocMarkdown'
 import { Check, ChevronDown, Mail, MessageSquare, Sparkles } from 'lucide-react'
 import { JiraScopePanel } from './JiraScopePanel'
@@ -6,15 +6,12 @@ import { assigneeForQuestion } from '../wizard/questions'
 import { roleLabel, STAKEHOLDER_ROLES } from '../wizard/stakeholders'
 import type { GroomQuestion, WizardState, WizardStep } from '../wizard/types'
 import {
-  GROOM_BANDS,
+  applyRecommendedAnswers,
   compactQuestionText,
   isAnswered,
   isDeferredToJira,
   isResolvedForWording,
-  questionPriority,
-  questionsInBand,
-  unansweredRequired,
-  type GroomPriority,
+  recommendedOptionForQuestion,
 } from '../wizard/grooming'
 
 interface Props {
@@ -24,6 +21,7 @@ interface Props {
   onOther: (questionId: string, text: string) => void
   onToggleOther: (questionId: string, checked: boolean) => void
   onUseWording?: () => void
+  onLockWording?: () => void
   onAsk?: () => void
   onStartOver: () => void
   onUpdate: (patch: Partial<WizardState>) => void
@@ -47,6 +45,7 @@ function avatarTone(name: string): number {
 
 function QuestionCard({
   question,
+  index,
   state,
   onPick,
   onOther,
@@ -55,6 +54,7 @@ function QuestionCard({
   onNavigate,
 }: {
   question: GroomQuestion
+  index: number
   state: WizardState
   onPick: Props['onPick']
   onOther: Props['onOther']
@@ -67,6 +67,7 @@ function QuestionCard({
   )
   if (!question.id || !question.text || options.length < 2) return null
 
+  const recOption = recommendedOptionForQuestion(question)
   const roleId = question.ownerRole || 'product_owner'
   const assignee = assigneeForQuestion(state, roleId)
   const isMultiple = Boolean(question.allowMultiple)
@@ -93,6 +94,10 @@ function QuestionCard({
   return (
     <fieldset className="groom-question">
       <legend className="groom-question-legend">
+        <span className="groom-q-number">Q{index + 1}</span>
+        {(question.round ?? 1) > 1 ? (
+          <span className="groom-round-pill">Round {question.round}</span>
+        ) : null}
         <span className="groom-question-text">{compactQuestionText(question.text)}</span>
         <span className="groom-question-badge">
           {isMultiple ? 'Select all that apply' : 'Select one'}
@@ -172,6 +177,7 @@ function QuestionCard({
       <div className={`groom-options${isDeferredToJira(question) && !isAnswered(question, state.groomAnswers) ? ' is-deferred' : ''}`}>
         {options.map((option) => {
           const checked = selectedIds.has(option.id)
+          const isRecommended = recOption?.id === option.id
           return (
             <label key={option.id} className={`groom-option ${checked ? 'selected' : ''}`}>
               <input
@@ -181,7 +187,14 @@ function QuestionCard({
                 onChange={() => onPick(question.id, option.id, option.label)}
               />
               <div className="groom-option-content">
-                <span className="groom-option-label">{option.label}</span>
+                <span className="groom-option-label">
+                  {option.label}
+                  {isRecommended ? (
+                    <span className="groom-recommended-pill" title="Agent recommended default">
+                      ➡️ Recommended
+                    </span>
+                  ) : null}
+                </span>
                 {option.description ? <span className="groom-option-desc">{option.description}</span> : null}
               </div>
             </label>
@@ -218,71 +231,6 @@ function QuestionCard({
   )
 }
 
-function Band({
-  band,
-  questions,
-  state,
-  defaultOpen,
-  onPick,
-  onOther,
-  onToggleOther,
-  onUpdate,
-  onNavigate,
-}: {
-  band: (typeof GROOM_BANDS)[number]
-  questions: GroomQuestion[]
-  state: WizardState
-  defaultOpen: boolean
-  onPick: Props['onPick']
-  onOther: Props['onOther']
-  onToggleOther: Props['onToggleOther']
-  onUpdate: Props['onUpdate']
-  onNavigate?: Props['onNavigate']
-}) {
-  const [open, setOpen] = useState(defaultOpen)
-  const resolved = questions.filter((question) => isResolvedForWording(question, state.groomAnswers)).length
-  const unresolved = questions.length - resolved
-  const prevUnresolved = useRef(unresolved)
-  useEffect(() => {
-    if (band.required && unresolved > prevUnresolved.current) setOpen(true)
-    prevUnresolved.current = unresolved
-  }, [band.required, unresolved])
-  if (!questions.length) return null
-  return (
-    <section className={`groom-band ${band.required ? 'required' : 'optional'} ${open ? 'open' : ''}`}>
-      <button type="button" className="groom-band-header" onClick={() => setOpen((value) => !value)}>
-        <span className="groom-band-title">
-          {band.title}
-          {band.required ? <span className="groom-required-tag">Required</span> : <span className="optional-tag">Optional</span>}
-        </span>
-        <span className="groom-band-meta">
-          {resolved}/{questions.length} resolved
-          <span className="groom-band-chevron" aria-hidden>
-            <ChevronDown size={16} className={open ? 'chevron open' : 'chevron'} />
-          </span>
-        </span>
-      </button>
-      {open && (
-        <>
-          <p className="groom-band-hint">{band.hint}</p>
-          {questions.map((question) => (
-            <QuestionCard
-              key={question.id}
-              question={question}
-              state={state}
-              onPick={onPick}
-              onOther={onOther}
-              onToggleOther={onToggleOther}
-              onUpdate={onUpdate}
-              onNavigate={onNavigate}
-            />
-          ))}
-        </>
-      )}
-    </section>
-  )
-}
-
 export function GroomingPanel({
   state,
   loading,
@@ -290,6 +238,7 @@ export function GroomingPanel({
   onOther,
   onToggleOther,
   onUseWording,
+  onLockWording,
   onAsk,
   onStartOver,
   onUpdate,
@@ -297,19 +246,14 @@ export function GroomingPanel({
   showJiraPanel = true,
 }: Props) {
   const questions = state.groomQuestions
-  const missingRequired = unansweredRequired(state)
   const asked = questions.length > 0 || state.groomStatus === 'draft_ready' || state.groomStatus === 'error'
-  const required = questionsInBand(questions, 'need_clarification')
-  const optional = questions.filter((question) => questionPriority(question) !== 'need_clarification')
-  const requiredResolved = required.filter((question) =>
+  const resolvedCount = questions.filter((question) =>
     isResolvedForWording(question, state.groomAnswers),
   ).length
-  const optionalResolved = optional.filter((question) =>
-    isResolvedForWording(question, state.groomAnswers),
-  ).length
-  const canSave = missingRequired.length === 0 || state.groomStatus === 'error'
+  const unresolvedCount = questions.length - resolvedCount
   const [wordingOpen, setWordingOpen] = useState(false)
-  const followUpRound = state.groomRound === 2 && !state.groomConfirmed
+  const round = Math.max(1, state.groomRound || 1)
+  const followUpRound = round > 1 && !state.groomConfirmed
   const showDraft = Boolean(
     state.groomDraft && (state.groomStatus === 'draft_ready' || state.groomConfirmed || followUpRound),
   )
@@ -318,40 +262,59 @@ export function GroomingPanel({
     <div className="groom-panel">
       <div className="groom-panel-intro">
         <div className="req-section-head">
-          <h3>{followUpRound ? 'Still a few gaps' : 'Make it clearer'}</h3>
+          <h3>{followUpRound ? `Design frontier · Round ${round}` : 'Clarify design frontier'}</h3>
           <p>
             {followUpRound
-              ? 'Answer this second round so the wording is specific enough to plan tickets.'
-              : 'Answer required questions, or mark Jira later to follow up after tickets exist.'}
+              ? 'Your previous answers unlocked these downstream decisions. Accept recommendations or pick options.'
+              : 'Each question includes a recommended answer (➡️). Override any choice or accept recommendations.'}
           </p>
         </div>
         {asked && questions.length > 0 ? (
-          <p className="groom-progress">
-            {requiredResolved}/{required.length} required
-            {optional.length > 0 ? ` · ${optionalResolved}/${optional.length} optional` : ''}
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <p className="groom-progress" style={{ margin: 0 }}>
+              {resolvedCount}/{questions.length} answered
+            </p>
+            {unresolvedCount > 0 && !state.groomConfirmed ? (
+              <button
+                type="button"
+                className="secondary-btn"
+                disabled={loading}
+                onClick={() =>
+                  onUpdate({
+                    groomAnswers: applyRecommendedAnswers(questions, state.groomAnswers),
+                    groomConfirmed: false,
+                  })
+                }
+              >
+                Accept recommended ({unresolvedCount})
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
 
-      {!asked && loading ? <p className="muted">Reading the requirement…</p> : null}
-      {asked && loading ? <p className="muted">Updating the wording…</p> : null}
+      {!asked && loading ? <p className="muted">Mapping the design-tree frontier…</p> : null}
+      {asked && loading ? <p className="muted">Updating wording &amp; checking next frontier…</p> : null}
 
       {state.groomMessage && asked && <p className="muted">{state.groomMessage}</p>}
 
-      {GROOM_BANDS.map((band) => (
-        <Band
-          key={band.id}
-          band={band}
-          questions={questionsInBand(questions, band.id as GroomPriority)}
-          state={state}
-          defaultOpen={band.required}
-          onPick={onPick}
-          onOther={onOther}
-          onToggleOther={onToggleOther}
-          onUpdate={onUpdate}
-          onNavigate={onNavigate}
-        />
-      ))}
+      {questions.length > 0 ? (
+        <div className="groom-frontier-list">
+          {questions.map((question, idx) => (
+            <QuestionCard
+              key={question.id}
+              question={question}
+              index={idx}
+              state={state}
+              onPick={onPick}
+              onOther={onOther}
+              onToggleOther={onToggleOther}
+              onUpdate={onUpdate}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </div>
+      ) : null}
 
       {showDraft && (
         <section className={`groom-band${wordingOpen ? ' open' : ''}`}>
@@ -401,30 +364,42 @@ export function GroomingPanel({
             className="ghost-btn"
             onClick={() => {
               onStartOver()
-              // Re-run discovery after clear (same as the previous Start over flow).
               if (onAsk) window.setTimeout(() => onAsk(), 0)
             }}
           >
             Start over
           </button>
           <span className="action-spacer" />
+          {!state.groomConfirmed && questions.length > 0 && onLockWording ? (
+            <button
+              type="button"
+              className="secondary-btn"
+              disabled={loading}
+              onClick={onLockWording}
+              title="Finish clarifying immediately using current and recommended answers"
+            >
+              Lock wording now
+            </button>
+          ) : null}
           <button
             type="button"
             className="primary-btn"
-            disabled={loading || state.groomConfirmed || !canSave || !onUseWording}
+            disabled={loading || state.groomConfirmed || !onUseWording}
             onClick={onUseWording}
           >
-            {loading ? 'Updating wording…' : state.groomConfirmed ? 'Wording saved' : 'Use this wording'}
+            {loading
+              ? 'Checking frontier…'
+              : state.groomConfirmed
+                ? 'Wording saved'
+                : questions.length > 0
+                  ? unresolvedCount > 0
+                    ? 'Accept recommended & continue'
+                    : 'Submit answers'
+                  : 'Use this wording'}
             {state.groomConfirmed ? <Check size={16} /> : <Sparkles size={16} />}
           </button>
         </div>
       )}
-      {asked && !state.groomConfirmed && missingRequired.length > 0 ? (
-        <p className="field-hint">
-          Answer or mark Jira later on {missingRequired.length} required question
-          {missingRequired.length === 1 ? '' : 's'} under Need clarification.
-        </p>
-      ) : null}
 
       {showJiraPanel && state.groomConfirmed && (
         <JiraScopePanel

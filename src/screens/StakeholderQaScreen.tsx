@@ -48,6 +48,7 @@ interface Props {
   onOther?: (questionId: string, text: string) => void
   onToggleOther?: (questionId: string, checked: boolean) => void
   onUseWording?: () => void
+  onLockWording?: () => void
   onStartOver?: () => void
   grooming?: boolean
   jiraPublish?: JiraPublishState | null
@@ -187,6 +188,7 @@ export function StakeholderQaScreen(props: Props) {
                   onOther={props.onOther!}
                   onToggleOther={props.onToggleOther!}
                   onUseWording={props.onUseWording!}
+                  onLockWording={props.onLockWording}
                   onAsk={props.onAsk}
                   onStartOver={props.onStartOver!}
                   onUpdate={props.onUpdate}

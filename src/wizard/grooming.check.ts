@@ -4,7 +4,14 @@
  * Run: node --experimental-strip-types src/wizard/grooming.check.ts
  */
 import assert from 'node:assert/strict'
-import { compactQuestionText, mergeFollowUpQuestions } from './grooming.ts'
+import {
+  answersAreAllOptionPicks,
+  applyRecommendedAnswers,
+  compactQuestionText,
+  mergeFollowUpQuestions,
+  recommendedOptionForQuestion,
+  stitchWordingFromAnswers,
+} from './grooming.ts'
 import { hasRequirementSource } from './groomingEligibility.ts'
 import type { GroomQuestion } from './types.ts'
 
@@ -64,5 +71,28 @@ assert.equal(
   ),
   'Which scientific functions are required for the MVP?',
 )
+
+assert.equal(answersAreAllOptionPicks([{ questionId: 'q1', optionId: 'a', optionLabel: 'Web' }]), true)
+assert.equal(
+  answersAreAllOptionPicks([{ questionId: 'q1', optionId: 'other', otherText: 'tablet' }]),
+  false,
+)
+assert.equal(
+  stitchWordingFromAnswers('Build a calculator.', roundOne, [
+    { questionId: 'q1', optionId: 'opt-1', optionLabel: 'Receptionist' },
+  ]),
+  'Build a calculator.\n\nDecisions from clarification:\n- Who books the visits: Receptionist',
+)
+assert.equal(
+  stitchWordingFromAnswers('Build a clinic app.', roundOne, [
+    { questionId: 'q1', optionId: 'other', otherText: 'Front-desk kiosk' },
+  ]),
+  'Build a clinic app.\n\nDecisions from clarification:\n- Who books the visits: Front-desk kiosk',
+)
+
+assert.equal(recommendedOptionForQuestion(roundOne[0])?.id, 'opt-1')
+assert.deepEqual(applyRecommendedAnswers(roundOne, []), [
+  { questionId: 'q1', optionId: 'opt-1', optionLabel: 'Receptionist' },
+])
 
 console.log('grooming.check.ts: ok')

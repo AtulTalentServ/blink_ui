@@ -143,6 +143,7 @@ export interface GroomOption {
   id: string
   label: string
   description?: string
+  recommended?: boolean
 }
 
 export interface GroomQuestion {
@@ -150,9 +151,12 @@ export interface GroomQuestion {
   text: string
   subtitle?: string
   options: GroomOption[]
+  recommendedOptionId?: string
   allowOther: boolean
   allowMultiple?: boolean
   priority: 'need_clarification' | 'important' | 'suggestion'
+  /** Design-tree frontier round number (1, 2, 3, ...) */
+  round?: number
   /** Canonical role id from LLM / operator override */
   ownerRole?: string
   /** Queue for email after wording (optional band leftovers) */
@@ -391,8 +395,8 @@ export interface WizardState extends SetupForm {
   groomDraft: string
   groomOriginal: string
   groomConfirmed: boolean
-  /** 1 = first clarify round; 2 = follow-up round after answers. */
-  groomRound: 1 | 2
+  /** Active design-tree frontier round (1, 2, 3, ...). */
+  groomRound: number
   setupStatus: string | null
   setupValidated: boolean
   setupIdentitySource: string | null

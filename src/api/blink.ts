@@ -167,21 +167,35 @@ function normalizeGroomQuestions(value: unknown): GroomQuestionDto[] {
   return value.flatMap((item, index) => {
     if (!item || typeof item !== 'object') return []
     const row = item as Record<string, unknown>
+    const explicitRecId = String(row.recommendedOptionId || row.recommended_option_id || '').trim()
     const options = Array.isArray(row.options)
       ? row.options.flatMap((opt, optIndex) => {
           if (!opt || typeof opt !== 'object') return []
           const option = opt as Record<string, unknown>
           const label = String(option.label || '').trim()
-          const id = String(option.id || '').trim()
+          const id = String(option.id || '').trim() || `opt-${optIndex + 1}`
           const description = option.description ? String(option.description).trim() : undefined
           if (!label || !id) return []
-          return [{ id: id || `opt-${optIndex + 1}`, label, ...(description ? { description } : {}) }]
+          const isRec = Boolean(option.recommended) || (Boolean(explicitRecId) && id === explicitRecId)
+          return [
+            {
+              id,
+              label,
+              ...(description ? { description } : {}),
+              ...(isRec ? { recommended: true } : {}),
+            },
+          ]
         })
       : []
     const text = String(row.text || '').trim()
     const id = String(row.id || '').trim()
     const subtitle = row.subtitle ? String(row.subtitle).trim() : undefined
     if (!id || !text || options.length < 2) return []
+    let recOpt = options.find((opt) => opt.recommended)
+    if (!recOpt) {
+      options[0] = { ...options[0], recommended: true }
+      recOpt = options[0]
+    }
     const priorityRaw = String(row.priority || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
     const priority =
       priorityRaw === 'important' || priorityRaw === 'suggestion'
@@ -202,6 +216,7 @@ function normalizeGroomQuestions(value: unknown): GroomQuestionDto[] {
         text,
         ...(subtitle ? { subtitle } : {}),
         options,
+        recommendedOptionId: recOpt.id,
         allowOther: row.allowOther !== false,
         allowMultiple: Boolean(row.allowMultiple),
         ...(priority ? { priority } : {}),
@@ -2314,6 +2329,7 @@ export interface GroomOptionDto {
   id: string
   label: string
   description?: string
+  recommended?: boolean
 }
 
 export interface GroomQuestionDto {
@@ -2321,6 +2337,7 @@ export interface GroomQuestionDto {
   text: string
   subtitle?: string
   options: GroomOptionDto[]
+  recommendedOptionId?: string
   allowOther: boolean
   allowMultiple?: boolean
   priority?: 'need_clarification' | 'important' | 'suggestion'
@@ -2342,9 +2359,11 @@ export async function clarifyRequirement(
   options: {
     projectId?: string | null
     projectName?: string
+    projectDescription?: string
     requirementText: string
+    mode?: string
     answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
-    clarifyRound?: 1 | 2
+    clarifyRound?: number
     previousQuestions?: { id: string; text: string }[]
   },
   signal?: AbortSignal,
@@ -2356,7 +2375,9 @@ export async function clarifyRequirement(
   const body = {
     projectId: options.projectId || undefined,
     projectName: options.projectName || undefined,
+    projectDescription: options.projectDescription?.trim() || undefined,
     requirementText: options.requirementText,
+    mode: options.mode || undefined,
     answers: answers?.length ? answers : undefined,
     clarifyRound: options.clarifyRound,
     previousQuestions: options.previousQuestions?.length ? options.previousQuestions : undefined,
@@ -2409,12 +2430,17 @@ export async function streamClarifyRequirement(
   options: {
     projectId?: string | null
     projectName?: string
+    projectDescription?: string
     requirementText: string
+    mode?: string
     answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
-    clarifyRound?: 1 | 2
+    clarifyRound?: number
     previousQuestions?: { id: string; text: string }[]
   },
-  handlers: { onThinking?: (text: string) => void } = {},
+  handlers: {
+    onThinking?: (text: string) => void
+    onQuestions?: (questions: GroomQuestionDto[]) => void
+  } = {},
   signal?: AbortSignal,
 ): Promise<GroomClarifyResult> {
   const answers = options.answers?.filter(
@@ -2423,7 +2449,9 @@ export async function streamClarifyRequirement(
   const body = {
     projectId: options.projectId || undefined,
     projectName: options.projectName || undefined,
+    projectDescription: options.projectDescription?.trim() || undefined,
     requirementText: options.requirementText,
+    mode: options.mode || undefined,
     answers: answers?.length ? answers : undefined,
     clarifyRound: options.clarifyRound,
     previousQuestions: options.previousQuestions?.length ? options.previousQuestions : undefined,
@@ -2432,7 +2460,15 @@ export async function streamClarifyRequirement(
     const done = await postSseJson<GroomClarifyResult>(
       '/grooming/clarify',
       body,
-      { onThinking: handlers.onThinking },
+      {
+        onThinking: handlers.onThinking,
+        onEvent: (event, payload) => {
+          if (event === 'questions' && handlers.onQuestions) {
+            const list = normalizeGroomQuestions(payload.questions)
+            if (list.length) handlers.onQuestions(list)
+          }
+        },
+      },
       signal,
     )
     return {
@@ -3062,7 +3098,10 @@ async function readSse(
 async function postSseJson<T>(
   path: string,
   body: unknown,
-  handlers: { onThinking?: (text: string) => void },
+  handlers: {
+    onThinking?: (text: string) => void
+    onEvent?: (event: string, payload: Record<string, unknown>) => void
+  },
   signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetch(apiUrl(path), {
@@ -3103,7 +3142,9 @@ async function postSseJson<T>(
       }
       if (event === 'done') {
         donePayload = parsed as T
+        return
       }
+      handlers.onEvent?.(event, parsed)
     },
     signal,
   )

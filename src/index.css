@@ -6380,11 +6380,58 @@ textarea::placeholder {
 }
 
 .groom-option-label {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
   font-family: var(--font-ui);
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--text-navy);
   line-height: 1.35;
+}
+
+.groom-recommended-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.14rem 0.48rem;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+}
+
+.groom-q-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.12rem 0.45rem;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.07);
+  color: var(--text-navy);
+}
+
+.groom-round-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.12);
+  color: #0369a1;
+}
+
+.groom-frontier-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
 .groom-option-desc {
