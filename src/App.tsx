@@ -67,7 +67,6 @@ import {
   type WizardStep,
 } from './wizard/types'
 import {
-  answersAreAllOptionPicks,
   applyRecommendedAnswers,
   assignQuestionBands,
   groomingComplete,
