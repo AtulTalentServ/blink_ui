@@ -158,7 +158,7 @@ export function stepAttention(
   if (idx <= completedThrough || (generationComplete && stepId === 'ship')) {
     if (stepId === 'technology-per-repo' && !state.shapeAcknowledged) return 'attention'
     if (stepId === 'stakeholder-qa') {
-      if (!groomQaGateSatisfied(state)) return 'attention'
+      if (!groomQaGateSatisfied(state as WizardState)) return 'attention'
       const outboundPending = state.questions.filter((q) => {
         const emailed = q.sent
         const jiraDone =

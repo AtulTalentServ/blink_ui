@@ -1046,7 +1046,7 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
 
   useEffect(() => {
     if (!autoConfirm) return
-    const key = techAutoConfirmCacheKey(state.projectId, techRows)
+    const key = techAutoConfirmCacheKey(state.projectId ?? undefined, techRows)
     if (autoTechConfirmed.has(key)) return
     autoTechConfirmed.add(key)
     void confirmRecommendations()

@@ -24,7 +24,7 @@ export function scopeConfirmed(state: ScopeSlice): boolean {
 }
 
 export function validateSdlcScope(state: ScopeSlice): string | null {
-  if (!groomQaGateSatisfied(state)) {
+  if (!groomQaGateSatisfied(state as WizardState)) {
     return 'Resolve mandatory stakeholder answers before Scope & tickets.'
   }
   if (!hasDraftTickets(state)) {
