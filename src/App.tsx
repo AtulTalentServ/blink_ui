@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
-import { downloadWorkspace, mcpProvidersFromIntegrations, fetchWorkspaceStatus, isNotProjectOwnerError, isAutosavePaused, pauseAutosave, rehomeProject, saveProject, clarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
+import { downloadWorkspace, mcpProvidersFromIntegrations, fetchWorkspaceStatus, isNotProjectOwnerError, isAutosavePaused, pauseAutosave, rehomeProject, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
 import { sendStakeholderQuestions } from './api/email'
@@ -66,7 +66,15 @@ import {
   type WizardState,
   type WizardStep,
 } from './wizard/types'
-import { assignQuestionBands, groomingComplete, mergeFollowUpQuestions, unansweredRequired } from './wizard/grooming'
+import {
+  answersAreAllOptionPicks,
+  applyRecommendedAnswers,
+  assignQuestionBands,
+  groomingComplete,
+  mergeFollowUpQuestions,
+  stitchWordingFromAnswers,
+  unansweredRequired,
+} from './wizard/grooming'
 import { type JiraPublishState } from './wizard/thinking'
 import { autoMapQuestionsToJira } from './wizard/jiraMatch'
 import {
@@ -1043,30 +1051,63 @@ export default function App() {
 
   const groomAbortRef = useRef<AbortController | null>(null)
 
-  const handleGroomAsk = useCallback(async () => {
+  const handleGroomAsk = useCallback(async (opts?: { silent?: boolean }) => {
     if (groomAskInFlightRef.current) return
     const text = (stateRef.current.groomOriginal || stateRef.current.requirementsText).trim()
     if (!text) {
-      setStatus({ type: 'error', message: 'Paste a short description first.' })
+      if (!opts?.silent) setStatus({ type: 'error', message: 'Paste a short description first.' })
       return
     }
     if (stateRef.current.groomQuestions.length) return
+    const showStatus = () => !opts?.silent || stepRef.current === 'stakeholder-qa'
     groomAskInFlightRef.current = true
     setGrooming(true)
-    setStatus(null)
+    if (showStatus()) {
+      setStatus({ type: 'info', message: 'Drafting clarification questions…' })
+    }
     const controller = new AbortController()
     groomAbortRef.current = controller
-    const hangTimer = window.setTimeout(() => controller.abort(), 90_000)
+    let timedOut = false
+    const hangTimer = window.setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, 90_000)
+    let thinkingBuf = ''
     try {
-      // Prefer JSON over SSE — Vite proxy + hung Neon auth was stalling /sdlc/stream.
-      const result = await clarifyRequirement(
+      const result = await streamClarifyRequirement(
         {
           projectId: stateRef.current.projectId,
           projectName: stateRef.current.projectName,
+          projectDescription: stateRef.current.description,
           requirementText: text,
+        },
+        {
+          onThinking: (chunk) => {
+            if (!showStatus()) return
+            thinkingBuf = `${thinkingBuf}${chunk}`.slice(-180)
+            const preview = thinkingBuf.replace(/\s+/g, ' ').trim()
+            if (preview.length > 10) {
+              setStatus({
+                type: 'info',
+                message: `Working… ${preview.length > 90 ? `${preview.slice(0, 87)}…` : preview}`,
+              })
+            }
+          },
+          onQuestions: (partialQuestions) => {
+            if (controller.signal.aborted || !partialQuestions.length) return
+            const banded = assignQuestionBands(partialQuestions, 1)
+            patch({
+              groomStatus: 'need_choices',
+              groomQuestions: banded,
+              groomOriginal: stateRef.current.groomOriginal || text,
+              groomConfirmed: false,
+              groomRound: 1,
+            })
+          },
         },
         controller.signal,
       )
+      if (controller.signal.aborted && !timedOut) return
       if (result.status === 'error' || result.status === 'invalid_request') {
         const detail = result.errors?.find((e) => e && !e.startsWith('LLM_'))
         const statusMessage =
@@ -1079,29 +1120,35 @@ export default function App() {
           groomDraft: result.requirementDraft || text,
           groomOriginal: stateRef.current.groomOriginal || result.originalRequirement || text,
         })
-        setStatus({ type: 'error', message: statusMessage })
+        if (showStatus()) setStatus({ type: 'error', message: statusMessage })
         return
       }
+      const finalQuestions = assignQuestionBands(result.questions ?? [], 1)
+      const validIds = new Set(finalQuestions.map((q) => q.id))
+      const keptAnswers = stateRef.current.groomAnswers.filter((a) => validIds.has(a.questionId))
       patch({
         groomStatus: result.status,
         groomMessage: result.message,
-        groomQuestions: assignQuestionBands(result.questions ?? []),
+        groomQuestions: finalQuestions,
         groomDraft: result.requirementDraft || '',
         groomOriginal: stateRef.current.groomOriginal || result.originalRequirement || text,
-        groomAnswers: [],
+        groomAnswers: keptAnswers,
         groomConfirmed: false,
         groomRound: 1,
       })
-      setStatus({
-        type: 'info',
-        message:
-          result.status === 'draft_ready'
-            ? 'This is already clear enough. Continue to save the wording, or Start over to change the paste.'
-            : 'Answer the required questions. Important and suggestions are optional.',
-      })
+      if (showStatus()) {
+        setStatus({
+          type: 'info',
+          message:
+            result.status === 'draft_ready'
+              ? 'Design frontier is already complete. Continue to save the wording, or Start over to change the paste.'
+              : 'Review the design frontier questions — accept recommended answers (➡️) or pick options.',
+        })
+      }
     } catch (e) {
+      if (controller.signal.aborted && !timedOut) return
       const message =
-        e instanceof DOMException && e.name === 'AbortError'
+        timedOut || (e instanceof DOMException && e.name === 'AbortError')
           ? 'Clarify timed out. Check the local agent on port 8787, then retry.'
           : e instanceof Error
             ? e.message
@@ -1110,7 +1157,7 @@ export default function App() {
         groomStatus: 'error',
         groomMessage: message,
       })
-      setStatus({ type: 'error', message })
+      if (showStatus()) setStatus({ type: 'error', message })
     } finally {
       window.clearTimeout(hangTimer)
       if (groomAbortRef.current === controller) groomAbortRef.current = null
@@ -1118,6 +1165,27 @@ export default function App() {
       setGrooming(false)
     }
   }, [patch])
+
+  // Prefetch clarification questions in the background while the user reviews Requirements.
+  useEffect(() => {
+    if (step !== 'requirements' && step !== 'sdlc-scope') return
+    const text = state.requirementsText.trim()
+    if (text.length < 24) return
+    if (state.groomQuestions.length > 0 || state.groomStatus || grooming) return
+    const delay = state.requirementFileName ? 250 : 900
+    const timer = window.setTimeout(() => {
+      void handleGroomAsk({ silent: true })
+    }, delay)
+    return () => window.clearTimeout(timer)
+  }, [
+    step,
+    state.requirementsText,
+    state.requirementFileName,
+    state.groomQuestions.length,
+    state.groomStatus,
+    grooming,
+    handleGroomAsk,
+  ])
 
   const handleGroomPick = useCallback((questionId: string, optionId: string, optionLabel: string) => {
     setState((prev) => {
@@ -1183,88 +1251,139 @@ export default function App() {
     })
   }, [])
 
-  const handleGroomLooksGood = useCallback(async (): Promise<boolean> => {
+  const handleGroomLooksGood = useCallback(async (opts?: { lockNow?: boolean }): Promise<boolean> => {
     const current = stateRef.current
     if (current.groomConfirmed) return true
-    if (unansweredRequired(current).length && current.groomStatus !== 'error') {
+    const effectiveAnswers = applyRecommendedAnswers(current.groomQuestions, current.groomAnswers)
+    if (
+      unansweredRequired({ groomQuestions: current.groomQuestions, groomAnswers: effectiveAnswers }).length &&
+      current.groomStatus !== 'error'
+    ) {
       setStatus({
         type: 'error',
-        message: 'Answer every required question under Need clarification, or mark Jira later to ask on a ticket.',
+        message: 'Fill in your custom Other text or pick an option before continuing.',
       })
       return false
     }
     const original = (current.groomOriginal || current.requirementsText).trim()
-    const answers = current.groomAnswers.filter(
+    const answers = effectiveAnswers.filter(
       (item) => item.optionId !== 'other' || Boolean(item.otherText?.trim()),
     )
-    const round: 1 | 2 = current.groomRound === 2 ? 2 : 1
+    const round = Math.max(1, current.groomRound || 1)
+    const nextRound = round + 1
     let draft = (current.groomDraft || current.requirementsText).trim()
     if (answers.length && current.groomStatus !== 'error') {
-      // Prefer a fast JSON rewrite. If Neon/auth is busy, keep the current draft so Start over / Continue aren't blocked.
-      groomAbortRef.current?.abort()
-      const controller = new AbortController()
-      groomAbortRef.current = controller
-      const hangTimer = window.setTimeout(() => controller.abort(), 45_000)
-      setGrooming(true)
-      setStatus(null)
-      try {
-        const result = await clarifyRequirement(
-          {
-            projectId: current.projectId,
-            projectName: current.projectName,
-            requirementText: original || draft,
-            answers,
-            clarifyRound: round,
-            previousQuestions: current.groomQuestions.map((question) => ({
-              id: question.id,
-              text: question.text,
-            })),
-          },
-          controller.signal,
-        )
-        if (result.status === 'error' || result.status === 'invalid_request') {
-          setStatus({ type: 'info', message: `${result.message} Using the current draft.` })
-        } else {
-          draft = (result.requirementDraft || draft).trim()
-          if (round < 2 && result.status === 'need_choices') {
-            const merged = mergeFollowUpQuestions(
-              current.groomQuestions,
-              assignQuestionBands(result.questions ?? []),
-            )
-            if (merged.length > current.groomQuestions.length) {
-              const followPatch: Partial<WizardState> = {
-                groomDraft: draft,
-                groomStatus: 'need_choices',
-                groomMessage: result.message || 'A few more questions to lock the wording.',
-                groomQuestions: merged,
-                groomConfirmed: false,
-                groomRound: 2,
+      const optimistic = stitchWordingFromAnswers(draft || original, current.groomQuestions, answers)
+      draft = optimistic
+      patch({ groomAnswers: effectiveAnswers, groomDraft: optimistic })
+      stateRef.current = { ...current, groomAnswers: effectiveAnswers, groomDraft: optimistic }
+
+      if (!opts?.lockNow && current.groomQuestions.length > 0) {
+        groomAbortRef.current?.abort()
+        const controller = new AbortController()
+        groomAbortRef.current = controller
+        const hangTimer = window.setTimeout(() => controller.abort(), 45_000)
+        setGrooming(true)
+        setStatus({ type: 'info', message: 'Updating wording & checking next design-tree frontier…' })
+        try {
+          const result = await streamClarifyRequirement(
+            {
+              projectId: current.projectId,
+              projectName: current.projectName,
+              projectDescription: current.description,
+              requirementText: original || draft,
+              answers,
+              clarifyRound: round,
+              previousQuestions: current.groomQuestions.map((question) => ({
+                id: question.id,
+                text: question.text,
+              })),
+            },
+            {
+              onThinking: (chunk) => {
+                const preview = chunk.replace(/\s+/g, ' ').trim()
+                if (preview.length > 8) {
+                  setStatus({
+                    type: 'info',
+                    message: `Checking frontier… ${preview.length > 80 ? `${preview.slice(0, 77)}…` : preview}`,
+                  })
+                }
+              },
+              onQuestions: (partialQuestions) => {
+                if (controller.signal.aborted || !partialQuestions.length) return
+                const mergedPartial = mergeFollowUpQuestions(
+                  current.groomQuestions,
+                  assignQuestionBands(partialQuestions, nextRound),
+                  nextRound,
+                )
+                if (mergedPartial.length > current.groomQuestions.length) {
+                  patch({
+                    groomStatus: 'need_choices',
+                    groomQuestions: mergedPartial,
+                    groomAnswers: effectiveAnswers,
+                    groomConfirmed: false,
+                    groomRound: nextRound,
+                  })
+                }
+              },
+            },
+            controller.signal,
+          )
+          if (result.status === 'error' || result.status === 'invalid_request') {
+            setStatus({ type: 'info', message: `${result.message} Using the current draft.` })
+          } else {
+            draft = (result.requirementDraft || draft).trim()
+            if (result.status === 'need_choices') {
+              const merged = mergeFollowUpQuestions(
+                current.groomQuestions,
+                assignQuestionBands(result.questions ?? [], nextRound),
+                nextRound,
+              )
+              if (merged.length > current.groomQuestions.length) {
+                const followPatch: Partial<WizardState> = {
+                  groomDraft: draft,
+                  groomAnswers: effectiveAnswers,
+                  groomStatus: 'need_choices',
+                  groomMessage:
+                    result.message ||
+                    `Round ${nextRound} frontier: your choices unlocked ${merged.length - current.groomQuestions.length} downstream question${merged.length - current.groomQuestions.length === 1 ? '' : 's'}.`,
+                  groomQuestions: merged,
+                  groomConfirmed: false,
+                  groomRound: nextRound,
+                }
+                patch(followPatch)
+                stateRef.current = { ...current, ...followPatch }
+                setStatus({
+                  type: 'info',
+                  message: `Round ${nextRound} frontier unlocked — answer the new questions or click Lock wording now.`,
+                })
+                return false
               }
-              patch(followPatch)
-              stateRef.current = { ...current, ...followPatch }
-              setStatus({
-                type: 'info',
-                message: 'A few more questions to lock the wording.',
-              })
-              return false
             }
           }
+        } catch {
+          setStatus({
+            type: 'info',
+            message: 'Rewrite is slow right now — saved your answers with the current draft.',
+          })
+        } finally {
+          window.clearTimeout(hangTimer)
+          if (groomAbortRef.current === controller) groomAbortRef.current = null
+          setGrooming(false)
         }
-      } catch {
-        setStatus({
-          type: 'info',
-          message: 'Rewrite is slow right now — saved your answers with the current draft.',
-        })
-      } finally {
-        window.clearTimeout(hangTimer)
-        if (groomAbortRef.current === controller) groomAbortRef.current = null
-        setGrooming(false)
       }
     }
     if (!draft) return false
-    const nextState = { ...current, requirementsText: draft, groomConfirmed: true, groomDraft: draft }
+    const nextState = {
+      ...current,
+      groomAnswers: effectiveAnswers,
+      requirementsText: draft,
+      groomConfirmed: true,
+      groomDraft: draft,
+    }
     const questions = carryClarifyQuestionsForward(nextState)
     const basePatch: Partial<WizardState> = {
+      groomAnswers: effectiveAnswers,
       requirementsText: draft,
       groomDraft: draft,
       groomConfirmed: true,
@@ -1290,7 +1409,7 @@ export default function App() {
           lastRevisionFeedbackRef.current = ''
         })
     }
-    setStatus({ type: 'success', message: 'Requirement wording saved.' })
+    setStatus({ type: 'success', message: 'Design frontier complete — requirement wording saved.' })
     return true
   }, [patch])
   handleGroomLooksGoodRef.current = handleGroomLooksGood
@@ -2329,6 +2448,12 @@ export default function App() {
             onUpdate={(updates) => {
               const resetGroom =
                 'requirementsText' in updates || 'requirementFileName' in updates || 'requirementFile' in updates
+              if (resetGroom) {
+                groomAbortRef.current?.abort()
+                groomAbortRef.current = null
+                groomAskInFlightRef.current = false
+                setGrooming(false)
+              }
               patch(resetGroom ? { ...clearGroomingPatch(), ...updates } : updates)
             }}
           />
@@ -2345,6 +2470,7 @@ export default function App() {
             onOther={handleGroomOther}
             onToggleOther={handleGroomToggleOther}
             onUseWording={() => void handleGroomLooksGood()}
+            onLockWording={() => void handleGroomLooksGood({ lockNow: true })}
             onStartOver={handleGroomStartOver}
             onSendOne={handleSendOne}
             onSendAll={handleSendAll}

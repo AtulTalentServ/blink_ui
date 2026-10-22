@@ -58,22 +58,58 @@ export function questionsInBand(questions: GroomQuestion[], band: GroomPriority)
 
 type IncomingQuestion = Omit<GroomQuestion, 'priority'> & { priority?: GroomPriority }
 
-/** Fill missing bands: unbanded questions split 2 required / rest optional. Always keep at least two required when possible. */
-export function assignQuestionBands(questions: IncomingQuestion[]): GroomQuestion[] {
-  const explicit = questions.some((question) => Boolean(question.priority))
-  const mapped: GroomQuestion[] = explicit
-    ? questions.map((question) => ({
-        ...question,
-        text: compactQuestionText(question.text),
-        priority: questionPriority(question as GroomQuestion),
-      }))
-    : questions.map((question, index) => ({
-        ...question,
-        text: compactQuestionText(question.text),
-        priority: (index < 2 ? 'need_clarification' : index < 5 ? 'important' : 'suggestion') as GroomPriority,
-      }))
-  if (mapped.length === 0) return mapped
-  return mapped
+/** Normalize incoming frontier questions without artificial band quotas. */
+export function assignQuestionBands(questions: IncomingQuestion[], round = 1): GroomQuestion[] {
+  return questions.map((question) => {
+    const options = Array.isArray(question.options) ? [...question.options] : []
+    const explicitRecId = question.recommendedOptionId?.trim()
+    let recOpt =
+      options.find((opt) => opt.recommended) ||
+      (explicitRecId ? options.find((opt) => opt.id === explicitRecId) : undefined)
+    if (!recOpt && options.length > 0) {
+      options[0] = { ...options[0], recommended: true }
+      recOpt = options[0]
+    }
+    return {
+      ...question,
+      options,
+      recommendedOptionId: recOpt?.id || question.recommendedOptionId,
+      round: question.round ?? round,
+      text: compactQuestionText(question.text),
+      priority: questionPriority(question as GroomQuestion),
+    }
+  })
+}
+
+export function recommendedOptionForQuestion(question: GroomQuestion): GroomQuestion['options'][number] | undefined {
+  const options = Array.isArray(question.options)
+    ? question.options.filter((opt) => opt.id !== 'other' && opt.label.trim().toLowerCase() !== 'other')
+    : []
+  if (!options.length) return undefined
+  return (
+    options.find((opt) => opt.recommended) ||
+    (question.recommendedOptionId ? options.find((opt) => opt.id === question.recommendedOptionId) : undefined) ||
+    options[0]
+  )
+}
+
+/** Fill any unanswered non-deferred questions with their recommended option. */
+export function applyRecommendedAnswers(
+  questions: GroomQuestion[],
+  existingAnswers: GroomAnswer[],
+): GroomAnswer[] {
+  const next = [...existingAnswers]
+  for (const question of questions) {
+    if (isResolvedForWording(question, next)) continue
+    const rec = recommendedOptionForQuestion(question)
+    if (!rec) continue
+    next.push({
+      questionId: question.id,
+      optionId: rec.id,
+      optionLabel: rec.label,
+    })
+  }
+  return next
 }
 
 export function requiredGroomQuestions(questions: GroomQuestion[]): GroomQuestion[] {
@@ -107,10 +143,11 @@ export function unansweredRequired(state: Pick<WizardState, 'groomQuestions' | '
   )
 }
 
-/** Append a second clarify round without duplicating round-1 questions. */
+/** Append a next design-tree frontier round without duplicating earlier questions or capping at 3. */
 export function mergeFollowUpQuestions(
   existing: GroomQuestion[],
   incoming: GroomQuestion[],
+  round = 2,
 ): GroomQuestion[] {
   const usedIds = new Set(existing.map((question) => question.id))
   const usedText = new Set(existing.map((question) => question.text.trim().toLowerCase()).filter(Boolean))
@@ -118,16 +155,67 @@ export function mergeFollowUpQuestions(
   for (const question of incoming) {
     const textKey = question.text.trim().toLowerCase()
     if (!textKey || usedText.has(textKey)) continue
-    let id = question.id.trim() || `r2-${extra.length + 1}`
-    if (usedIds.has(id)) id = `r2-${id}`
+    let id = question.id.trim() || `r${round}-${extra.length + 1}`
+    if (usedIds.has(id)) id = `r${round}-${id}`
     usedIds.add(id)
     usedText.add(textKey)
-    extra.push({ ...question, id, priority: 'need_clarification' })
-    if (extra.length >= 3) break
+    extra.push({ ...question, id, round: question.round ?? round, priority: 'need_clarification' })
   }
   return extra.length ? [...existing, ...extra] : existing
 }
 
 export function groomingComplete(state: WizardState): boolean {
   return hasRequirementSource(state)
+}
+
+/** True when every answer is a picked option (no free-text Other). Safe to stitch locally. */
+export function answersAreAllOptionPicks(answers: GroomAnswer[]): boolean {
+  return answers.length > 0 && answers.every((item) => item.optionId !== 'other')
+}
+
+/**
+ * Merge MCQ and free-text Other answers into the current draft without an LLM rewrite.
+ */
+export function stitchWordingFromAnswers(
+  draft: string,
+  questions: GroomQuestion[],
+  answers: GroomAnswer[],
+): string {
+  const base = (draft || '').trim()
+  if (!answers.length) return base
+  const byId = new Map(questions.map((question) => [question.id, question]))
+  const grouped = new Map<string, string[]>()
+  const order: string[] = []
+  for (const answer of answers) {
+    const question = byId.get(answer.questionId)
+    const label =
+      answer.optionId === 'other'
+        ? answer.otherText?.trim() || ''
+        : answer.optionLabel?.trim() ||
+          question?.options.find((option) => option.id === answer.optionId)?.label?.trim() ||
+          answer.optionId
+    if (!label) continue
+    let list = grouped.get(answer.questionId)
+    if (!list) {
+      list = []
+      grouped.set(answer.questionId, list)
+      order.push(answer.questionId)
+    }
+    if (!list.includes(label)) list.push(label)
+  }
+  if (!order.length) return base
+  const lines: string[] = []
+  for (const questionId of order) {
+    const question = byId.get(questionId)
+    const prompt = compactQuestionText(question?.text || '').replace(/\?$/, '') || 'Decision'
+    const values = grouped.get(questionId) || []
+    if (values.length) lines.push(`- ${prompt}: ${values.join(', ')}`)
+  }
+  if (!lines.length) return base
+  const block = ['Decisions from clarification:', ...lines].join('\n')
+  if (!base) return block
+  if (/\nDecisions from clarification:\n/.test(base) || base.includes('Decisions from clarification:')) {
+    return `${base.replace(/\n*Decisions from clarification:[\s\S]*$/m, '').trim()}\n\n${block}`
+  }
+  return `${base}\n\n${block}`
 }
