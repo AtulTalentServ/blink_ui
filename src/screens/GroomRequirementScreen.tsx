@@ -1,15 +1,15 @@
 import { useState } from 'react'
 import { DocMarkdown } from '../components/DocMarkdown'
-import { Check, ChevronDown, Mail, MessageSquare, Sparkles } from 'lucide-react'
+import { ChevronDown, Mail, MessageSquare } from 'lucide-react'
 import { JiraScopePanel } from './JiraScopePanel'
 import { assigneeForQuestion } from '../wizard/questions'
 import { roleLabel, STAKEHOLDER_ROLES } from '../wizard/stakeholders'
 import type { GroomQuestion, WizardState, WizardStep } from '../wizard/types'
 import {
   applyRecommendedAnswers,
+  computeClarifyFrontierState,
   isAnswered,
   isDeferredToJira,
-  isResolvedForWording,
   recommendedOptionForQuestion,
   splitQuestionTitleAndText,
 } from '../wizard/grooming'
@@ -245,40 +245,28 @@ export function GroomingPanel({
   onPick,
   onOther,
   onToggleOther,
-  onUseWording,
-  onLockWording,
   onAsk,
   onStartOver,
   onUpdate,
   onNavigate,
   showJiraPanel = true,
 }: Props) {
-  const questions = state.groomQuestions
-  const asked = questions.length > 0 || state.groomStatus === 'draft_ready' || state.groomStatus === 'error'
-  const round = Math.max(1, state.groomRound || 1)
-  const frontierEmpty = state.groomStatus === 'draft_ready' && !state.groomConfirmed
-  const currentRoundQuestions =
-    round > 1 ? questions.filter((q) => (q.round ?? 1) === round) : questions
-  const frontierQuestions = frontierEmpty
-    ? []
-    : currentRoundQuestions.length > 0
-      ? currentRoundQuestions
-      : questions
-  const settledQuestions = frontierEmpty
-    ? questions
-    : round > 1 && currentRoundQuestions.length > 0
-      ? questions.filter((q) => (q.round ?? 1) < round)
-      : []
-  const resolvedCount = frontierQuestions.filter((question) =>
-    isResolvedForWording(question, state.groomAnswers),
-  ).length
-  const unresolvedCount = frontierQuestions.length - resolvedCount
+  const {
+    asked,
+    round,
+    frontierEmpty,
+    frontierQuestions,
+    settledQuestions,
+    resolvedCount,
+    unresolvedCount,
+  } = computeClarifyFrontierState(state)
   const [wordingOpen, setWordingOpen] = useState(false)
+  const [editingDraft, setEditingDraft] = useState(false)
   const followUpRound = round > 1 && !state.groomConfirmed && !frontierEmpty
   const showDraft = Boolean(
     state.groomDraft && (state.groomStatus === 'draft_ready' || state.groomConfirmed || followUpRound),
   )
-  const draftExpanded = wordingOpen || frontierEmpty
+  const draftExpanded = wordingOpen || frontierEmpty || editingDraft
 
   return (
     <div className="groom-panel">
@@ -299,12 +287,14 @@ export function GroomingPanel({
                 : 'Each frontier question marks its recommended answer (➡️) first in the list. Pick an alternative or accept recommendations.'}
           </p>
         </div>
-        {asked && frontierQuestions.length > 0 ? (
+        {asked ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-            <p className="groom-progress" style={{ margin: 0 }}>
-              {resolvedCount}/{frontierQuestions.length} answered in Round {round}
-            </p>
-            {unresolvedCount > 0 && !state.groomConfirmed ? (
+            {frontierQuestions.length > 0 ? (
+              <p className="groom-progress" style={{ margin: 0 }}>
+                {resolvedCount}/{frontierQuestions.length} answered in Round {round}
+              </p>
+            ) : null}
+            {frontierQuestions.length > 0 && unresolvedCount > 0 && !state.groomConfirmed ? (
               <button
                 type="button"
                 className="secondary-btn"
@@ -319,6 +309,17 @@ export function GroomingPanel({
                 Accept recommended ({unresolvedCount})
               </button>
             ) : null}
+            <button
+              type="button"
+              className="ghost-btn"
+              disabled={loading}
+              onClick={() => {
+                onStartOver()
+                if (onAsk) window.setTimeout(() => onAsk(), 0)
+              }}
+            >
+              Start over
+            </button>
           </div>
         ) : null}
       </div>
@@ -408,56 +409,40 @@ export function GroomingPanel({
                 </div>
               )}
               <div>
-                {state.groomOriginal && state.groomOriginal !== state.groomDraft ? <h4>Proposed</h4> : null}
-                <DocMarkdown className="groom-draft" text={state.groomDraft || ''} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                  {state.groomOriginal && state.groomOriginal !== state.groomDraft ? (
+                    <h4 style={{ margin: 0 }}>Proposed</h4>
+                  ) : (
+                    <span />
+                  )}
+                  <button
+                    type="button"
+                    className="text-btn"
+                    onClick={() => setEditingDraft((open) => !open)}
+                  >
+                    {editingDraft ? 'Done editing' : 'Edit wording'}
+                  </button>
+                </div>
+                {editingDraft ? (
+                  <textarea
+                    className="req-textarea"
+                    rows={8}
+                    aria-label="Edit synthesized requirement wording"
+                    value={state.groomDraft || ''}
+                    onChange={(event) =>
+                      onUpdate({
+                        groomDraft: event.target.value,
+                        ...(state.groomConfirmed ? { requirementsText: event.target.value } : {}),
+                      })
+                    }
+                  />
+                ) : (
+                  <DocMarkdown className="groom-draft" text={state.groomDraft || ''} />
+                )}
               </div>
             </div>
           ) : null}
         </section>
-      )}
-
-      {asked && (
-        <div className="card-footer-actions">
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={() => {
-              onStartOver()
-              if (onAsk) window.setTimeout(() => onAsk(), 0)
-            }}
-          >
-            Start over
-          </button>
-          <span className="action-spacer" />
-          {!state.groomConfirmed && frontierQuestions.length > 0 && onLockWording ? (
-            <button
-              type="button"
-              className="secondary-btn"
-              disabled={loading}
-              onClick={onLockWording}
-              title="Finish clarifying immediately using current and recommended answers"
-            >
-              Lock wording now
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="primary-btn"
-            disabled={loading || state.groomConfirmed || !onUseWording}
-            onClick={onUseWording}
-          >
-            {loading
-              ? 'Checking frontier…'
-              : state.groomConfirmed
-                ? 'Wording saved'
-                : frontierQuestions.length > 0
-                  ? unresolvedCount > 0
-                    ? 'Accept recommended & next round'
-                    : 'Submit round answers'
-                  : 'Confirm shared understanding'}
-            {state.groomConfirmed ? <Check size={16} /> : <Sparkles size={16} />}
-          </button>
-        </div>
       )}
 
       {showJiraPanel && state.groomConfirmed && (

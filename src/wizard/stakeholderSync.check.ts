@@ -3,8 +3,8 @@ import {
   mandatoryStakeholderQuestionsResolved,
   responsesForStakeholderQuestions,
   stakeholderFeedbackFromState,
-} from './stakeholderSync'
-import type { StakeholderQuestion, WizardState } from './types'
+} from './stakeholderSync.ts'
+import type { StakeholderQuestion, WizardState } from './types.ts'
 
 const questions: StakeholderQuestion[] = [
   {

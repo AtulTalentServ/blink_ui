@@ -169,15 +169,26 @@ export function answersAreAllOptionPicks(answers: GroomAnswer[]): boolean {
   return answers.length > 0 && answers.every((item) => item.optionId !== 'other')
 }
 
+/** Strip any legacy 'Decisions from clarification:' Q&A trailer from a requirement draft. */
+export function stripClarificationTrailer(text: string): string {
+  const base = (text || '').trim()
+  if (!base) return ''
+  if (base.includes('Decisions from clarification:')) {
+    return base.replace(/\n*Decisions from clarification:[\s\S]*$/m, '').trim()
+  }
+  return base
+}
+
 /**
- * Merge MCQ and free-text Other answers into the current draft without an LLM rewrite.
+ * Offline fallback when the LLM rewrite is unreachable: append concise settled decisions
+ * without repeating full interrogative question sentences or a 'Decisions from clarification:' Q&A header.
  */
 export function stitchWordingFromAnswers(
   draft: string,
   questions: GroomQuestion[],
   answers: GroomAnswer[],
 ): string {
-  const base = (draft || '').trim()
+  const base = stripClarificationTrailer(draft)
   if (!answers.length) return base
   const byId = new Map(questions.map((question) => [question.id, question]))
   const grouped = new Map<string, string[]>()
@@ -203,15 +214,77 @@ export function stitchWordingFromAnswers(
   const lines: string[] = []
   for (const questionId of order) {
     const question = byId.get(questionId)
-    const prompt = compactQuestionText(question?.text || '').replace(/\?$/, '') || 'Decision'
     const values = grouped.get(questionId) || []
-    if (values.length) lines.push(`- ${prompt}: ${values.join(', ')}`)
+    if (!values.length) continue
+    const { title } = splitQuestionTitleAndText(question?.title, question?.text || '')
+    const line = title ? `- ${title}: ${values.join(', ')}` : `- ${values.join(', ')}`
+    if (!base.includes(line)) lines.push(line)
   }
   if (!lines.length) return base
-  const block = ['Decisions from clarification:', ...lines].join('\n')
-  if (!base) return block
-  if (/\nDecisions from clarification:\n/.test(base) || base.includes('Decisions from clarification:')) {
-    return `${base.replace(/\n*Decisions from clarification:[\s\S]*$/m, '').trim()}\n\n${block}`
+  const block = lines.join('\n')
+  return base ? `${base}\n\n${block}` : block
+}
+
+export interface ClarifyFrontierState {
+  asked: boolean
+  round: number
+  frontierEmpty: boolean
+  frontierQuestions: GroomQuestion[]
+  settledQuestions: GroomQuestion[]
+  resolvedCount: number
+  unresolvedCount: number
+  canLockNow: boolean
+  finishNowLabel: string
+  primaryLabel: string
+}
+
+/** Compute the active design-tree frontier and primary/secondary CTA state for Clarify. */
+export function computeClarifyFrontierState(
+  state: Pick<
+    WizardState,
+    'groomQuestions' | 'groomAnswers' | 'groomRound' | 'groomStatus' | 'groomConfirmed'
+  >,
+): ClarifyFrontierState {
+  const questions = state.groomQuestions || []
+  const asked =
+    questions.length > 0 || state.groomStatus === 'draft_ready' || state.groomStatus === 'error'
+  const round = Math.max(1, state.groomRound || 1)
+  const frontierEmpty = state.groomStatus === 'draft_ready' && !state.groomConfirmed
+  const currentRoundQuestions =
+    round > 1 ? questions.filter((q) => (q.round ?? 1) === round) : questions
+  const frontierQuestions = frontierEmpty
+    ? []
+    : currentRoundQuestions.length > 0
+      ? currentRoundQuestions
+      : questions
+  const settledQuestions = frontierEmpty
+    ? questions
+    : round > 1 && currentRoundQuestions.length > 0
+      ? questions.filter((q) => (q.round ?? 1) < round)
+      : []
+  const resolvedCount = frontierQuestions.filter((question) =>
+    isResolvedForWording(question, state.groomAnswers),
+  ).length
+  const unresolvedCount = frontierQuestions.length - resolvedCount
+  const canLockNow = !state.groomConfirmed && frontierQuestions.length > 0
+  const finishNowLabel = 'Finish clarifying now'
+  const primaryLabel = state.groomConfirmed
+    ? 'Wording saved'
+    : frontierQuestions.length > 0
+      ? unresolvedCount > 0
+        ? 'Accept recommended & next round'
+        : 'Submit round answers'
+      : 'Confirm shared understanding'
+  return {
+    asked,
+    round,
+    frontierEmpty,
+    frontierQuestions,
+    settledQuestions,
+    resolvedCount,
+    unresolvedCount,
+    canLockNow,
+    finishNowLabel,
+    primaryLabel,
   }
-  return `${base}\n\n${block}`
 }

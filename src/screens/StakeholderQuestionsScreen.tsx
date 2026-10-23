@@ -9,6 +9,7 @@ import {
   type MatchableIssue,
 } from '../wizard/jiraMatch'
 import { isJiraReady } from '../wizard/jiraTickets'
+import { isDeferredUntilJiraTicketsExist } from '../wizard/stakeholderSync'
 import type { StakeholderQuestion, WizardState, WizardStep } from '../wizard/types'
 
 interface Props {
@@ -20,6 +21,7 @@ interface Props {
   onPostAllJira: () => Promise<void>
   onRefreshJira: () => Promise<void>
   onNavigate?: (step: WizardStep) => void
+  onOpenTicketsTab?: () => void
   sending?: boolean
   posting?: boolean
   refreshing?: boolean
@@ -45,7 +47,8 @@ function outboundDone(q: StakeholderQuestion, state: WizardState): boolean {
   const jiraDone =
     (q.jiraCommentStatus === 'posted' || q.jiraCommentStatus === 'replied') && Boolean(q.jiraCommentId)
   const answered = state.responses.find((r) => r.questionId === q.id)?.status === 'answered'
-  return Boolean(emailed || jiraDone || answered)
+  const deferredForTickets = isDeferredUntilJiraTicketsExist(q, state)
+  return Boolean(emailed || jiraDone || answered || deferredForTickets)
 }
 
 function statusChip(q: StakeholderQuestion, state: WizardState): { label: string; tone: string } {
@@ -61,6 +64,9 @@ function statusChip(q: StakeholderQuestion, state: WizardState): { label: string
   if (q.jiraCommentStatus === 'failed') return { label: 'Jira failed', tone: 'err' }
   if (q.sent) return { label: 'Emailed', tone: 'ok' }
   if (q.jiraIssueKey) return { label: `Mapped · ${q.jiraIssueKey}`, tone: 'pending' }
+  if (isDeferredUntilJiraTicketsExist(q, state)) {
+    return { label: 'Queued · posts when Jira tickets are created', tone: 'info' }
+  }
   return { label: 'Pending', tone: 'pending' }
 }
 
@@ -73,6 +79,7 @@ export function StakeholderQuestionsScreen({
   onPostAllJira,
   onRefreshJira,
   onNavigate,
+  onOpenTicketsTab,
   sending,
   posting,
   refreshing,
@@ -175,15 +182,25 @@ export function StakeholderQuestionsScreen({
       {!jiraReady && state.questions.some((q) => q.queueJira || !q.sent) ? (
         <div className="ux-blocker">
           <strong>Jira tickets needed for comments</strong>
-          <span>Create epics and stories on Stakeholder Q&amp;A → Clarify &amp; plan, or connect Atlassian first.</span>
-          {onNavigate ? (
+          <span>
+            Create epics and stories on Scope &amp; tickets (or connect Atlassian first). Questions marked Jira later will auto-map and post once tickets exist.
+          </span>
+          {onOpenTicketsTab || onNavigate ? (
             <div className="ux-blocker-actions">
-              <button type="button" className="secondary-btn" onClick={() => onNavigate('stakeholder-qa')}>
-                Open Clarify &amp; plan
-              </button>
-              <button type="button" className="ghost-btn" onClick={() => onNavigate('integrations')}>
-                Open Integrations
-              </button>
+              {onOpenTicketsTab ? (
+                <button type="button" className="secondary-btn" onClick={onOpenTicketsTab}>
+                  Open Scope &amp; tickets
+                </button>
+              ) : onNavigate ? (
+                <button type="button" className="secondary-btn" onClick={() => onNavigate('stakeholder-qa')}>
+                  Open Scope &amp; tickets
+                </button>
+              ) : null}
+              {onNavigate ? (
+                <button type="button" className="ghost-btn" onClick={() => onNavigate('integrations')}>
+                  Open Integrations
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>

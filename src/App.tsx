@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Download, MessageSquare } from 'lucide-react'
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, Download, Loader2, MessageSquare, Sparkles } from 'lucide-react'
 import { downloadWorkspace, mcpProvidersFromIntegrations, fetchWorkspaceStatus, isNotProjectOwnerError, isAutosavePaused, pauseAutosave, rehomeProject, saveProject, streamClarifyRequirement, createJiraComment, pollJiraComments, resetSimulatedJiraReplies, fetchMyProject, fetchMyIntegrations, fetchProjectIntegrations, applyMyIntegrationsToProject, configureStakeholders, confirmStakeholders, createRepositories, fetchCanonicalSnapshot, postJiraGateEvidence, recordCanonicalGroomingAnswer, shipCheckpoint, syncCanonicalWizardDraft, upsertCanonicalGroomingQuestion, apiUrl, type ProjectPayload } from './api/blink'
 import { useAuth } from './auth/AuthContext'
 import { publishDeveloperSession, useDeveloperCapability } from './developer'
@@ -28,9 +28,13 @@ import { RequirementsScreen, validateRequirements } from './screens/Requirements
 import { IntegrationsScreen } from './screens/IntegrationsScreen'
 import {
   StakeholderQaScreen,
+  defaultQaTab,
   jiraCommentForQuestion,
   validateStakeholderQa,
+  type QaTab,
 } from './screens/StakeholderQaScreen'
+import { validateStakeholderQuestions } from './screens/StakeholderQuestionsScreen'
+import { validateStakeholderResponses } from './screens/StakeholderResponsesScreen'
 import {
   SdlcPlanningScreen,
   validateSdlcPlan,
@@ -69,20 +73,19 @@ import {
 import {
   applyRecommendedAnswers,
   assignQuestionBands,
+  computeClarifyFrontierState,
   groomingComplete,
   mergeFollowUpQuestions,
   stitchWordingFromAnswers,
+  stripClarificationTrailer,
   unansweredRequired,
 } from './wizard/grooming'
 import { type JiraPublishState } from './wizard/thinking'
 import { autoMapQuestionsToJira } from './wizard/jiraMatch'
 import {
-  applyGroomingRevisionToState,
   applyQuestionResponsePatch,
   patchAfterJiraAnswerSync,
   responsesForStakeholderQuestions,
-  shouldRunGroomingRevisionAfterAnswers,
-  stakeholderFeedbackFromState,
   syncStakeholderAnswerToJira,
 } from './wizard/stakeholderSync'
 import {
@@ -184,18 +187,19 @@ export default function App() {
     if (step !== 'welcome') consumeOpenWelcome()
   }, [step])
 
-  useEffect(() => {
-    if (!status || status.type === 'error') return
-    const timer = window.setTimeout(() => setStatus(null), 6000)
-    return () => window.clearTimeout(timer)
-  }, [status])
-
   const [loading, setLoading] = useState(false)
   const [grooming, setGrooming] = useState(false)
+  const [qaTab, setQaTab] = useState<QaTab>(() => defaultQaTab(state))
+  const clarifyFrontier = useMemo(() => computeClarifyFrontierState(state), [state])
   const jiraPublish: JiraPublishState | null = null
   const groomAskInFlightRef = useRef(false)
-  const lastRevisionFeedbackRef = useRef('')
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!status || status.type === 'error' || grooming || loading || saving) return
+    const timer = window.setTimeout(() => setStatus(null), 6000)
+    return () => window.clearTimeout(timer)
+  }, [status, grooming, loading, saving])
   const [sending, setSending] = useState(false)
   const [postingJira, setPostingJira] = useState(false)
   const [refreshingJira, setRefreshingJira] = useState(false)
@@ -913,18 +917,52 @@ export default function App() {
     }
   }, [patch, state.bootstrapAcknowledged, state.integrations, state.jiraCreatedIssues, state.productScope, state.projectId, state.repositories, state.sdlcStartIssueId, state.specification, state.workClassification])
 
-  const goNext = useCallback(async () => {
-    // Clarify lives on stakeholder-qa; Continue can confirm wording (same as the in-page CTA).
-    if (
-      step === 'stakeholder-qa' &&
-      state.requirementsText.trim() &&
-      !state.groomConfirmed &&
-      !skipStepValidation
-    ) {
-      const ok = await handleGroomLooksGoodRef.current()
-      if (!ok) return
+  useEffect(() => {
+    if (step === 'stakeholder-qa') {
+      setQaTab(defaultQaTab(stateRef.current))
     }
+  }, [step])
+
+  const goNext = useCallback(async () => {
     if (step === 'stakeholder-qa' && !skipStepValidation) {
+      if (qaTab === 'clarify') {
+        if (state.requirementsText.trim() && !state.groomConfirmed) {
+          await handleGroomLooksGoodRef.current()
+          return
+        }
+        if (state.questions.length > 0 && !state.groomAcknowledged) {
+          setQaTab('stakeholders')
+        } else {
+          const { applyImplicitGroomAck } = await import('./wizard/groomGate.ts')
+          const cur = stateRef.current
+          const ack = applyImplicitGroomAck(cur, patch)
+          if (ack) stateRef.current = { ...cur, ...ack }
+          setQaTab('tickets')
+        }
+        return
+      }
+      if (qaTab === 'stakeholders') {
+        const cur = stateRef.current
+        const outboundErr = validateStakeholderQuestions(cur)
+        if (outboundErr) {
+          setStatus({ type: 'error', message: outboundErr })
+          return
+        }
+        const respErr = validateStakeholderResponses(cur)
+        if (respErr) {
+          setStatus({ type: 'error', message: respErr })
+          return
+        }
+        const { applyImplicitGroomAck } = await import('./wizard/groomGate.ts')
+        const ack = applyImplicitGroomAck(cur, patch)
+        if (ack) stateRef.current = { ...cur, ...ack }
+        setQaTab('tickets')
+        setStatus({
+          type: 'info',
+          message: 'Stakeholder Q&A acknowledged — review or plan epics and stories on Scope & tickets.',
+        })
+        return
+      }
       const { applyImplicitGroomAck } = await import('./wizard/groomGate.ts')
       const cur = stateRef.current
       const ack = applyImplicitGroomAck(cur, patch)
@@ -1026,6 +1064,7 @@ export default function App() {
     skipStepValidation,
     goToStep,
     projectPayload,
+    qaTab,
   ])
 
   const retryStakeholderGovernance = useCallback(() => {
@@ -1040,13 +1079,23 @@ export default function App() {
       setKitResultOpen(false)
       return
     }
+    if (step === 'stakeholder-qa') {
+      if (qaTab === 'tickets') {
+        setQaTab(stateRef.current.questions.length > 0 ? 'stakeholders' : 'clarify')
+        return
+      }
+      if (qaTab === 'stakeholders') {
+        setQaTab('clarify')
+        return
+      }
+    }
     if (isWizardHistoryState(window.history.state) && stepIndex(step) > 0) {
       window.history.back()
       return
     }
     const idx = stepIndex(step)
     if (idx > 0) goToStep(STEP_ORDER[idx - 1])
-  }, [step, goToStep, kitResultOpen])
+  }, [step, goToStep, kitResultOpen, qaTab])
 
   const groomAbortRef = useRef<AbortController | null>(null)
 
@@ -1086,12 +1135,16 @@ export default function App() {
         {
           onThinking: (chunk) => {
             if (!showStatus()) return
-            thinkingBuf = `${thinkingBuf}${chunk}`.slice(-180)
+            thinkingBuf = `${thinkingBuf}${chunk}`.slice(-240)
             const preview = thinkingBuf.replace(/\s+/g, ' ').trim()
             if (preview.length > 10) {
+              const clipped =
+                preview.length > 180
+                  ? `${preview.slice(0, 177).replace(/\s+\S*$/, '')}…`
+                  : preview
               setStatus({
                 type: 'info',
-                message: `Working… ${preview.length > 90 ? `${preview.slice(0, 87)}…` : preview}`,
+                message: `Working… ${clipped}`,
               })
             }
           },
@@ -1174,7 +1227,7 @@ export default function App() {
     const text = state.requirementsText.trim()
     if (text.length < 24) return
     if (state.groomQuestions.length > 0 || state.groomStatus || grooming) return
-    const delay = state.requirementFileName ? 250 : 900
+    const delay = state.requirementFileName ? 300 : 2500
     const timer = window.setTimeout(() => {
       void handleGroomAsk({ silent: true })
     }, delay)
@@ -1267,30 +1320,32 @@ export default function App() {
       })
       return false
     }
-    const original = (current.groomOriginal || current.requirementsText).trim()
+    const original = stripClarificationTrailer(current.groomOriginal || current.requirementsText)
     const answers = effectiveAnswers.filter(
       (item) => item.optionId !== 'other' || Boolean(item.otherText?.trim()),
     )
     const round = Math.max(1, current.groomRound || 1)
     const nextRound = round + 1
-    let draft = (current.groomDraft || current.requirementsText).trim()
+    let draft = stripClarificationTrailer(current.groomDraft || current.requirementsText)
     if (answers.length && current.groomStatus !== 'error') {
-      const optimistic = stitchWordingFromAnswers(draft || original, current.groomQuestions, answers)
-      draft = optimistic
-      patch({ groomAnswers: effectiveAnswers, groomDraft: optimistic })
-      stateRef.current = { ...current, groomAnswers: effectiveAnswers, groomDraft: optimistic }
+      patch({ groomAnswers: effectiveAnswers })
+      stateRef.current = { ...current, groomAnswers: effectiveAnswers }
 
       if (
-        !opts?.lockNow &&
         current.groomQuestions.length > 0 &&
-        current.groomStatus !== 'draft_ready'
+        (current.groomStatus !== 'draft_ready' || opts?.lockNow)
       ) {
         groomAbortRef.current?.abort()
         const controller = new AbortController()
         groomAbortRef.current = controller
         const hangTimer = window.setTimeout(() => controller.abort(), 45_000)
         setGrooming(true)
-        setStatus({ type: 'info', message: 'Updating wording & checking next design-tree frontier…' })
+        setStatus({
+          type: 'info',
+          message: opts?.lockNow
+            ? 'Synthesizing final requirement wording from your decisions…'
+            : 'Updating wording & checking next design-tree frontier…',
+        })
         try {
           const result = await streamClarifyRequirement(
             {
@@ -1298,10 +1353,12 @@ export default function App() {
               projectName: current.projectName,
               projectDescription: current.description,
               requirementText: original || draft,
+              mode: opts?.lockNow ? 'lock_wording' : undefined,
               answers,
               clarifyRound: round,
               previousQuestions: current.groomQuestions.map((question) => ({
                 id: question.id,
+                title: question.title,
                 text: question.text,
               })),
               stakeholders: current.stakeholderAssignments,
@@ -1312,14 +1369,18 @@ export default function App() {
               onThinking: (chunk) => {
                 const preview = chunk.replace(/\s+/g, ' ').trim()
                 if (preview.length > 8) {
+                  const clipped =
+                    preview.length > 180
+                      ? `${preview.slice(0, 177).replace(/\s+\S*$/, '')}…`
+                      : preview
                   setStatus({
                     type: 'info',
-                    message: `Checking frontier… ${preview.length > 80 ? `${preview.slice(0, 77)}…` : preview}`,
+                    message: `Checking frontier… ${clipped}`,
                   })
                 }
               },
               onQuestions: (partialQuestions) => {
-                if (controller.signal.aborted || !partialQuestions.length) return
+                if (opts?.lockNow || controller.signal.aborted || !partialQuestions.length) return
                 const mergedPartial = mergeFollowUpQuestions(
                   current.groomQuestions,
                   assignQuestionBands(partialQuestions, nextRound),
@@ -1339,10 +1400,11 @@ export default function App() {
             controller.signal,
           )
           if (result.status === 'error' || result.status === 'invalid_request') {
+            draft = stitchWordingFromAnswers(draft || original, current.groomQuestions, answers)
             setStatus({ type: 'info', message: `${result.message} Using the current draft.` })
           } else {
-            draft = (result.requirementDraft || draft).trim()
-            if (result.status === 'need_choices') {
+            draft = stripClarificationTrailer(result.requirementDraft || draft) || draft
+            if (!opts?.lockNow && result.status === 'need_choices') {
               const merged = mergeFollowUpQuestions(
                 current.groomQuestions,
                 assignQuestionBands(result.questions ?? [], nextRound),
@@ -1364,30 +1426,33 @@ export default function App() {
                 stateRef.current = { ...current, ...followPatch }
                 setStatus({
                   type: 'info',
-                  message: `Round ${nextRound} frontier unlocked — answer the new questions or click Lock wording now.`,
+                  message: `Round ${nextRound} frontier unlocked — answer the new questions or click Finish clarifying now.`,
                 })
                 return false
               }
             }
-            // Frontier is now empty: pause for explicit human confirmation of shared understanding.
-            const readyPatch: Partial<WizardState> = {
-              groomDraft: draft,
-              groomAnswers: effectiveAnswers,
-              groomStatus: 'draft_ready',
-              groomMessage:
-                result.message ||
-                'Every branch of the design tree is settled. Review the synthesized draft below and confirm shared understanding.',
-              groomConfirmed: false,
+            if (!opts?.lockNow) {
+              // Frontier is now empty: pause for explicit human confirmation of shared understanding.
+              const readyPatch: Partial<WizardState> = {
+                groomDraft: draft,
+                groomAnswers: effectiveAnswers,
+                groomStatus: 'draft_ready',
+                groomMessage:
+                  result.message ||
+                  'Every branch of the design tree is settled. Review the synthesized draft below and confirm shared understanding.',
+                groomConfirmed: false,
+              }
+              patch(readyPatch)
+              stateRef.current = { ...current, ...readyPatch }
+              setStatus({
+                type: 'info',
+                message: 'Frontier is empty — review the final wording and click Confirm shared understanding.',
+              })
+              return false
             }
-            patch(readyPatch)
-            stateRef.current = { ...current, ...readyPatch }
-            setStatus({
-              type: 'info',
-              message: 'Frontier is empty — review the final wording and click Confirm shared understanding.',
-            })
-            return false
           }
         } catch {
+          draft = stitchWordingFromAnswers(draft || original, current.groomQuestions, answers)
           setStatus({
             type: 'info',
             message: 'Rewrite is slow right now — saved your answers with the current draft.',
@@ -1422,19 +1487,6 @@ export default function App() {
     patch(basePatch)
     const mergedState: WizardState = { ...current, ...basePatch }
     stateRef.current = mergedState
-    if (
-      mergedState.projectId &&
-      shouldRunGroomingRevisionAfterAnswers(mergedState) &&
-      stakeholderFeedbackFromState(mergedState) !== lastRevisionFeedbackRef.current
-    ) {
-      const feedback = stakeholderFeedbackFromState(mergedState)
-      lastRevisionFeedbackRef.current = feedback
-      void applyGroomingRevisionToState(mergedState)
-        .then((revisionPatch) => patch(revisionPatch))
-        .catch(() => {
-          lastRevisionFeedbackRef.current = ''
-        })
-    }
     setStatus({ type: 'success', message: 'Design frontier complete — requirement wording saved.' })
     return true
   }, [patch])
@@ -1779,13 +1831,9 @@ export default function App() {
       })
       return
     }
-    let ok = 0
-    let failed = 0
-    for (const id of ids) {
-      const success = await handlePostJiraOne(id)
-      if (success) ok += 1
-      else failed += 1
-    }
+    const results = await Promise.all(ids.map((id) => handlePostJiraOne(id)))
+    const ok = results.filter(Boolean).length
+    const failed = results.length - ok
     setStatus({
       type: failed ? 'error' : 'success',
       message: failed
@@ -2079,75 +2127,54 @@ export default function App() {
 
       let working = nextState
       if (working.projectId) {
+        const projectId = working.projectId
         const canonicalQuestion = working.questions.find((question) => question.id === questionId)
-        if (canonicalQuestion) {
-          try {
-            await upsertCanonicalGroomingQuestion(working.projectId, {
-              key: canonicalQuestion.id,
-              prompt: canonicalQuestion.question,
-              mandatory: Boolean(canonicalQuestion.mandatory),
-              assignedRoleId: canonicalQuestion.assignedRoleId,
-            })
-            await recordCanonicalGroomingAnswer(working.projectId, {
-              questionKey: canonicalQuestion.id,
-              answer: body,
-              status: 'answered',
-              evidence: {
-                source: patchResponse.source || 'manual',
-                receivedAt: patchResponse.receivedAt || new Date().toISOString(),
-                jiraCommentId: patchResponse.jiraCommentId || null,
-              },
-            })
-          } catch (e) {
-            // Legacy projects may predate project-grooming tables. Preserve the existing story workflow.
-            setStatus({
-              type: 'info',
-              message: `Answer saved locally; canonical project grooming sync is unavailable: ${
-                e instanceof Error ? e.message : 'unknown error'
-              }`,
-            })
-          }
-        }
         const mapped = autoMapQuestionsToJira(working.questions, working)
         const question = mapped.find((q) => q.id === questionId)
-        if (question?.jiraIssueKey) {
-          try {
-            const sync = await syncStakeholderAnswerToJira(working.projectId, question, body)
-            if (sync.posted) {
-              setState((prev) => patchAfterJiraAnswerSync(prev, questionId, sync))
-              working = patchAfterJiraAnswerSync(working, questionId, sync)
-            }
-          } catch (e) {
-            setStatus({
-              type: 'error',
-              message: `Answer saved locally. Jira sync failed: ${
-                e instanceof Error ? e.message : 'unknown error'
-              }`,
-            })
-          }
-        }
-      }
 
-      const feedback = stakeholderFeedbackFromState(working)
-      if (
-        shouldRunGroomingRevisionAfterAnswers(working) &&
-        feedback !== lastRevisionFeedbackRef.current
-      ) {
-        lastRevisionFeedbackRef.current = feedback
-        try {
-          const revisionPatch = await applyGroomingRevisionToState(working)
-          patch(revisionPatch)
-          setStatus({
-            type: 'success',
-            message: 'Answer saved; Jira updated when linked; requirement revised.',
-          })
-          return
-        } catch (e) {
-          lastRevisionFeedbackRef.current = ''
+        const canonicalTask = canonicalQuestion
+          ? (async () => {
+              await upsertCanonicalGroomingQuestion(projectId, {
+                key: canonicalQuestion.id,
+                prompt: canonicalQuestion.question,
+                mandatory: Boolean(canonicalQuestion.mandatory),
+                assignedRoleId: canonicalQuestion.assignedRoleId,
+              })
+              await recordCanonicalGroomingAnswer(projectId, {
+                questionKey: canonicalQuestion.id,
+                answer: body,
+                status: 'answered',
+                evidence: {
+                  source: patchResponse.source || 'manual',
+                  receivedAt: patchResponse.receivedAt || new Date().toISOString(),
+                  jiraCommentId: patchResponse.jiraCommentId || null,
+                },
+              })
+            })()
+          : Promise.resolve()
+
+        const jiraTask = question?.jiraIssueKey
+          ? syncStakeholderAnswerToJira(projectId, question, body)
+          : Promise.resolve(null)
+
+        const [canonicalRes, jiraRes] = await Promise.allSettled([canonicalTask, jiraTask])
+        if (jiraRes.status === 'fulfilled' && jiraRes.value?.posted) {
+          const sync = jiraRes.value
+          setState((prev) => patchAfterJiraAnswerSync(prev, questionId, sync))
+          working = patchAfterJiraAnswerSync(working, questionId, sync)
+        } else if (jiraRes.status === 'rejected') {
           setStatus({
             type: 'error',
-            message: `Answer saved. Grooming revision failed: ${
-              e instanceof Error ? e.message : 'unknown error'
+            message: `Answer saved locally. Jira sync failed: ${
+              jiraRes.reason instanceof Error ? jiraRes.reason.message : 'unknown error'
+            }`,
+          })
+          return
+        } else if (canonicalRes.status === 'rejected') {
+          setStatus({
+            type: 'info',
+            message: `Answer saved locally; canonical project grooming sync is unavailable: ${
+              canonicalRes.reason instanceof Error ? canonicalRes.reason.message : 'unknown error'
             }`,
           })
           return
@@ -2160,60 +2187,101 @@ export default function App() {
       }
       setStatus({ type: 'success', message: 'Answer resolved and synced to Jira when a ticket was linked.' })
     },
-    [patch, setState],
+    [setState],
   )
 
   const handleResolveAllLatest = useCallback(() => {
-    setState((prev) => {
-      const now = new Date().toISOString()
-      const questions = prev.questions.map((q) => {
-        const thread = q.jiraThread || []
-        if (!thread.length) return q
-        const existing = prev.responses.find((r) => r.questionId === q.id)
-        if (existing?.status === 'answered' && existing.response?.trim()) return q
-        const last = thread[thread.length - 1]
-        return {
-          ...q,
-          jiraCommentStatus: 'resolved' as const,
-          jiraCommentMessage: last.body.length > 140 ? `${last.body.slice(0, 140)}…` : last.body,
-          jiraReplyBody: last.body,
-          jiraReplyAuthor: last.author || null,
-          jiraReplyAt: last.created || now,
-          jiraReplyCommentId: last.commentId,
-          jiraThreadStale: false,
-        }
+    const prev = stateRef.current
+    const now = new Date().toISOString()
+    const newlyResolved: { question: import('./wizard/types').StakeholderQuestion; body: string; created: string; commentId: string }[] = []
+
+    const questions = prev.questions.map((q) => {
+      const thread = q.jiraThread || []
+      if (!thread.length) return q
+      const existing = prev.responses.find((r) => r.questionId === q.id)
+      if (existing?.status === 'answered' && existing.response?.trim()) return q
+      const last = thread[thread.length - 1]
+      newlyResolved.push({
+        question: q,
+        body: last.body,
+        created: last.created || now,
+        commentId: last.commentId,
       })
-      const responses = prev.questions.map((q) => {
-        const existing = prev.responses.find((r) => r.questionId === q.id)
-        const thread = q.jiraThread || []
-        if (existing?.status === 'answered' && existing.response?.trim()) {
-          return existing
-        }
-        if (!thread.length) {
-          return (
-            existing ?? {
-              questionId: q.id,
-              status: 'pending' as const,
-              response: q.proposedAnswer || '',
-              receivedAt: null,
-            }
-          )
-        }
-        const last = thread[thread.length - 1]
-        return {
-          questionId: q.id,
-          status: 'answered' as const,
-          response: last.body,
-          receivedAt: last.created || now,
-          source: 'thread' as const,
-          author: last.author || null,
-          jiraIssueKey: q.jiraIssueKey || null,
-          jiraCommentId: last.commentId,
-          resolvedFromCommentId: last.commentId,
-        }
-      })
-      return { ...prev, questions, responses }
+      return {
+        ...q,
+        jiraCommentStatus: 'resolved' as const,
+        jiraCommentMessage: last.body.length > 140 ? `${last.body.slice(0, 140)}…` : last.body,
+        jiraReplyBody: last.body,
+        jiraReplyAuthor: last.author || null,
+        jiraReplyAt: last.created || now,
+        jiraReplyCommentId: last.commentId,
+        jiraThreadStale: false,
+      }
     })
+    const responses = prev.questions.map((q) => {
+      const existing = prev.responses.find((r) => r.questionId === q.id)
+      const thread = q.jiraThread || []
+      if (existing?.status === 'answered' && existing.response?.trim()) {
+        return existing
+      }
+      if (!thread.length) {
+        return (
+          existing ?? {
+            questionId: q.id,
+            status: 'pending' as const,
+            response: q.proposedAnswer || '',
+            receivedAt: null,
+          }
+        )
+      }
+      const last = thread[thread.length - 1]
+      return {
+        questionId: q.id,
+        status: 'answered' as const,
+        response: last.body,
+        receivedAt: last.created || now,
+        source: 'thread' as const,
+        author: last.author || null,
+        jiraIssueKey: q.jiraIssueKey || null,
+        jiraCommentId: last.commentId,
+        resolvedFromCommentId: last.commentId,
+      }
+    })
+    const nextState = { ...prev, questions, responses }
+    setState(nextState)
+    stateRef.current = nextState
+
+    if (prev.projectId && newlyResolved.length > 0) {
+      const projectId = prev.projectId
+      const mapped = autoMapQuestionsToJira(questions, nextState)
+      void Promise.allSettled(
+        newlyResolved.map(async (item) => {
+          await upsertCanonicalGroomingQuestion(projectId, {
+            key: item.question.id,
+            prompt: item.question.question,
+            mandatory: Boolean(item.question.mandatory),
+            assignedRoleId: item.question.assignedRoleId,
+          })
+          await recordCanonicalGroomingAnswer(projectId, {
+            questionKey: item.question.id,
+            answer: item.body,
+            status: 'answered',
+            evidence: {
+              source: 'thread',
+              receivedAt: item.created,
+              jiraCommentId: item.commentId || null,
+            },
+          })
+          const mappedQ = mapped.find((q) => q.id === item.question.id)
+          if (mappedQ?.jiraIssueKey) {
+            const sync = await syncStakeholderAnswerToJira(projectId, mappedQ, item.body)
+            if (sync.posted) {
+              setState((cur) => patchAfterJiraAnswerSync(cur, item.question.id, sync))
+            }
+          }
+        }),
+      )
+    }
     setStatus({ type: 'success', message: 'Resolved open discussions using the latest reply in each thread.' })
   }, [])
 
@@ -2472,8 +2540,15 @@ export default function App() {
           <RequirementsScreen
             state={state}
             onUpdate={(updates) => {
-              const resetGroom =
-                'requirementsText' in updates || 'requirementFileName' in updates || 'requirementFile' in updates
+              const cur = stateRef.current
+              const textChanged =
+                'requirementsText' in updates &&
+                (updates.requirementsText ?? '').trim() !== cur.requirementsText.trim() &&
+                (updates.requirementsText ?? '').trim() !== cur.groomDraft.trim()
+              const fileChanged =
+                ('requirementFileName' in updates && updates.requirementFileName !== cur.requirementFileName) ||
+                'requirementFile' in updates
+              const resetGroom = textChanged || fileChanged
               if (resetGroom) {
                 groomAbortRef.current?.abort()
                 groomAbortRef.current = null
@@ -2489,6 +2564,8 @@ export default function App() {
           <StakeholderQaScreen
             state={state}
             onUpdate={patch}
+            activeTab={qaTab}
+            onTabChange={setQaTab}
             grooming={grooming}
             jiraPublish={jiraPublish}
             onAsk={() => void handleGroomAsk()}
@@ -2729,11 +2806,22 @@ export default function App() {
                 )}
               </div>
             )}
+            {status && !isWelcome && (
+              <div
+                className={`status-banner ${status.type} top-float-status`}
+                role={status.type === 'error' ? 'alert' : 'status'}
+                aria-live="polite"
+              >
+                {(grooming || loading || saving) && status.type === 'info' ? (
+                  <Loader2 size={14} className="spin" style={{ flexShrink: 0 }} />
+                ) : null}
+                <span>{status.message}</span>
+              </div>
+            )}
           </header>
         )}
 
         <div className={`content${isSuccessScreen ? ' content-fill' : ''}${isWelcome ? ' content-welcome' : ''}${currentSkipped ? ' content-skipped' : ''}`}>
-          {status && !isWelcome && <div className={`status-banner ${status.type}`}>{status.message}</div>}
           {renderScreen()}
         </div>
 
@@ -2747,28 +2835,77 @@ export default function App() {
               <span className="action-float-slot" aria-hidden="true" />
             )}
             {showNext ? (
-              <button
-                type="button"
-                className="primary-btn action-float-btn action-float-next"
-                disabled={
-                  saving
-                  || loading
-                  || grooming
-                  || creatingRepos
-                  || (step === 'project-shape' && !shapeConfirmUi.confirmed && (shapeConfirmUi.busy || shapeConfirmUi.pending))
-                }
-                onClick={() => {
-                  if (step === 'project-shape' && !shapeConfirmUi.confirmed) {
-                    void shapeConfirmRef.current?.()
-                    return
+              step === 'stakeholder-qa' && qaTab === 'clarify' && !state.groomConfirmed ? (
+                <div
+                  className="action-float-group"
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', pointerEvents: 'auto' }}
+                >
+                  {clarifyFrontier.canLockNow ? (
+                    <button
+                      type="button"
+                      className="secondary-btn action-float-btn"
+                      disabled={saving || loading || grooming}
+                      onClick={() => void handleGroomLooksGood({ lockNow: true })}
+                      title="Skip any further question rounds — apply your current and recommended answers and finalize the requirement now"
+                    >
+                      <CheckCircle2 size={14} /> {clarifyFrontier.finishNowLabel}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="primary-btn action-float-btn action-float-next"
+                    disabled={saving || loading || grooming}
+                    onClick={() => void handleGroomLooksGood()}
+                  >
+                    {grooming ? (
+                      'Checking frontier…'
+                    ) : (
+                      <>
+                        {clarifyFrontier.primaryLabel}{' '}
+                        {clarifyFrontier.frontierEmpty ? <Check size={14} /> : <Sparkles size={14} />}
+                      </>
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="primary-btn action-float-btn action-float-next"
+                  disabled={
+                    saving
+                    || loading
+                    || grooming
+                    || creatingRepos
+                    || (step === 'project-shape' && !shapeConfirmUi.confirmed && (shapeConfirmUi.busy || shapeConfirmUi.pending))
                   }
-                  void goNext()
-                }}
-              >
-                {step === 'project-shape' && !shapeConfirmUi.confirmed
-                  ? (shapeConfirmUi.busy ? 'Confirming…' : 'Confirm structure')
-                  : <>{primaryContinueLabel(step, { saving, creatingRepos })} <ChevronRight size={14} /></>}
-              </button>
+                  onClick={() => {
+                    if (step === 'project-shape' && !shapeConfirmUi.confirmed) {
+                      void shapeConfirmRef.current?.()
+                      return
+                    }
+                    void goNext()
+                  }}
+                >
+                  {step === 'project-shape' && !shapeConfirmUi.confirmed ? (
+                    shapeConfirmUi.busy ? 'Confirming…' : 'Confirm structure'
+                  ) : step === 'stakeholder-qa' ? (
+                    <>
+                      {qaTab === 'clarify'
+                        ? state.questions.length > 0 && !state.groomAcknowledged
+                          ? 'Continue to Stakeholders'
+                          : 'Continue to Scope & tickets'
+                        : qaTab === 'stakeholders'
+                          ? 'Continue to Scope & tickets'
+                          : 'Continue to Project Shape'}{' '}
+                      <ChevronRight size={14} />
+                    </>
+                  ) : (
+                    <>
+                      {primaryContinueLabel(step, { saving, creatingRepos })} <ChevronRight size={14} />
+                    </>
+                  )}
+                </button>
+              )
             ) : (
               <span className="action-float-slot" aria-hidden="true" />
             )}

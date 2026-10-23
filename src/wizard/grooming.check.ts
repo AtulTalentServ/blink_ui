@@ -9,10 +9,12 @@ import {
   applyRecommendedAnswers,
   assignQuestionBands,
   compactQuestionText,
+  computeClarifyFrontierState,
   mergeFollowUpQuestions,
   recommendedOptionForQuestion,
   splitQuestionTitleAndText,
   stitchWordingFromAnswers,
+  stripClarificationTrailer,
 } from './grooming.ts'
 import { hasRequirementSource } from './groomingEligibility.ts'
 import type { GroomQuestion } from './types.ts'
@@ -83,13 +85,19 @@ assert.equal(
   stitchWordingFromAnswers('Build a calculator.', roundOne, [
     { questionId: 'q1', optionId: 'opt-1', optionLabel: 'Receptionist' },
   ]),
-  'Build a calculator.\n\nDecisions from clarification:\n- Who books the visits: Receptionist',
+  'Build a calculator.\n\n- Receptionist',
 )
 assert.equal(
-  stitchWordingFromAnswers('Build a clinic app.', roundOne, [
-    { questionId: 'q1', optionId: 'other', otherText: 'Front-desk kiosk' },
-  ]),
-  'Build a clinic app.\n\nDecisions from clarification:\n- Who books the visits: Front-desk kiosk',
+  stitchWordingFromAnswers(
+    'Build a clinic app.\n\nDecisions from clarification:\n- Should it use degrees: Use degrees',
+    [{ ...roundOne[0], title: 'Booking actor' }],
+    [{ questionId: 'q1', optionId: 'other', otherText: 'Front-desk kiosk' }],
+  ),
+  'Build a clinic app.\n\n- Booking actor: Front-desk kiosk',
+)
+assert.equal(
+  stripClarificationTrailer('Build a calculator.\n\nDecisions from clarification:\n- Q: A'),
+  'Build a calculator.',
 )
 
 assert.equal(recommendedOptionForQuestion(roundOne[0])?.id, 'opt-1')
@@ -121,5 +129,35 @@ const banded = assignQuestionBands([
 assert.equal(banded[0].title, 'Walk-in slot override')
 assert.equal(banded[0].text, 'Should receptionists book urgent walk-ins into locked slots?')
 assert.equal(banded[0].recommendedOptionId, 'yes')
+
+const frontierUnanswered = computeClarifyFrontierState({
+  groomQuestions: roundOne,
+  groomAnswers: [],
+  groomRound: 1,
+  groomStatus: 'need_choices',
+  groomConfirmed: false,
+})
+assert.equal(frontierUnanswered.canLockNow, true)
+assert.equal(frontierUnanswered.finishNowLabel, 'Finish clarifying now')
+assert.equal(frontierUnanswered.primaryLabel, 'Accept recommended & next round')
+
+const frontierAnswered = computeClarifyFrontierState({
+  groomQuestions: roundOne,
+  groomAnswers: [{ questionId: 'q1', optionId: 'opt-1', optionLabel: 'Receptionist' }],
+  groomRound: 1,
+  groomStatus: 'need_choices',
+  groomConfirmed: false,
+})
+assert.equal(frontierAnswered.primaryLabel, 'Submit round answers')
+
+const frontierReady = computeClarifyFrontierState({
+  groomQuestions: roundOne,
+  groomAnswers: [{ questionId: 'q1', optionId: 'opt-1', optionLabel: 'Receptionist' }],
+  groomRound: 1,
+  groomStatus: 'draft_ready',
+  groomConfirmed: false,
+})
+assert.equal(frontierReady.canLockNow, false)
+assert.equal(frontierReady.primaryLabel, 'Confirm shared understanding')
 
 console.log('grooming.check.ts: ok')

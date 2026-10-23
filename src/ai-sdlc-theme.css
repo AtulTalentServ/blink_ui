@@ -1440,6 +1440,17 @@ body.is-resizing-sidebar .sidebar-brand-row {
   border: 1px solid rgba(15, 23, 42, 0.08);
 }
 
+.top-float-status {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
 .ship-step-card,
 .ship-pipeline-card,
 .ship-gate-card {

@@ -1,6 +1,6 @@
-import { createJiraComment, groomingRevision, type OverlayFilePayload } from '../api/blink'
-import type { QuestionResponse, ScopeOverlayFile, StakeholderQuestion, WizardState } from './types'
-import { blinkQuestionMarker } from './jiraMatch'
+import { createJiraComment, groomingRevision, type OverlayFilePayload } from '../api/blink.ts'
+import type { QuestionResponse, ScopeOverlayFile, StakeholderQuestion, WizardState } from './types.ts'
+import { blinkQuestionMarker, matchableJiraIssues } from './jiraMatch.ts'
 
 export function mergeScopeOverlays(
   base: ScopeOverlayFile[] | undefined,
@@ -43,12 +43,27 @@ function stakeholderAnswerResolved(
   return response?.status === 'answered' && Boolean(text)
 }
 
+/**
+ * True when a question was marked 'Jira later' in Clarify, has no in-app answer yet,
+ * and no Jira tickets exist yet (tickets are created in Sub-tab 3: Scope & tickets).
+ * Prevents a circular deadlock between Sub-tab 2 (Stakeholders) and Sub-tab 3 (Scope & tickets).
+ */
+export function isDeferredUntilJiraTicketsExist(
+  q: StakeholderQuestion,
+  state: Pick<WizardState, 'productScope' | 'jiraCreatedIssues'>,
+): boolean {
+  if (!q.queueJira) return false
+  return matchableJiraIssues(state as WizardState).length === 0
+}
+
 export function mandatoryResponsesReady(state: WizardState): boolean {
   if (state.questions.length === 0) return true
   return !state.questions.some((q) => {
     if (!q.mandatory) return false
     const response = state.responses.find((r) => r.questionId === q.id)
-    return !stakeholderAnswerResolved(q, response)
+    if (stakeholderAnswerResolved(q, response)) return false
+    if (isDeferredUntilJiraTicketsExist(q, state)) return false
+    return true
   })
 }
 

@@ -38,6 +38,7 @@ interface Props {
   jiraPublish?: JiraPublishState | null
   /** Only auto-plan after stakeholder confirmation unlocks Scope & tickets. */
   allowAutoPlan?: boolean
+  onPostAllJira?: () => Promise<void>
 }
 
 function jiraBrowseUrl(
@@ -222,7 +223,14 @@ export function JiraPublishStatus({
   return null
 }
 
-export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null, allowAutoPlan = false }: Props) {
+export function JiraScopePanel({
+  state,
+  onUpdate,
+  sourceText,
+  jiraPublish = null,
+  allowAutoPlan = false,
+  onPostAllJira,
+}: Props) {
   const [planningScope, setPlanningScope] = useState(false)
   const [scopeError, setScopeError] = useState<string | null>(null)
   const [creatingIssues, setCreatingIssues] = useState(false)
@@ -357,6 +365,16 @@ export function JiraScopePanel({ state, onUpdate, sourceText, jiraPublish = null
       if (result.status === 'error') {
         setCreateError(result.message || 'Jira did not create the issues.')
         return
+      }
+      if (
+        onPostAllJira &&
+        state.questions.some(
+          (q) =>
+            q.queueJira &&
+            !((q.jiraCommentStatus === 'posted' || q.jiraCommentStatus === 'replied') && Boolean(q.jiraCommentId)),
+        )
+      ) {
+        void onPostAllJira()
       }
       if (!state.projectId || !state.figmaDesign?.fileKey) return
 
