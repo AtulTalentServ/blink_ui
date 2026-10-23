@@ -15,7 +15,6 @@ import { LOGIN_ALLOWED_DOMAIN, isTalentservEmail } from '../auth/session'
 import { AppHeader } from '../components/AppHeader'
 import { ThemeBackground } from '../components/ThemeBackground'
 import { isBlinkDesktopShell } from '../desktop/detect'
-import { ApiTargetControl } from '../developer/ApiTargetControl'
 import { isLocalBackendUnavailableMessage, setApiTarget } from '../developer/apiTarget'
 import { useDeveloperMode } from '../developer'
 
@@ -54,6 +53,13 @@ export function LoginScreen() {
 
   useEffect(() => {
     loadLoginConfig()
+    const onTargetChanged = () => loadLoginConfig()
+    window.addEventListener('blink-api-target-changed', onTargetChanged)
+    window.addEventListener('storage', onTargetChanged)
+    return () => {
+      window.removeEventListener('blink-api-target-changed', onTargetChanged)
+      window.removeEventListener('storage', onTargetChanged)
+    }
   }, [])
 
   useEffect(() => {
@@ -186,8 +192,6 @@ export function LoginScreen() {
               else void signInWithOtp()
             }}
           >
-            <ApiTargetControl compact onTargetChange={() => loadLoginConfig()} />
-
             {notice && (
               <div className={`status-banner ${notice.type}`}>
                 {notice.message}

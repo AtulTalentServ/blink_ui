@@ -7,9 +7,11 @@ import assert from 'node:assert/strict'
 import {
   answersAreAllOptionPicks,
   applyRecommendedAnswers,
+  assignQuestionBands,
   compactQuestionText,
   mergeFollowUpQuestions,
   recommendedOptionForQuestion,
+  splitQuestionTitleAndText,
   stitchWordingFromAnswers,
 } from './grooming.ts'
 import { hasRequirementSource } from './groomingEligibility.ts'
@@ -94,5 +96,30 @@ assert.equal(recommendedOptionForQuestion(roundOne[0])?.id, 'opt-1')
 assert.deepEqual(applyRecommendedAnswers(roundOne, []), [
   { questionId: 'q1', optionId: 'opt-1', optionLabel: 'Receptionist' },
 ])
+
+const split = splitQuestionTitleAndText(
+  undefined,
+  'Walk-in slot override: Should receptionists book urgent walk-ins into locked slots? Clinic leads audit overrides at end of day.',
+)
+assert.equal(split.title, 'Walk-in slot override')
+assert.equal(
+  split.text,
+  'Should receptionists book urgent walk-ins into locked slots? Clinic leads audit overrides at end of day.',
+)
+
+const banded = assignQuestionBands([
+  {
+    id: 'q-walkin',
+    text: 'Walk-in slot override: Should receptionists book urgent walk-ins into locked slots?',
+    options: [
+      { id: 'yes', label: 'Yes, allow override' },
+      { id: 'no', label: 'No, block override' },
+    ],
+    allowOther: true,
+  },
+])
+assert.equal(banded[0].title, 'Walk-in slot override')
+assert.equal(banded[0].text, 'Should receptionists book urgent walk-ins into locked slots?')
+assert.equal(banded[0].recommendedOptionId, 'yes')
 
 console.log('grooming.check.ts: ok')

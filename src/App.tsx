@@ -1079,6 +1079,9 @@ export default function App() {
           projectName: stateRef.current.projectName,
           projectDescription: stateRef.current.description,
           requirementText: text,
+          stakeholders: stateRef.current.stakeholderAssignments,
+          repositories: stateRef.current.repositories,
+          overlayFiles: stateRef.current.scopeOverlays,
         },
         {
           onThinking: (chunk) => {
@@ -1277,7 +1280,11 @@ export default function App() {
       patch({ groomAnswers: effectiveAnswers, groomDraft: optimistic })
       stateRef.current = { ...current, groomAnswers: effectiveAnswers, groomDraft: optimistic }
 
-      if (!opts?.lockNow && current.groomQuestions.length > 0) {
+      if (
+        !opts?.lockNow &&
+        current.groomQuestions.length > 0 &&
+        current.groomStatus !== 'draft_ready'
+      ) {
         groomAbortRef.current?.abort()
         const controller = new AbortController()
         groomAbortRef.current = controller
@@ -1297,6 +1304,9 @@ export default function App() {
                 id: question.id,
                 text: question.text,
               })),
+              stakeholders: current.stakeholderAssignments,
+              repositories: current.repositories,
+              overlayFiles: current.scopeOverlays,
             },
             {
               onThinking: (chunk) => {
@@ -1359,6 +1369,23 @@ export default function App() {
                 return false
               }
             }
+            // Frontier is now empty: pause for explicit human confirmation of shared understanding.
+            const readyPatch: Partial<WizardState> = {
+              groomDraft: draft,
+              groomAnswers: effectiveAnswers,
+              groomStatus: 'draft_ready',
+              groomMessage:
+                result.message ||
+                'Every branch of the design tree is settled. Review the synthesized draft below and confirm shared understanding.',
+              groomConfirmed: false,
+            }
+            patch(readyPatch)
+            stateRef.current = { ...current, ...readyPatch }
+            setStatus({
+              type: 'info',
+              message: 'Frontier is empty — review the final wording and click Confirm shared understanding.',
+            })
+            return false
           }
         } catch {
           setStatus({

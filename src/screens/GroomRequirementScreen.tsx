@@ -7,11 +7,11 @@ import { roleLabel, STAKEHOLDER_ROLES } from '../wizard/stakeholders'
 import type { GroomQuestion, WizardState, WizardStep } from '../wizard/types'
 import {
   applyRecommendedAnswers,
-  compactQuestionText,
   isAnswered,
   isDeferredToJira,
   isResolvedForWording,
   recommendedOptionForQuestion,
+  splitQuestionTitleAndText,
 } from '../wizard/grooming'
 
 interface Props {
@@ -91,14 +91,22 @@ function QuestionCard({
     onToggleOther(question.id, checked)
   }
 
+  const { title: displayTitle, text: displayText } = splitQuestionTitleAndText(
+    question.title,
+    question.text,
+  )
+
   return (
     <fieldset className="groom-question">
       <legend className="groom-question-legend">
-        <span className="groom-q-number">Q{index + 1}</span>
+        <span className="groom-q-number">❓ Q{index + 1}</span>
         {(question.round ?? 1) > 1 ? (
           <span className="groom-round-pill">Round {question.round}</span>
         ) : null}
-        <span className="groom-question-text">{compactQuestionText(question.text)}</span>
+        <span className="groom-question-text">
+          {displayTitle ? <strong>{displayTitle}: </strong> : null}
+          {displayText}
+        </span>
         <span className="groom-question-badge">
           {isMultiple ? 'Select all that apply' : 'Select one'}
         </span>
@@ -247,32 +255,54 @@ export function GroomingPanel({
 }: Props) {
   const questions = state.groomQuestions
   const asked = questions.length > 0 || state.groomStatus === 'draft_ready' || state.groomStatus === 'error'
-  const resolvedCount = questions.filter((question) =>
+  const round = Math.max(1, state.groomRound || 1)
+  const frontierEmpty = state.groomStatus === 'draft_ready' && !state.groomConfirmed
+  const currentRoundQuestions =
+    round > 1 ? questions.filter((q) => (q.round ?? 1) === round) : questions
+  const frontierQuestions = frontierEmpty
+    ? []
+    : currentRoundQuestions.length > 0
+      ? currentRoundQuestions
+      : questions
+  const settledQuestions = frontierEmpty
+    ? questions
+    : round > 1 && currentRoundQuestions.length > 0
+      ? questions.filter((q) => (q.round ?? 1) < round)
+      : []
+  const resolvedCount = frontierQuestions.filter((question) =>
     isResolvedForWording(question, state.groomAnswers),
   ).length
-  const unresolvedCount = questions.length - resolvedCount
+  const unresolvedCount = frontierQuestions.length - resolvedCount
   const [wordingOpen, setWordingOpen] = useState(false)
-  const round = Math.max(1, state.groomRound || 1)
-  const followUpRound = round > 1 && !state.groomConfirmed
+  const followUpRound = round > 1 && !state.groomConfirmed && !frontierEmpty
   const showDraft = Boolean(
     state.groomDraft && (state.groomStatus === 'draft_ready' || state.groomConfirmed || followUpRound),
   )
+  const draftExpanded = wordingOpen || frontierEmpty
 
   return (
     <div className="groom-panel">
       <div className="groom-panel-intro">
         <div className="req-section-head">
-          <h3>{followUpRound ? `Design frontier · Round ${round}` : 'Clarify design frontier'}</h3>
+          <h3>
+            {frontierEmpty
+              ? 'Frontier complete — confirm shared understanding'
+              : followUpRound
+                ? `Design frontier · Round ${round}`
+                : 'Clarify design frontier'}
+          </h3>
           <p>
-            {followUpRound
-              ? 'Your previous answers unlocked these downstream decisions. Accept recommendations or pick options.'
-              : 'Each question includes a recommended answer (➡️). Override any choice or accept recommendations.'}
+            {frontierEmpty
+              ? 'Every branch of the design tree has been visited. Review the synthesized wording below and confirm shared understanding before Blink acts on it.'
+              : followUpRound
+                ? 'Your previous answers reshaped the tree and unlocked these downstream decisions. Pick an option or accept the recommendations.'
+                : 'Each frontier question marks its recommended answer (➡️) first in the list. Pick an alternative or accept recommendations.'}
           </p>
         </div>
-        {asked && questions.length > 0 ? (
+        {asked && frontierQuestions.length > 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
             <p className="groom-progress" style={{ margin: 0 }}>
-              {resolvedCount}/{questions.length} answered
+              {resolvedCount}/{frontierQuestions.length} answered in Round {round}
             </p>
             {unresolvedCount > 0 && !state.groomConfirmed ? (
               <button
@@ -281,7 +311,7 @@ export function GroomingPanel({
                 disabled={loading}
                 onClick={() =>
                   onUpdate({
-                    groomAnswers: applyRecommendedAnswers(questions, state.groomAnswers),
+                    groomAnswers: applyRecommendedAnswers(frontierQuestions, state.groomAnswers),
                     groomConfirmed: false,
                   })
                 }
@@ -298,9 +328,32 @@ export function GroomingPanel({
 
       {state.groomMessage && asked && <p className="muted">{state.groomMessage}</p>}
 
-      {questions.length > 0 ? (
+      {settledQuestions.length > 0 ? (
+        <details className="groom-settled-rounds" style={{ marginBottom: '0.85rem' }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', opacity: 0.85 }}>
+            Settled in earlier rounds ({settledQuestions.length} decision{settledQuestions.length === 1 ? '' : 's'})
+          </summary>
+          <div className="groom-frontier-list" style={{ marginTop: '0.6rem' }}>
+            {settledQuestions.map((question, idx) => (
+              <QuestionCard
+                key={question.id}
+                question={question}
+                index={idx}
+                state={state}
+                onPick={onPick}
+                onOther={onOther}
+                onToggleOther={onToggleOther}
+                onUpdate={onUpdate}
+                onNavigate={onNavigate}
+              />
+            ))}
+          </div>
+        </details>
+      ) : null}
+
+      {frontierQuestions.length > 0 ? (
         <div className="groom-frontier-list">
-          {questions.map((question, idx) => (
+          {frontierQuestions.map((question, idx) => (
             <QuestionCard
               key={question.id}
               question={question}
@@ -317,30 +370,36 @@ export function GroomingPanel({
       ) : null}
 
       {showDraft && (
-        <section className={`groom-band${wordingOpen ? ' open' : ''}`}>
+        <section className={`groom-band${draftExpanded ? ' open' : ''}`}>
           <button
             type="button"
             className="groom-band-header"
-            aria-expanded={wordingOpen}
+            aria-expanded={draftExpanded}
             onClick={() => setWordingOpen((open) => !open)}
           >
             <div className="req-section-head">
-              <h3>{state.groomConfirmed ? 'Confirmed wording' : 'Clearer wording'}</h3>
+              <h3>
+                {state.groomConfirmed
+                  ? 'Confirmed wording'
+                  : frontierEmpty
+                    ? 'Shared understanding — final requirement draft'
+                    : 'Clearer wording'}
+              </h3>
               <p>
-                {wordingOpen
+                {draftExpanded
                   ? 'Click to hide the requirement text'
                   : 'Click to view the requirement text'}
               </p>
             </div>
             <span className="groom-band-meta">
-              {state.groomConfirmed ? 'Saved' : 'Draft'}
-              {wordingOpen ? 'Hide' : 'Show'}
+              {state.groomConfirmed ? 'Saved' : frontierEmpty ? 'Ready to confirm' : 'Draft'}
+              {draftExpanded ? 'Hide' : 'Show'}
               <span className="groom-band-chevron" aria-hidden>
-                <ChevronDown size={16} className={wordingOpen ? 'chevron open' : 'chevron'} />
+                <ChevronDown size={16} className={draftExpanded ? 'chevron open' : 'chevron'} />
               </span>
             </span>
           </button>
-          {wordingOpen ? (
+          {draftExpanded ? (
             <div className={`groom-compare${state.groomOriginal && state.groomOriginal !== state.groomDraft ? '' : ' is-single'}`}>
               {state.groomOriginal && state.groomOriginal !== state.groomDraft && (
                 <div>
@@ -370,7 +429,7 @@ export function GroomingPanel({
             Start over
           </button>
           <span className="action-spacer" />
-          {!state.groomConfirmed && questions.length > 0 && onLockWording ? (
+          {!state.groomConfirmed && frontierQuestions.length > 0 && onLockWording ? (
             <button
               type="button"
               className="secondary-btn"
@@ -391,11 +450,11 @@ export function GroomingPanel({
               ? 'Checking frontier…'
               : state.groomConfirmed
                 ? 'Wording saved'
-                : questions.length > 0
+                : frontierQuestions.length > 0
                   ? unresolvedCount > 0
-                    ? 'Accept recommended & continue'
-                    : 'Submit answers'
-                  : 'Use this wording'}
+                    ? 'Accept recommended & next round'
+                    : 'Submit round answers'
+                  : 'Confirm shared understanding'}
             {state.groomConfirmed ? <Check size={16} /> : <Sparkles size={16} />}
           </button>
         </div>
