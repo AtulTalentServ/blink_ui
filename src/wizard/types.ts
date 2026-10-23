@@ -148,6 +148,7 @@ export interface GroomOption {
 
 export interface GroomQuestion {
   id: string
+  title?: string
   text: string
   subtitle?: string
   options: GroomOption[]

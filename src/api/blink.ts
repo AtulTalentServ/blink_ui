@@ -189,6 +189,7 @@ function normalizeGroomQuestions(value: unknown): GroomQuestionDto[] {
       : []
     const text = String(row.text || '').trim()
     const id = String(row.id || '').trim()
+    const title = row.title ? String(row.title).trim() : undefined
     const subtitle = row.subtitle ? String(row.subtitle).trim() : undefined
     if (!id || !text || options.length < 2) return []
     let recOpt = options.find((opt) => opt.recommended)
@@ -213,6 +214,7 @@ function normalizeGroomQuestions(value: unknown): GroomQuestionDto[] {
     return [
       {
         id: id || `q-${index + 1}`,
+        ...(title ? { title } : {}),
         text,
         ...(subtitle ? { subtitle } : {}),
         options,
@@ -2334,6 +2336,7 @@ export interface GroomOptionDto {
 
 export interface GroomQuestionDto {
   id: string
+  title?: string
   text: string
   subtitle?: string
   options: GroomOptionDto[]
@@ -2365,6 +2368,9 @@ export async function clarifyRequirement(
     answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
     clarifyRound?: number
     previousQuestions?: { id: string; text: string }[]
+    stakeholders?: unknown
+    repositories?: unknown
+    overlayFiles?: { path: string; content: string }[]
   },
   signal?: AbortSignal,
 ): Promise<GroomClarifyResult> {
@@ -2381,6 +2387,9 @@ export async function clarifyRequirement(
     answers: answers?.length ? answers : undefined,
     clarifyRound: options.clarifyRound,
     previousQuestions: options.previousQuestions?.length ? options.previousQuestions : undefined,
+    stakeholders: options.stakeholders || undefined,
+    repositories: options.repositories || undefined,
+    overlayFiles: options.overlayFiles?.length ? options.overlayFiles : undefined,
   }
   const controller = new AbortController()
   const onAbort = () => controller.abort()
@@ -2436,6 +2445,9 @@ export async function streamClarifyRequirement(
     answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
     clarifyRound?: number
     previousQuestions?: { id: string; text: string }[]
+    stakeholders?: unknown
+    repositories?: unknown
+    overlayFiles?: { path: string; content: string }[]
   },
   handlers: {
     onThinking?: (text: string) => void
@@ -2455,6 +2467,9 @@ export async function streamClarifyRequirement(
     answers: answers?.length ? answers : undefined,
     clarifyRound: options.clarifyRound,
     previousQuestions: options.previousQuestions?.length ? options.previousQuestions : undefined,
+    stakeholders: options.stakeholders || undefined,
+    repositories: options.repositories || undefined,
+    overlayFiles: options.overlayFiles?.length ? options.overlayFiles : undefined,
   }
   try {
     const done = await postSseJson<GroomClarifyResult>(

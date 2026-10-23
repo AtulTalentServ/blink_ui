@@ -8,12 +8,10 @@ import {
 } from './apiTarget'
 
 type ApiTargetControlProps = {
-  /** Smaller layout for login screen (no developer popup chrome). */
-  compact?: boolean
   onTargetChange?: (target: ApiTarget) => void
 }
 
-export function ApiTargetControl({ compact, onTargetChange }: ApiTargetControlProps) {
+export function ApiTargetControl({ onTargetChange }: ApiTargetControlProps) {
   const [target, setTargetState] = useState<ApiTarget>(() => getApiTarget())
   const [label, setLabel] = useState(() => describeApiTarget())
 
@@ -39,29 +37,6 @@ export function ApiTargetControl({ compact, onTargetChange }: ApiTargetControlPr
       /* Storage unavailable */
     }
     onTargetChange?.(next)
-  }
-
-  if (compact) {
-    return (
-      <div className="login-api-target">
-        <label htmlFor="login-api-target">
-          <span>API backend</span>
-          <select
-            id="login-api-target"
-            value={target}
-            disabled={false}
-            onChange={(event) => selectTarget(event.target.value as ApiTarget)}
-          >
-            {API_TARGET_OPTIONS.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="login-api-target-hint">{label}</p>
-      </div>
-    )
   }
 
   return (

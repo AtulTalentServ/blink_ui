@@ -3,57 +3,51 @@ import { hasRequirementSource } from './groomingEligibility.ts'
 
 export type GroomPriority = 'need_clarification' | 'important' | 'suggestion'
 
-export const GROOM_BANDS: {
-  id: GroomPriority
-  title: string
-  hint: string
-  required: boolean
-}[] = [
-  {
-    id: 'need_clarification',
-    title: 'Need clarification',
-    hint: 'Required. These gaps block a first version.',
-    required: true,
-  },
-  {
-    id: 'important',
-    title: 'Important',
-    hint: 'Optional. Answer if you already know.',
-    required: false,
-  },
-  {
-    id: 'suggestion',
-    title: 'Suggestions',
-    hint: 'Optional ideas. Skip anything that does not fit.',
-    required: false,
-  },
-]
-
-const CATEGORY_PREFIX = /^\s*(?:\[[^\]]{1,48}\]\s*|[A-Za-z][A-Za-z /&]{0,40}:\s+)/
+const BRACKET_PREFIX = /^\s*\[[^\]]{1,48}\]\s*/
+const LEADING_TITLE_COLON =
+  /^\s*(?!what\b|which\b|who\b|where\b|when\b|why\b|how\b|should\b|can\b|could\b|would\b|will\b|do\b|does\b|did\b|is\b|are\b|may\b)([A-Za-z][A-Za-z0-9 /&'_-]{1,42}):\s+([\s\S]+)$/i
 const STACKED_ASK =
-  /(?:(?<=[.?])|(?<=,))\s+(?:also|additionally)\s+(?:confirm|specify|include|choose|decide|clarify|ask)\b.*$/is
+  /(?:(?<=[.?])|(?<=,))\s+(?:also|additionally)\s+(?:confirm|specify|include|choose|decide|clarify|ask)\b[\s\S]*$/i
+const TRAILING_META_FILLER =
+  /(?<=\?)\s+(?:please\s+(?:specify|confirm|list|choose|clarify)\b|may\s+the\s+proposed\s+default\b)[\s\S]*$/i
 
-/** Drop [Category] prefixes and stacked "also confirm" clauses from MCQ text. */
-export function compactQuestionText(text: string): string {
-  const original = (text || '').trim()
-  if (!original) return original
-  let cleaned = original.replace(CATEGORY_PREFIX, '').trim()
+/** Extract or preserve `<question title>` while stripping `[Category]` prefixes and stacked asks. */
+export function splitQuestionTitleAndText(
+  rawTitle: string | undefined,
+  rawText: string,
+): { title?: string; text: string } {
+  const explicitTitle = (rawTitle || '').replace(/\s+/g, ' ').trim().replace(/:$/, '')
+  const original = (rawText || '').trim()
+  if (!original) {
+    return { ...(explicitTitle ? { title: explicitTitle } : {}), text: '' }
+  }
+  let cleaned = original.replace(BRACKET_PREFIX, '').trim()
   cleaned = cleaned.replace(STACKED_ASK, '').trim()
-  cleaned = cleaned.replace(CATEGORY_PREFIX, '').trim()
-  cleaned = cleaned.replace(/\s+/g, ' ')
-  const qmark = cleaned.indexOf('?')
-  if (qmark >= 0) cleaned = cleaned.slice(0, qmark + 1).trim()
-  return cleaned || original
+  cleaned = cleaned.replace(TRAILING_META_FILLER, '').trim()
+  let inferredTitle: string | undefined
+  const m = LEADING_TITLE_COLON.exec(cleaned)
+  if (m) {
+    inferredTitle = m[1].replace(/\s+/g, ' ').trim()
+    cleaned = m[2].trim()
+  }
+  cleaned = cleaned.replace(BRACKET_PREFIX, '').trim()
+  cleaned = cleaned.replace(/[ \t]+/g, ' ').trim()
+  const title = explicitTitle || inferredTitle || undefined
+  return {
+    ...(title ? { title } : {}),
+    text: cleaned || original,
+  }
+}
+
+/** Drop [Category] prefixes and stacked "also confirm" clauses while preserving question body. */
+export function compactQuestionText(text: string): string {
+  return splitQuestionTitleAndText(undefined, text).text
 }
 
 export function questionPriority(question: GroomQuestion): GroomPriority {
   const value = question.priority
   if (value === 'important' || value === 'suggestion') return value
   return 'need_clarification'
-}
-
-export function questionsInBand(questions: GroomQuestion[], band: GroomPriority): GroomQuestion[] {
-  return questions.filter((question) => questionPriority(question) === band)
 }
 
 type IncomingQuestion = Omit<GroomQuestion, 'priority'> & { priority?: GroomPriority }
@@ -70,12 +64,14 @@ export function assignQuestionBands(questions: IncomingQuestion[], round = 1): G
       options[0] = { ...options[0], recommended: true }
       recOpt = options[0]
     }
+    const { title, text } = splitQuestionTitleAndText(question.title, question.text)
     return {
       ...question,
+      ...(title ? { title } : {}),
       options,
       recommendedOptionId: recOpt?.id || question.recommendedOptionId,
       round: question.round ?? round,
-      text: compactQuestionText(question.text),
+      text,
       priority: questionPriority(question as GroomQuestion),
     }
   })
@@ -113,7 +109,7 @@ export function applyRecommendedAnswers(
 }
 
 export function requiredGroomQuestions(questions: GroomQuestion[]): GroomQuestion[] {
-  return questionsInBand(questions, 'need_clarification')
+  return questions.filter((question) => questionPriority(question) === 'need_clarification')
 }
 
 export function answersForQuestion(questionId: string, answers: GroomAnswer[]): GroomAnswer[] {
