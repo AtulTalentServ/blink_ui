@@ -2367,7 +2367,7 @@ export async function clarifyRequirement(
     mode?: string
     answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
     clarifyRound?: number
-    previousQuestions?: { id: string; text: string }[]
+    previousQuestions?: { id: string; title?: string; text: string }[]
     stakeholders?: unknown
     repositories?: unknown
     overlayFiles?: { path: string; content: string }[]
@@ -2444,7 +2444,7 @@ export async function streamClarifyRequirement(
     mode?: string
     answers?: { questionId: string; optionId: string; optionLabel?: string; otherText?: string }[]
     clarifyRound?: number
-    previousQuestions?: { id: string; text: string }[]
+    previousQuestions?: { id: string; title?: string; text: string }[]
     stakeholders?: unknown
     repositories?: unknown
     overlayFiles?: { path: string; content: string }[]

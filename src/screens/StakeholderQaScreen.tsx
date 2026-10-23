@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { GroomingPanel } from './GroomRequirementScreen'
 import { DesignOptionsPanel } from './DesignOptionsPanel'
 import { JiraScopePanel } from './JiraScopePanel'
@@ -10,14 +10,13 @@ import {
 } from './StakeholderQuestionsScreen'
 import {
   StakeholderResponsesScreen,
-  shouldAutoRunGroomingLoop,
   validateStakeholderResponses,
 } from './StakeholderResponsesScreen'
 import type { QuestionResponse, StakeholderQuestion, WizardState, WizardStep } from '../wizard/types'
 import { applyImplicitGroomAck, groomQaGateSatisfied } from '../wizard/groomGate'
 import { shouldAutoStartClarify, type JiraPublishState } from '../wizard/thinking'
 
-type QaTab = 'clarify' | 'stakeholders' | 'tickets'
+export type QaTab = 'clarify' | 'stakeholders' | 'tickets'
 
 const QA_STEPS: { id: QaTab; label: string; title: string; detail: string }[] = [
   {
@@ -63,6 +62,8 @@ interface Props {
   onResolveAllLatest?: () => void
   onPatchQuestion?: (questionId: string, patch: Partial<StakeholderQuestion>) => void
   onNavigate?: (step: WizardStep) => void
+  activeTab?: QaTab
+  onTabChange?: (tab: QaTab) => void
   sending?: boolean
   posting?: boolean
   refreshing?: boolean
@@ -76,16 +77,22 @@ interface Props {
  2) Stakeholders — send questions and resolve answers
  3) Scope & tickets — propose epics/stories from confirmed requirement
 */
-function defaultTab(state: WizardState): QaTab {
+export function defaultQaTab(state: WizardState): QaTab {
   if (state.requirementsText.trim() && !state.groomConfirmed) return 'clarify'
   if (state.groomAcknowledged && !hasDraftTickets(state)) return 'tickets'
+  if (state.groomConfirmed && state.questions.length === 0) return 'tickets'
   if (state.groomConfirmed) return 'stakeholders'
   return 'clarify'
 }
 
 export function StakeholderQaScreen(props: Props) {
-  const { state } = props
-  const [tab, setTab] = useState<QaTab>(() => defaultTab(state))
+  const { state, activeTab, onTabChange } = props
+  const [internalTab, setInternalTab] = useState<QaTab>(() => defaultQaTab(state))
+  const tab = activeTab ?? internalTab
+  const selectTab = (next: QaTab) => {
+    setInternalTab(next)
+    onTabChange?.(next)
+  }
   const hasTextSource = Boolean(state.requirementsText.trim())
   const fileOnlySource = Boolean(state.requirementFileName && !hasTextSource)
   const wordingConfirmed = state.groomConfirmed || fileOnlySource
@@ -95,21 +102,39 @@ export function StakeholderQaScreen(props: Props) {
   const canUseStakeholderWorkflow = wordingConfirmed
   const canPlanTickets = wordingConfirmed && groomQaGateSatisfied(state)
 
-  useEffect(() => {
-    if (shouldAutoRunGroomingLoop(state) && !state.groomAcknowledged) setTab('stakeholders')
-  }, [state.questions, state.responses, state.groomRejectPending, state.groomAcknowledged])
+  // Track previous boolean states so we only auto-advance on false -> true transition edges,
+  // never hijacking the sub-tab when the user manually clicks back to Clarify or Stakeholders.
+  const prevGroomConfirmedRef = useRef(state.groomConfirmed)
+  const prevGroomAcknowledgedRef = useRef(state.groomAcknowledged)
 
   useEffect(() => {
-    if (hasTextSource && !state.groomConfirmed) setTab('clarify')
-  }, [hasTextSource, state.groomConfirmed])
+    const justConfirmed = !prevGroomConfirmedRef.current && state.groomConfirmed
+    const justUnconfirmed = prevGroomConfirmedRef.current && !state.groomConfirmed
+    prevGroomConfirmedRef.current = state.groomConfirmed
+
+    if (justUnconfirmed && hasTextSource) {
+      selectTab('clarify')
+      return
+    }
+    if (justConfirmed) {
+      if (state.questions.length === 0) {
+        applyImplicitGroomAck(state, props.onUpdate)
+        selectTab('tickets')
+      } else {
+        selectTab('stakeholders')
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasTextSource, props.onUpdate, state, state.groomConfirmed, state.questions.length])
 
   useEffect(() => {
-    if (state.groomConfirmed && !state.groomAcknowledged) setTab('stakeholders')
-  }, [state.groomConfirmed, state.groomAcknowledged])
-
-  useEffect(() => {
-    if (state.groomAcknowledged && !hasDraftTickets(state)) setTab('tickets')
-  }, [state.groomAcknowledged, state.productScope?.epics?.length, state.productScope?.stories?.length])
+    const justAcked = !prevGroomAcknowledgedRef.current && state.groomAcknowledged
+    prevGroomAcknowledgedRef.current = state.groomAcknowledged
+    if (justAcked && !hasDraftTickets(state)) {
+      selectTab('tickets')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, state.groomAcknowledged])
 
   useEffect(() => {
     if (tab !== 'clarify' || !canClarify || props.grooming) return
@@ -165,7 +190,7 @@ export function StakeholderQaScreen(props: Props) {
                 onClick={() => {
                   if (!enabled) return
                   if (step.id === 'tickets') applyImplicitGroomAck(state, props.onUpdate)
-                  setTab(step.id)
+                  selectTab(step.id)
                 }}
               >
                 <span className="ship-step-index">{index + 1}</span>
@@ -232,6 +257,10 @@ export function StakeholderQaScreen(props: Props) {
               onPostAllJira={props.onPostAllJira}
               onRefreshJira={props.onRefreshJira}
               onNavigate={props.onNavigate}
+              onOpenTicketsTab={() => {
+                applyImplicitGroomAck(state, props.onUpdate)
+                selectTab('tickets')
+              }}
               sending={props.sending}
               posting={props.posting}
               refreshing={props.refreshing}
@@ -264,6 +293,7 @@ export function StakeholderQaScreen(props: Props) {
                   sourceText={state.groomDraft || state.requirementsText}
                   jiraPublish={props.jiraPublish}
                   allowAutoPlan
+                  onPostAllJira={props.onPostAllJira}
                 />
                 <ScopeStartStatus state={state} onUpdate={props.onUpdate} />
               </>
@@ -277,7 +307,7 @@ export function StakeholderQaScreen(props: Props) {
                   <button
                     type="button"
                     className="secondary-btn"
-                    onClick={() => setTab(wordingConfirmed ? 'stakeholders' : 'clarify')}
+                    onClick={() => selectTab(wordingConfirmed ? 'stakeholders' : 'clarify')}
                   >
                     {wordingConfirmed ? 'Go to Stakeholders' : 'Go to Clarify'}
                   </button>

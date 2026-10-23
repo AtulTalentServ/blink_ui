@@ -19,6 +19,7 @@ import {
 } from '../api/blink'
 import {
   groomingLoopSettled,
+  isDeferredUntilJiraTicketsExist,
   mandatoryResponsesReady,
   mergeScopeOverlays,
   requirementTextFromState,
@@ -57,7 +58,8 @@ function outboundHandled(q: StakeholderQuestion, state: WizardState): boolean {
   const jiraDone =
     (q.jiraCommentStatus === 'posted' || q.jiraCommentStatus === 'replied') && Boolean(q.jiraCommentId)
   const answered = state.responses.find((r) => r.questionId === q.id)?.status === 'answered'
-  return Boolean(emailed || jiraDone || answered)
+  const deferredForTickets = isDeferredUntilJiraTicketsExist(q, state)
+  return Boolean(emailed || jiraDone || answered || deferredForTickets)
 }
 
 export { mandatoryResponsesReady } from '../wizard/stakeholderSync'
@@ -268,60 +270,59 @@ export function StakeholderResponsesScreen({
     setGroomError(null)
     try {
       if (needRevision) {
-        if (needPack) {
-          setGroomBusy('pack')
-          const res = await groomingStakeholderPack(projectId, {
-            requirementText,
+        setGroomBusy(needPack ? 'pack' : 'revision')
+        const [packRes, rev] = await Promise.all([
+          needPack
+            ? groomingStakeholderPack(projectId, {
+                requirementText,
+                overlayFiles: overlays,
+                issueId: state.productScope?.storyIds?.[0],
+              })
+            : Promise.resolve(null),
+          groomingRevision(projectId, {
+            requirementText: draftText,
+            stakeholderFeedback: feedback,
             overlayFiles: overlays,
-            issueId: state.productScope?.storyIds?.[0],
-          })
-          if (res.status !== 'ok') throw new Error(res.message || 'Stakeholder pack failed')
-          pack = res.stakeholderPack || pack
-          overlays = mergeScopeOverlays(overlays, res.overlayFiles)
-          onUpdate({
-            stakeholderPack: pack,
-            scopeOverlays: overlays,
-            nextSdlcCommand: res.nextCommand || '/grooming-revision',
-          })
+            groomingRevision: revision,
+            issueId: pack?.issueId || state.productScope?.storyIds?.[0],
+          }),
+        ])
+        if (packRes) {
+          if (packRes.status !== 'ok') throw new Error(packRes.message || 'Stakeholder pack failed')
+          pack = packRes.stakeholderPack || pack
+          overlays = mergeScopeOverlays(overlays, packRes.overlayFiles)
         }
-        setGroomBusy('revision')
-        const rev = await groomingRevision(projectId, {
-          requirementText: draftText,
-          stakeholderFeedback: feedback,
-          overlayFiles: overlays,
-          groomingRevision: revision,
-          issueId: pack?.issueId,
-        })
         if (rev.status !== 'ok') throw new Error(rev.message || 'Grooming revision failed')
         revision = rev.groomingRevision || revision
         draftText = rev.requirementDraft || rev.groomingRevision?.requirementMarkdown || draftText
         overlays = mergeScopeOverlays(overlays, rev.overlayFiles)
-          onUpdate({
-            groomingRevision: revision,
-            groomDraft: draftText,
-            requirementsText: draftText,
-            scopeOverlays: overlays,
-            nextSdlcCommand: rev.nextCommand || '/grooming-sign-off-capture',
+        onUpdate({
+          ...(packRes ? { stakeholderPack: pack } : {}),
+          groomingRevision: revision,
+          groomDraft: draftText,
+          requirementsText: draftText,
+          scopeOverlays: overlays,
+          nextSdlcCommand: rev.nextCommand || '/grooming-sign-off-capture',
+        })
+        if (needSignOff) {
+          setGroomBusy('signoff')
+          const sign = await groomingSignOffCapture(projectId, {
+            requirementText: draftText,
+            stakeholderFeedback: feedback,
+            overlayFiles: overlays,
+            issueId: revision?.issueId || pack?.issueId,
           })
-          if (needSignOff) {
-            setGroomBusy('signoff')
-            const sign = await groomingSignOffCapture(projectId, {
-              requirementText: draftText,
-              stakeholderFeedback: feedback,
-              overlayFiles: overlays,
-              issueId: revision?.issueId || pack?.issueId,
-            })
-            if (sign.status !== 'ok') throw new Error(sign.message || 'Sign-off capture failed')
-            overlays = mergeScopeOverlays(overlays, sign.overlayFiles)
-            onUpdate({
-              groomingSignOff: sign.groomingSignOff || null,
-              scopeOverlays: overlays,
-              nextSdlcCommand: sign.nextCommand || '/sdlc-next',
-              groomingLoopFeedbackAt: feedback,
-            })
-          } else {
-            onUpdate({ groomingLoopFeedbackAt: feedback })
-          }
+          if (sign.status !== 'ok') throw new Error(sign.message || 'Sign-off capture failed')
+          overlays = mergeScopeOverlays(overlays, sign.overlayFiles)
+          onUpdate({
+            groomingSignOff: sign.groomingSignOff || null,
+            scopeOverlays: overlays,
+            nextSdlcCommand: sign.nextCommand || '/sdlc-next',
+            groomingLoopFeedbackAt: feedback,
+          })
+        } else {
+          onUpdate({ groomingLoopFeedbackAt: feedback })
+        }
         groomFailedForFeedbackRef.current = null
         return
       }
@@ -786,7 +787,9 @@ export function validateStakeholderResponses(state: WizardState): string | null 
     .filter((q) => q.mandatory)
     .filter((q) => {
       const response = state.responses.find((r) => r.questionId === q.id)
-      return !isResolved(response, q)
+      if (isResolved(response, q)) return false
+      if (isDeferredUntilJiraTicketsExist(q, state)) return false
+      return true
     })
   if (pending.length > 0) {
     const discussing = pending.filter(

@@ -180,12 +180,29 @@ export function stepAttention(
   return 'idle'
 }
 
-/** Floating footer only — in-page actions must not reuse this word. */
+/** Floating footer primary label — step-aware so the bottom-right CTA is predictable across tabs. */
 export function primaryContinueLabel(
-  _step: WizardStep,
+  step: WizardStep,
   busy: { saving?: boolean; creatingRepos?: boolean },
 ): string {
   if (busy.creatingRepos) return 'Creating on GitHub…'
   if (busy.saving) return 'Saving…'
-  return 'Continue'
+  switch (step) {
+    case 'project-stakeholders':
+      return 'Save & continue'
+    case 'integrations':
+      return 'Continue to Requirements'
+    case 'requirements':
+      return 'Clarify requirements'
+    case 'project-shape':
+      return 'Continue to Repositories'
+    case 'repositories':
+      return 'Continue to Technology'
+    case 'technology-per-repo':
+      return 'Confirm stack & plan'
+    case 'sdlc-plan':
+      return 'Continue to Ship'
+    default:
+      return 'Continue'
+  }
 }
