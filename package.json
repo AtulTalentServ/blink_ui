@@ -13,6 +13,7 @@
       "preview": "vite preview",
       "test:grooming": "node --experimental-strip-types src/wizard/grooming.check.ts",
       "test:jira-match": "node --experimental-strip-types src/wizard/jiraMatch.check.ts",
+      "test:jira-tickets": "node --experimental-strip-types src/wizard/jiraTickets.check.ts",
       "test:resume": "node --experimental-strip-types src/wizard/resume.check.ts",
       "test:thinking": "node --experimental-strip-types src/wizard/thinking.check.ts"
     },
