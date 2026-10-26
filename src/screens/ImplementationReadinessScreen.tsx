@@ -151,7 +151,6 @@ function resultSummary(step: ShipStepDto): { summary?: string; prCount: number; 
     prUrlsFromUnknown(rec.draftPullRequests),
     prUrlsFromUnknown(rec.pullRequests),
     prUrlsFromText(summary),
-    prUrlsFromText(typeof evidence?.draftPrError === 'string' ? evidence.draftPrError : undefined),
   )
   const prCount = prUrls.length || (Array.isArray(rec.draftPullRequests) ? rec.draftPullRequests.length : 0)
   const skipReason = typeof evidence?.draftPrSkipped === 'string'
@@ -185,37 +184,38 @@ function buildStoryRows(
   registered: { issueId: string; url: string }[],
 ): StoryRow[] {
   const byIssue = new Map<string, { summary?: string; prCount: number; prUrls: string[]; skipReason?: string }>()
+  // implementSteps arrive newest first. Keep the newest draft link and ignore older closed ones.
   for (const step of implementSteps) {
     const id = payloadIssueId(step)
     if (!id) continue
-    const { summary, prCount, prUrls, skipReason } = resultSummary(step)
+    const { summary, prUrls, skipReason } = resultSummary(step)
     const prev = byIssue.get(id)
+    const kept = prev?.prUrls.length ? prev.prUrls : prUrls
     byIssue.set(id, {
-      summary: summary || prev?.summary,
-      prCount: Math.max(prev?.prCount || 0, prCount),
-      prUrls: mergePrUrls(prev?.prUrls, prUrls),
-      skipReason: prUrls.length ? undefined : (skipReason || prev?.skipReason),
+      summary: prev?.summary || summary,
+      prCount: kept.length,
+      prUrls: kept,
+      skipReason: kept.length ? undefined : (prev?.skipReason || skipReason),
     })
   }
   for (const pr of registered) {
     if (!pr.issueId || !pr.url) continue
-    const prev = byIssue.get(pr.issueId) || { prCount: 0, prUrls: [] as string[] }
-    const prUrls = mergePrUrls(prev.prUrls, [pr.url])
+    const prev = byIssue.get(pr.issueId)
+    if (prev?.prUrls.length) continue
     byIssue.set(pr.issueId, {
-      summary: prev.summary,
-      prCount: Math.max(prev.prCount, prUrls.length),
-      prUrls,
+      summary: prev?.summary,
+      prCount: 1,
+      prUrls: [pr.url],
       skipReason: undefined,
     })
   }
-  if (latestIssueId) {
-    const prev = byIssue.get(latestIssueId) || { prCount: 0, prUrls: [] as string[] }
-    const prUrls = mergePrUrls(prev.prUrls, latestPrUrls)
+  if (latestIssueId && latestPrUrls.length) {
+    const prev = byIssue.get(latestIssueId)
     byIssue.set(latestIssueId, {
-      summary: latestSummary || prev.summary,
-      prCount: Math.max(prev.prCount, prUrls.length),
-      prUrls,
-      skipReason: prUrls.length ? undefined : prev.skipReason,
+      summary: latestSummary || prev?.summary,
+      prCount: latestPrUrls.length,
+      prUrls: latestPrUrls,
+      skipReason: undefined,
     })
   }
 
@@ -365,8 +365,8 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
       : 'Re-run all'
   const selectedPrUrls = useMemo(() => {
     if (!selectedRow) return [] as string[]
-    if (selectedRow.id === state.implementStep?.issueId) {
-      return mergePrUrls(selectedRow.prUrls, latestSessionPrUrls)
+    if (selectedRow.id === state.implementStep?.issueId && latestSessionPrUrls.length) {
+      return latestSessionPrUrls
     }
     return selectedRow.prUrls
   }, [selectedRow, state.implementStep?.issueId, latestSessionPrUrls])
