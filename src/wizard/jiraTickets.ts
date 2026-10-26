@@ -8,6 +8,10 @@ import {
 } from '../api/blink'
 import type { JiraCreatedIssue, ProductScopeData, WizardState } from './types'
 import { scopePlanAgentPayload } from './workPlanContext'
+import type { BlinkMarkedJiraIssue } from './jiraLink'
+
+export type { BlinkMarkedJiraIssue, PlannedJiraScope } from './jiraLink'
+export { normalizeTicketTitle, reconcileBlinkJiraLinks, ticketTitlesMatch } from './jiraLink'
 
 let ticketsPipelineBusy = false
 let jiraCreateBusy = false
@@ -53,16 +57,7 @@ export function isLostJiraCreateKeys(item: JiraCreatedIssue | undefined): boolea
   return Boolean(item?.message && item.message === JIRA_CREATE_KEYS_LOST)
 }
 
-export function issuesFromBlinkJiraList(
-  issues: Array<{
-    key?: string
-    sourceId?: string
-    url?: string
-    type?: string
-    issueType?: string
-    sourceKind?: string
-  }>,
-): JiraCreatedIssue[] {
+export function issuesFromBlinkJiraList(issues: BlinkMarkedJiraIssue[]): JiraCreatedIssue[] {
   const map = new Map<string, JiraCreatedIssue>()
   const sorted = [...issues].sort((a, b) =>
     (a.key || '').localeCompare(b.key || '', undefined, { numeric: true }),

@@ -21,13 +21,13 @@ import {
   isJiraCreateBusy,
   isJiraReady,
   isLostJiraCreateKeys,
-  issuesFromBlinkJiraList,
   JIRA_CREATE_KEYS_LOST,
   jiraConnection,
   markTicketsPipelineBusy,
   mergeJiraCreatedIssues,
   pendingJiraTicketCount,
   planScopeFromWording,
+  reconcileBlinkJiraLinks,
 } from '../wizard/jiraTickets'
 import { shouldAutoStartTickets, type JiraPublishState } from '../wizard/thinking'
 
@@ -241,10 +241,14 @@ export function JiraScopePanel({
   const [transitionKey, setTransitionKey] = useState<string | null>(null)
   const [expandedEpicIds, setExpandedEpicIds] = useState<string[]>([])
   const planInFlight = useRef(false)
+  const jiraIssuesRef = useRef(state.jiraCreatedIssues)
+  jiraIssuesRef.current = state.jiraCreatedIssues
+  const scopeItemsRef = useRef({ epics: state.productScope?.epics || [], stories: state.productScope?.stories || [] })
 
   const jira = jiraConnection(state)
   const epics = state.productScope?.epics || []
   const stories = state.productScope?.stories || []
+  scopeItemsRef.current = { epics, stories }
   const jiraReady = isJiraReady(state)
   const createdOnScreen = createdTicketsOnScreen(state)
   const createdOk = createdOnScreen.length
@@ -341,16 +345,36 @@ export function JiraScopePanel({
     setCreatingIssues(true)
     setCreateError(null)
     pauseAutosave(180_000)
-    const latestCreated = { current: state.jiraCreatedIssues || [] }
+    let working = state.jiraCreatedIssues || []
+    if (state.projectId) {
+      try {
+        const listed = await fetchBlinkJiraIssues(state.projectId)
+        const reconciled = reconcileBlinkJiraLinks(working, listed.issues, { epics, stories })
+        working = reconciled.issues
+        if (reconciled.changed) onUpdate({ jiraCreatedIssues: working })
+      } catch {
+        /* A failed lookup must not block creating the tickets that are still unlinked. */
+      }
+    }
+    const linkedBySource = new Map(
+      working.filter((item) => item.sourceId).map((item) => [item.sourceId as string, item]),
+    )
+    if (pendingJiraTicketCount({ ...state, jiraCreatedIssues: working }) === 0) {
+      pauseAutosave(2_000)
+      setCreatingIssues(false)
+      endJiraCreate()
+      return
+    }
+    const latestCreated = { current: working }
     const placeholders = [...epics, ...stories]
-      .filter((item) => item.id && createdBySource.get(item.id)?.status !== 'created')
+      .filter((item) => item.id && linkedBySource.get(item.id)?.status !== 'created')
       .map((item) => ({ sourceId: item.id, status: 'creating' as const }))
     if (placeholders.length) {
       latestCreated.current = mergeJiraCreatedIssues(latestCreated.current, placeholders)
       onUpdate({ jiraCreatedIssues: latestCreated.current })
     }
     try {
-      const result = await createJiraIssuesFromState(state, {
+      const result = await createJiraIssuesFromState({ ...state, jiraCreatedIssues: working }, {
         pendingOnly: true,
         onStart: () => undefined,
         onItem: (issue) => {
@@ -426,33 +450,27 @@ export function JiraScopePanel({
       setCreatingIssues(false)
       endJiraCreate()
     }
-  }, [createdBySource, epics, onUpdate, state, stories])
+  }, [epics, onUpdate, state, stories])
 
-  const hydratedSig = useRef('')
+  const scopeLinkSig = [...epics, ...stories].map((item) => `${item.id}\t${item.title || ''}`).join('\n')
   useEffect(() => {
     if (!state.projectId || !jiraReady || creatingIssues || isJiraCreateBusy()) return
-    const total = epics.length + stories.length
-    if (total === 0 || createdOk >= total) return
-    const sig = `${state.projectId}:${total}`
-    if (hydratedSig.current === sig) return
-    hydratedSig.current = sig
+    if (!scopeLinkSig) return
     const projectId = state.projectId
-    console.info('[blink] jira hydrate start projectId=%s pending=%s', projectId, total - createdOk)
+    let cancelled = false
     void fetchBlinkJiraIssues(projectId)
       .then((listed) => {
-        const recovered = issuesFromBlinkJiraList(listed.issues)
-        console.info('[blink] jira hydrate listed=%s matched=%s', listed.issues.length, recovered.length)
-        if (!recovered.length) {
-          setCreateError(listed.message || JIRA_CREATE_KEYS_LOST)
-          return
-        }
-        onUpdate({ jiraCreatedIssues: mergeJiraCreatedIssues(state.jiraCreatedIssues, recovered) })
+        if (cancelled || isJiraCreateBusy()) return
+        const reconciled = reconcileBlinkJiraLinks(jiraIssuesRef.current, listed.issues, scopeItemsRef.current)
+        if (!reconciled.changed) return
+        onUpdate({ jiraCreatedIssues: reconciled.issues })
         setCreateError(null)
       })
-      .catch((err) => {
-        setCreateError(err instanceof Error ? err.message : JIRA_CREATE_KEYS_LOST)
-      })
-  }, [createdOk, creatingIssues, epics.length, jiraReady, onUpdate, state.jiraCreatedIssues, state.projectId, stories.length])
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [creatingIssues, jiraReady, onUpdate, scopeLinkSig, state.projectId])
 
   useEffect(() => {
     if (!state.projectId || !jiraReady || !issueKeySig) {
