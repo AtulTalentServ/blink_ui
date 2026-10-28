@@ -19,6 +19,7 @@ import {
   type ShipStepDto,
 } from '../api/blink'
 import { ImplementAllRequirementsPanel } from '../desktop/ImplementAllRequirementsPanel'
+import { StoryRunPanel } from './StoryRunPanel'
 import { patchFromCanonicalSnapshot } from '../wizard/canonical'
 import {
   loadImplementRunMode,
@@ -370,6 +371,27 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     }
     return selectedRow.prUrls
   }, [selectedRow, state.implementStep?.issueId, latestSessionPrUrls])
+  const previewPullRequests = useMemo(() => {
+    const seen = new Set<string>()
+    const frontend: string[] = []
+    const rest: string[] = []
+    for (const row of rows) {
+      for (const url of row.prUrls) {
+        const trimmed = url.trim()
+        if (!trimmed || seen.has(trimmed)) continue
+        seen.add(trimmed)
+        if (/frontend/i.test(trimmed)) frontend.push(trimmed)
+        else rest.push(trimmed)
+      }
+    }
+    for (const url of selectedPrUrls) {
+      const trimmed = url.trim()
+      if (!trimmed || seen.has(trimmed)) continue
+      seen.add(trimmed)
+      rest.push(trimmed)
+    }
+    return [...frontend, ...rest]
+  }, [rows, selectedPrUrls])
 
   const implementPayload = useCallback(
     (issueId: string, overlayFiles: WizardState['scopeOverlays']) => {
@@ -589,6 +611,14 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
           ) : null}
         </p>
       ) : null}
+
+      <StoryRunPanel
+        projectId={state.projectId}
+        issueId={selectedRow?.id || selectedIssueId}
+        title={selectedRow?.title || selectedRow?.id}
+        requirement={requirementTextOf(state)}
+        pullRequests={previewPullRequests}
+      />
 
       <section className="card shape-section implement-queue-card">
         <div className="implement-run-mode" role="tablist" aria-label="Implementation run mode">

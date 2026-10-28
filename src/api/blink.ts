@@ -2,7 +2,7 @@ import { sanitizeDownloadStructure, type RepoDefinition, type RepoTechnology } f
 import type { DesignOption, ProductScopeData, WizardState } from '../wizard/types'
 import { stripExcludedZipFolders } from './stripZipFolders'
 import { loadAuthSession } from '../auth/session'
-import { resolveApiBase, isLocalApiTarget, getApiTarget, usesDesktopDevApiProxy, API_TARGET_HEADER } from '../developer/apiTarget'
+import { resolveApiBase, isLocalApiTarget, getApiTarget, usesDesktopDevApiProxy, API_TARGET_HEADER, DEPLOYED_API_BASE } from '../developer/apiTarget'
 import { logTechStack, summarizeRepoTechnologyRow } from '../developer/techStackDebug'
 import { CHAT_MODEL_STORAGE_KEY } from '../developer/chatModels'
 
@@ -3008,6 +3008,72 @@ export async function gitApply(
   } finally {
     window.clearTimeout(timer)
   }
+}
+
+export interface StoryRunResponse {
+  runId?: string
+  status: 'blocked' | 'needs_person' | 'preview_ready' | 'pull_request_ready' | 'empty' | string
+  tier: number
+  reasons?: string[]
+  plan?: string[]
+  message?: string
+  previewHtml?: string
+  pullRequests?: string[]
+  issueId?: string
+  title?: string
+}
+
+export interface PullRequestAppPage {
+  title: string
+  previewHtml: string
+  entryPath?: string
+  pullRequest?: string
+}
+
+export interface PullRequestAppResponse {
+  status: 'ready' | 'unavailable' | string
+  message?: string
+  previewHtml?: string
+  entryPath?: string
+  pullRequest?: string
+  pages?: PullRequestAppPage[]
+}
+
+function previewAppUrl(projectId: string): string {
+  // The vaulted GitHub token opens only on the hosted API.
+  const base = DEPLOYED_API_BASE.replace(/\/$/, '')
+  return `${base}/projects/${projectId}/pull-request-app`
+}
+
+export async function previewPullRequestApp(
+  projectId: string,
+  pullRequests: string[],
+): Promise<PullRequestAppResponse> {
+  const response = await fetch(previewAppUrl(projectId), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ pullRequests }),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<PullRequestAppResponse>
+}
+
+export async function createStoryRun(
+  projectId: string,
+  payload: {
+    requirement: string
+    title?: string
+    issueId?: string
+    pullRequests?: string[]
+  },
+): Promise<StoryRunResponse> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/story-runs`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json() as Promise<StoryRunResponse>
 }
 
 export async function implementStep(
