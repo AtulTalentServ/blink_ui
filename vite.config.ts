@@ -4,6 +4,7 @@ import net from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+import { localPrPreviewPlugin } from './localPrPreview'
 
 const LOCAL_API = 'http://localhost:8090'
 const DEPLOYED_API = 'https://blink-backend-af7x.onrender.com'
@@ -109,7 +110,7 @@ function apiFallbackProxy(isDesktopDev: boolean): Plugin {
 const desktopDev = process.env.BLINK_DESKTOP_DEV === '1'
 
 export default defineConfig({
-  plugins: [react(), apiFallbackProxy(desktopDev)],
+  plugins: [localPrPreviewPlugin(), react(), apiFallbackProxy(desktopDev)],
   server: {
     host: true,
     port: desktopDev ? 5174 : 5173,

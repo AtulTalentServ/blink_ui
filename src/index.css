@@ -12858,3 +12858,78 @@ textarea::placeholder {
   }
 }
 
+.story-run-card {
+  margin-bottom: 1rem;
+}
+
+.story-run-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.story-run-head h3 {
+  margin: 0.15rem 0;
+}
+
+.story-run-head .primary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.story-run-status {
+  display: inline-block;
+  margin: 0.75rem 0 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: #e7f6ec;
+  font-size: 0.8rem;
+}
+
+.story-run-status--needs_person,
+.story-run-status--blocked {
+  background: #fff4e5;
+}
+
+.story-run-reasons,
+.story-run-plan,
+.story-run-prs {
+  margin: 0.4rem 0 0.8rem;
+  padding-left: 1.1rem;
+}
+
+.story-run-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.85rem;
+}
+
+.story-run-tab {
+  border: 1px solid #d5dde8;
+  border-radius: 999px;
+  background: #fff;
+  color: #1f2937;
+  padding: 0.35rem 0.75rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.story-run-tab.is-active {
+  background: #0b0d10;
+  border-color: #0b0d10;
+  color: #f8fafc;
+}
+
+.story-run-frame {
+  width: 100%;
+  height: 720px;
+  border: 1px solid #2c3442;
+  border-radius: 12px;
+  background: #0b0d10;
+}
+
