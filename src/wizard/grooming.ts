@@ -89,6 +89,21 @@ export function recommendedOptionForQuestion(question: GroomQuestion): GroomQues
   )
 }
 
+/**
+ * Select the recommended option for questions that just appeared.
+ * Questions already on the list keep whatever answer they have, including none.
+ */
+export function answersWithNewDefaults(
+  previousQuestions: GroomQuestion[],
+  nextQuestions: GroomQuestion[],
+  answers: GroomAnswer[],
+): GroomAnswer[] {
+  const known = new Set(previousQuestions.map((question) => question.id))
+  const fresh = nextQuestions.filter((question) => question.id && !known.has(question.id))
+  if (!fresh.length) return answers
+  return applyRecommendedAnswers(fresh, answers)
+}
+
 /** Fill any unanswered non-deferred questions with their recommended option. */
 export function applyRecommendedAnswers(
   questions: GroomQuestion[],

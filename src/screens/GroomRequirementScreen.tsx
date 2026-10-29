@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DocMarkdown } from '../components/DocMarkdown'
 import { ChevronDown, Mail, MessageSquare } from 'lucide-react'
 import { JiraScopePanel } from './JiraScopePanel'
@@ -10,6 +10,7 @@ import {
   computeClarifyFrontierState,
   isAnswered,
   isDeferredToJira,
+  isResolvedForWording,
   recommendedOptionForQuestion,
   splitQuestionTitleAndText,
 } from '../wizard/grooming'
@@ -76,6 +77,7 @@ function QuestionCard({
   )
   const otherAnswer = state.groomAnswers.find((item) => item.questionId === question.id && item.optionId === 'other')
   const [showOtherText, setShowOtherText] = useState(Boolean(otherAnswer))
+  const [ownerOpen, setOwnerOpen] = useState(false)
   const isOtherSelected = Boolean(otherAnswer) || showOtherText
 
   function patchQuestion(updates: Partial<GroomQuestion>) {
@@ -91,89 +93,94 @@ function QuestionCard({
     onToggleOther(question.id, checked)
   }
 
-  const { title: displayTitle, text: displayText } = splitQuestionTitleAndText(
-    question.title,
-    question.text,
-  )
+  const { text: displayText } = splitQuestionTitleAndText(question.title, question.text)
 
   return (
-    <fieldset className="groom-question">
-      <legend className="groom-question-legend">
-        <span className="groom-q-number">❓ Q{index + 1}</span>
-        {(question.round ?? 1) > 1 ? (
-          <span className="groom-round-pill">Round {question.round}</span>
-        ) : null}
-        <span className="groom-question-text">
-          {displayTitle ? <strong>{displayTitle}: </strong> : null}
-          {displayText}
+    <div className="groom-question" role="group" aria-labelledby={`groom-q-${question.id}`}>
+      <div className="groom-question-legend" id={`groom-q-${question.id}`}>
+        <span className="groom-q-mark">
+          <span className="groom-q-number">Q{index + 1}</span>
+          {(question.round ?? 1) > 1 ? (
+            <span className="groom-round-pill">Round {question.round}</span>
+          ) : null}
         </span>
-        <span className="groom-question-badge">
-          {isMultiple ? 'Select all that apply' : 'Select one'}
-        </span>
-      </legend>
-      {question.subtitle ? <p className="groom-question-subtitle">{question.subtitle}</p> : null}
-
-      <div className={`groom-assignee${assignee.assigned ? '' : ' is-unassigned'}`}>
-        <span
-          className={`stakeholder-avatar tone-${avatarTone(assignee.assigned ? assignee.name : roleLabel(roleId))}`}
-          aria-hidden="true"
-        >
-          {initials(assignee.assigned ? assignee.name : roleLabel(roleId))}
-        </span>
-        <div className="groom-assignee-who">
-          <strong>{assignee.assigned ? assignee.name : 'Not assigned'}</strong>
-          {assignee.assigned ? (
-            <span>{assignee.email}</span>
-          ) : (
-            <span>
-              Assign this role first
-              {onNavigate ? (
-                <>
-                  {' · '}
-                  <button type="button" className="text-btn" onClick={() => onNavigate('project-stakeholders')}>
-                    Open stakeholders
-                  </button>
-                </>
-              ) : null}
-            </span>
-          )}
-        </div>
-        <label className="groom-assignee-role">
-          <span>Role</span>
-          <select
-            value={roleId}
-            aria-label="Question owner role"
-            onChange={(event) => patchQuestion({ ownerRole: event.target.value })}
+        <span className="groom-question-text">{displayText}</span>
+        {isMultiple ? <span className="groom-question-badge">Select all that apply</span> : null}
+        <div className="groom-owner">
+          <button
+            type="button"
+            className={`groom-owner-chip${ownerOpen ? ' is-open' : ''}${assignee.assigned ? '' : ' is-unassigned'}`}
+            aria-expanded={ownerOpen}
+            onClick={() => setOwnerOpen((open) => !open)}
           >
-            {STAKEHOLDER_ROLES.map((role) => (
-              <option key={role.id} value={role.id}>
-                {role.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="groom-queue-row">
-          <label className={`groom-queue-toggle${question.queueEmail ? ' on' : ''}${!assignee.assigned ? ' disabled' : ''}`}>
-            <input
-              type="checkbox"
-              checked={Boolean(question.queueEmail)}
-              disabled={!assignee.assigned}
-              onChange={(event) => patchQuestion({ queueEmail: event.target.checked })}
-            />
-            <Mail size={13} />
-            Email later
-          </label>
-          <label className={`groom-queue-toggle${question.queueJira ? ' on' : ''}${!assignee.assigned ? ' disabled' : ''}`}>
-            <input
-              type="checkbox"
-              checked={Boolean(question.queueJira)}
-              disabled={!assignee.assigned}
-              onChange={(event) => patchQuestion({ queueJira: event.target.checked })}
-            />
-            <MessageSquare size={13} />
-            Jira later
-          </label>
+            <span
+              className={`stakeholder-avatar tone-${avatarTone(assignee.assigned ? assignee.name : roleLabel(roleId))}`}
+              aria-hidden="true"
+            >
+              {initials(assignee.assigned ? assignee.name : roleLabel(roleId))}
+            </span>
+            <span className="groom-owner-name">{assignee.assigned ? assignee.name : 'Unassigned'}</span>
+            <span className="groom-owner-role">{roleLabel(roleId)}</span>
+            {question.queueEmail ? <Mail size={13} aria-label="Email later" /> : null}
+            {question.queueJira ? <MessageSquare size={13} aria-label="Jira later" /> : null}
+            <ChevronDown size={14} className={ownerOpen ? 'chevron open' : 'chevron'} />
+          </button>
         </div>
+        {ownerOpen ? (
+            <div className="groom-owner-panel">
+              {!assignee.assigned ? (
+                <p className="groom-owner-note">
+                  Assign this role first
+                  {onNavigate ? (
+                    <>
+                      {' · '}
+                      <button type="button" className="text-btn" onClick={() => onNavigate('project-stakeholders')}>
+                        Open stakeholders
+                      </button>
+                    </>
+                  ) : null}
+                </p>
+              ) : (
+                <p className="groom-owner-note">{assignee.email}</p>
+              )}
+              <label className="groom-assignee-role">
+                <span>Role</span>
+                <select
+                  value={roleId}
+                  aria-label="Question owner role"
+                  onChange={(event) => patchQuestion({ ownerRole: event.target.value })}
+                >
+                  {STAKEHOLDER_ROLES.map((role) => (
+                    <option key={role.id} value={role.id}>
+                      {role.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="groom-queue-row">
+                <label className={`groom-queue-toggle${question.queueEmail ? ' on' : ''}${!assignee.assigned ? ' disabled' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(question.queueEmail)}
+                    disabled={!assignee.assigned}
+                    onChange={(event) => patchQuestion({ queueEmail: event.target.checked })}
+                  />
+                  <Mail size={13} />
+                  Email later
+                </label>
+                <label className={`groom-queue-toggle${question.queueJira ? ' on' : ''}${!assignee.assigned ? ' disabled' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(question.queueJira)}
+                    disabled={!assignee.assigned}
+                    onChange={(event) => patchQuestion({ queueJira: event.target.checked })}
+                  />
+                  <MessageSquare size={13} />
+                  Jira later
+                </label>
+              </div>
+            </div>
+        ) : null}
       </div>
       {isDeferredToJira(question) ? (
         <p className="groom-defer-hint">
@@ -198,8 +205,8 @@ function QuestionCard({
                 <span className="groom-option-label">
                   {option.label}
                   {isRecommended ? (
-                    <span className="groom-recommended-pill" title="Agent recommended default">
-                      ➡️ Recommended
+                    <span className="groom-recommended-pill" title="Suggested answer, already selected">
+                      Recommended
                     </span>
                   ) : null}
                 </span>
@@ -219,7 +226,6 @@ function QuestionCard({
               />
               <div className="groom-option-content">
                 <span className="groom-option-label">Other</span>
-                <span className="groom-option-desc">Enter your custom suggestion</span>
               </div>
             </label>
             {isOtherSelected ? (
@@ -235,7 +241,7 @@ function QuestionCard({
           </>
         )}
       </div>
-    </fieldset>
+    </div>
   )
 }
 
@@ -262,6 +268,24 @@ export function GroomingPanel({
   } = computeClarifyFrontierState(state)
   const [wordingOpen, setWordingOpen] = useState(false)
   const [editingDraft, setEditingDraft] = useState(false)
+  const seededQuestionIds = useRef(new Set<string>())
+
+  useEffect(() => {
+    const live = new Set(state.groomQuestions.map((question) => question.id).filter(Boolean))
+    for (const id of seededQuestionIds.current) {
+      if (!live.has(id)) seededQuestionIds.current.delete(id)
+    }
+    if (state.groomConfirmed || live.size === 0) return
+    const fresh = state.groomQuestions.filter(
+      (question) =>
+        question.id &&
+        !seededQuestionIds.current.has(question.id) &&
+        !isResolvedForWording(question, state.groomAnswers),
+    )
+    for (const id of live) seededQuestionIds.current.add(id)
+    if (!fresh.length) return
+    onUpdate({ groomAnswers: applyRecommendedAnswers(fresh, state.groomAnswers) })
+  }, [onUpdate, state.groomAnswers, state.groomConfirmed, state.groomQuestions])
   const followUpRound = round > 1 && !state.groomConfirmed && !frontierEmpty
   const showDraft = Boolean(
     state.groomDraft && (state.groomStatus === 'draft_ready' || state.groomConfirmed || followUpRound),
@@ -279,18 +303,11 @@ export function GroomingPanel({
                 ? `Design frontier · Round ${round}`
                 : 'Clarify design frontier'}
           </h3>
-          <p>
-            {frontierEmpty
-              ? 'Every branch of the design tree has been visited. Review the synthesized wording below and confirm shared understanding before Blink acts on it.'
-              : followUpRound
-                ? 'Your previous answers reshaped the tree and unlocked these downstream decisions. Pick an option or accept the recommendations.'
-                : 'Each frontier question marks its recommended answer (➡️) first in the list. Pick an alternative or accept recommendations.'}
-          </p>
         </div>
         {asked ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <div className="groom-toolbar">
             {frontierQuestions.length > 0 ? (
-              <p className="groom-progress" style={{ margin: 0 }}>
+              <p className="groom-progress">
                 {resolvedCount}/{frontierQuestions.length} answered in Round {round}
               </p>
             ) : null}
@@ -327,14 +344,16 @@ export function GroomingPanel({
       {!asked && loading ? <p className="muted">Mapping the design-tree frontier…</p> : null}
       {asked && loading ? <p className="muted">Updating wording &amp; checking next frontier…</p> : null}
 
-      {state.groomMessage && asked && <p className="muted">{state.groomMessage}</p>}
+      {state.groomStatus === 'error' && state.groomMessage ? (
+        <p className="muted">{state.groomMessage}</p>
+      ) : null}
 
       {settledQuestions.length > 0 ? (
-        <details className="groom-settled-rounds" style={{ marginBottom: '0.85rem' }}>
-          <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', opacity: 0.85 }}>
+        <details className="groom-settled-rounds">
+          <summary>
             Settled in earlier rounds ({settledQuestions.length} decision{settledQuestions.length === 1 ? '' : 's'})
           </summary>
-          <div className="groom-frontier-list" style={{ marginTop: '0.6rem' }}>
+          <div className="groom-frontier-list">
             {settledQuestions.map((question, idx) => (
               <QuestionCard
                 key={question.id}
@@ -383,14 +402,9 @@ export function GroomingPanel({
                 {state.groomConfirmed
                   ? 'Confirmed wording'
                   : frontierEmpty
-                    ? 'Shared understanding — final requirement draft'
+                    ? 'Shared understanding'
                     : 'Clearer wording'}
               </h3>
-              <p>
-                {draftExpanded
-                  ? 'Click to hide the requirement text'
-                  : 'Click to view the requirement text'}
-              </p>
             </div>
             <span className="groom-band-meta">
               {state.groomConfirmed ? 'Saved' : frontierEmpty ? 'Ready to confirm' : 'Draft'}
@@ -409,9 +423,9 @@ export function GroomingPanel({
                 </div>
               )}
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                <div className="groom-compare-head">
                   {state.groomOriginal && state.groomOriginal !== state.groomDraft ? (
-                    <h4 style={{ margin: 0 }}>Proposed</h4>
+                    <h4>Proposed</h4>
                   ) : (
                     <span />
                   )}

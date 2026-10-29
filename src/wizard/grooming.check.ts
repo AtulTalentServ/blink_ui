@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict'
 import {
   answersAreAllOptionPicks,
+  answersWithNewDefaults,
   applyRecommendedAnswers,
   assignQuestionBands,
   compactQuestionText,
@@ -104,6 +105,13 @@ assert.equal(recommendedOptionForQuestion(roundOne[0])?.id, 'opt-1')
 assert.deepEqual(applyRecommendedAnswers(roundOne, []), [
   { questionId: 'q1', optionId: 'opt-1', optionLabel: 'Receptionist' },
 ])
+assert.deepEqual(answersWithNewDefaults([], roundOne, []), [
+  { questionId: 'q1', optionId: 'opt-1', optionLabel: 'Receptionist' },
+])
+assert.deepEqual(
+  answersWithNewDefaults(roundOne, roundOne, [{ questionId: 'q1', optionId: 'opt-2', optionLabel: 'Patients' }]),
+  [{ questionId: 'q1', optionId: 'opt-2', optionLabel: 'Patients' }],
+)
 
 const split = splitQuestionTitleAndText(
   undefined,

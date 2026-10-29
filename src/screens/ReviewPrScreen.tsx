@@ -110,11 +110,13 @@ export function ReviewPrScreen({ state, onUpdate, onNavigate }: Props) {
     <div className="screen review-pr-screen">
       {!selectedIssueId ? (
         <section className="card shape-section">
-          <h3>No active SDLC work item is recorded</h3>
-          <p className="muted">Start work on a ticket in Cursor before recording pull-request or review evidence.</p>
-          <button type="button" className="secondary-btn" onClick={() => onNavigate('implementation')}>
-            Go to Work in Cursor <ExternalLink size={14} aria-hidden />
-          </button>
+          <div className="empty-state-block">
+            <h3>No active SDLC work item is recorded</h3>
+            <p>Start work on a ticket in Cursor before recording pull-request or review evidence.</p>
+            <button type="button" className="secondary-btn" onClick={() => onNavigate('implementation')}>
+              Go to Work in Cursor <ExternalLink size={16} aria-hidden />
+            </button>
+          </div>
         </section>
       ) : (
         <>
@@ -130,7 +132,7 @@ export function ReviewPrScreen({ state, onUpdate, onNavigate }: Props) {
             </div>
             <code>{nextAction || 'No workflow action is recorded yet.'}</code>
             <button type="button" className="secondary-btn" disabled={busy} onClick={() => void refreshNextAction()}>
-              {busy ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
+              {busy ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
               Refresh next action
             </button>
             {error ? <p className="error-text">{error}</p> : null}
@@ -146,14 +148,14 @@ export function ReviewPrScreen({ state, onUpdate, onNavigate }: Props) {
                 <input className="full-input" value={pr.branch} onChange={(event) => setPr({ ...pr, branch: event.target.value })} placeholder="Feature branch" />
                 <input className="full-input" value={pr.candidateCommit} onChange={(event) => setPr({ ...pr, candidateCommit: event.target.value })} placeholder="Candidate commit (optional)" />
                 <button type="button" className="primary-btn" disabled={!pr.url.trim() || !pr.repository.trim() || !pr.branch.trim()} onClick={addPullRequest}>
-                  <Plus size={15} /> Register PR
+                  <Plus size={16} /> Register PR
                 </button>
               </div>
               {pullRequests.length ? (
                 <ul className="review-pr-screen__list">
                   {pullRequests.map((item) => (
                     <li key={item.id}>
-                      <GitPullRequest size={15} />
+                      <GitPullRequest size={16} />
                       <span><strong>{item.repository}</strong> · {item.branch}{item.candidateCommit ? ` · ${item.candidateCommit}` : ''}</span>
                       <a href={item.url} target="_blank" rel="noreferrer">Open <ExternalLink size={12} /></a>
                     </li>
@@ -208,7 +210,7 @@ export function ReviewPrScreen({ state, onUpdate, onNavigate }: Props) {
                 <option value="advisory">Advisory</option>
               </select>
               <button type="button" className="secondary-btn" disabled={!finding.summary.trim()} onClick={addFinding}>
-                <Plus size={15} /> Add finding
+                <Plus size={16} /> Add finding
               </button>
             </div>
             {findings.length ? (
@@ -217,7 +219,7 @@ export function ReviewPrScreen({ state, onUpdate, onNavigate }: Props) {
                   <li key={item.id} className={item.severity === 'must-fix' && item.status === 'open' ? 'is-must-fix' : ''}>
                     <span><strong>{item.severity === 'must-fix' ? 'Must fix' : 'Advisory'}:</strong> {item.summary}</span>
                     {item.status === 'open' ? (
-                      <button type="button" className="text-btn" onClick={() => onUpdate({
+                      <button type="button" className="ghost-btn" onClick={() => onUpdate({
                         reviewFindings: (state.reviewFindings || []).map((current) =>
                           current.id === item.id ? { ...current, status: 'resolved', resolvedAt: new Date().toISOString() } : current,
                         ),
@@ -240,7 +242,7 @@ export function ReviewPrScreen({ state, onUpdate, onNavigate }: Props) {
               </div>
             </div>
             {openMustFix.length ? (
-              <p className="error-text"><AlertCircle size={15} /> {openMustFix.length} must-fix item(s) still block readiness.</p>
+              <p className="error-text"><AlertCircle size={16} /> {openMustFix.length} must-fix item(s) still block readiness.</p>
             ) : null}
             <p className="muted small">
               {mergeReady

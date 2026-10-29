@@ -706,7 +706,7 @@ export function RepositoriesScreen({
 
           {rosterError ? <p className="sdlc-timeline__outcome is-blocked">{rosterError}</p> : null}
           {state.repositoriesTouched ? (
-            <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <p className="sdlc-timeline__outcome is-inline">
               <CheckCircle2 size={16} className="check-green" />
               Repositories confirmed — Continue when ready.
             </p>
@@ -1089,7 +1089,7 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
             from your requirement and project shape.
           </p>
         </div>
-        <div className="screen-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div className="screen-header-actions">
           {productRepoCount > 0 ? (
             <button
               type="button"
@@ -1111,7 +1111,7 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
             </button>
           ) : null}
           {!stackReady ? (
-            <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <p className="sdlc-timeline__outcome is-inline">
               <Loader2 className="spin" size={16} />
               Suggesting stacks from the requirement…
             </p>
@@ -1120,12 +1120,12 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
               {techBusy ? 'Confirming…' : `Confirm all (${pending})`}
             </button>
           ) : pending > 0 ? (
-            <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <p className="sdlc-timeline__outcome is-inline">
               <Loader2 className="spin" size={16} />
               Confirming stacks…
             </p>
           ) : techRows.length > 0 && !incompleteStacks ? (
-            <p className="sdlc-timeline__outcome" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <p className="sdlc-timeline__outcome is-inline">
               <CheckCircle2 size={16} className="check-green" />
               All stacks confirmed
             </p>
@@ -1249,7 +1249,6 @@ export function TechnologyPerRepoScreen({ state, onUpdate }: ScreenProps) {
       {productRepoCount > 0 && (setupReady || autoConfirm || autoAck || tbdCount === 0) ? (
         <section
           className={`auto-run-status${setupReady ? ' is-done' : ''}${autoConfirm || autoAck ? ' is-running' : ''}`}
-          style={{ marginTop: '1rem' }}
         >
           <div className="auto-run-status__icon" aria-hidden="true">
             {autoConfirm || autoAck ? (

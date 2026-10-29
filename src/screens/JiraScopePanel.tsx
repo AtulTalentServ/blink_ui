@@ -163,6 +163,39 @@ function TicketStatus({
   )
 }
 
+function sameCopy(left?: string, right?: string) {
+  const norm = (value?: string) => (value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const text = norm(left)
+  return text.length > 0 && text === norm(right)
+}
+
+function splitCriteria(value?: string) {
+  const [body, rest] = (value || '').split(/acceptance criteria\s*:/i)
+  const criteria = (rest || '')
+    .split(/\s+[-–•]\s+/)
+    .map((item) => item.replace(/^[-–•]\s*/, '').replace(/[.\s]+$/, '').trim())
+    .filter(Boolean)
+  return {
+    body: (body || '').replace(/[,.\s]+$/, '').trim(),
+    criteria,
+  }
+}
+
+function storyCopy(story: { asA?: string; iWant?: string; soThat?: string; acceptanceCriteria?: string[] }) {
+  const want = splitCriteria(story.iWant)
+  const soThat = splitCriteria(story.soThat)
+  const criteria = [
+    ...(story.acceptanceCriteria || []).map((item) => item.trim()).filter(Boolean),
+    ...want.criteria,
+    ...soThat.criteria,
+  ].filter((item, index, all) => all.findIndex((other) => sameCopy(other, item)) === index)
+  const asA = (story.asA || '').replace(/[,.\s]+$/, '').trim()
+  const summary = asA && want.body
+    ? `As a ${asA}, I want ${want.body}${soThat.body ? `, so that ${soThat.body}` : ''}.`
+    : want.body
+  return { summary, criteria }
+}
+
 function bindStoryScreen(
   screens: FigmaScreenBinding[] | undefined,
   storyId: string,
@@ -240,6 +273,7 @@ export function JiraScopePanel({
   const [statusError, setStatusError] = useState<string | null>(null)
   const [transitionKey, setTransitionKey] = useState<string | null>(null)
   const [expandedEpicIds, setExpandedEpicIds] = useState<string[]>([])
+  const [expandedStoryIds, setExpandedStoryIds] = useState<string[]>([])
   const planInFlight = useRef(false)
   const jiraIssuesRef = useRef(state.jiraCreatedIssues)
   jiraIssuesRef.current = state.jiraCreatedIssues
@@ -541,6 +575,10 @@ export function JiraScopePanel({
     setExpandedEpicIds((ids) => (ids.includes(epicId) ? ids.filter((id) => id !== epicId) : [...ids, epicId]))
   }, [])
 
+  const toggleStory = useCallback((storyId: string) => {
+    setExpandedStoryIds((ids) => (ids.includes(storyId) ? ids.filter((id) => id !== storyId) : [...ids, storyId]))
+  }, [])
+
   useEffect(() => {
     if (jiraReady && createError && /connect atlassian/i.test(createError)) {
       setCreateError(null)
@@ -634,7 +672,8 @@ export function JiraScopePanel({
           {epics.map((epic) => {
             const childStories = stories.filter((story) => story.epicId === epic.id || epic.storyIds?.includes(story.id))
             const epicCreated = createdBySource.get(epic.id)
-            const canExpand = childStories.length > 0 || Boolean(epic.objective)
+            const epicDetail = epic.objective && !sameCopy(epic.objective, epic.title) ? epic.objective.trim() : ''
+            const canExpand = childStories.length > 0 || Boolean(epicDetail)
             const open = canExpand && expandedEpicIds.includes(epic.id)
             const storyLabel = `${childStories.length} ${childStories.length === 1 ? 'story' : 'stories'}`
             return (
@@ -678,27 +717,53 @@ export function JiraScopePanel({
                     )}
                   </div>
                 </header>
-                {open && epic.objective ? <p>{epic.objective}</p> : null}
+                {open && epicDetail ? <p>{epicDetail}</p> : null}
                 {open && childStories.length > 0 && (
                   <ul>
                     {childStories.map((story) => {
                       const storyCreated = createdBySource.get(story.id)
+                      const copy = storyCopy(story)
+                      const summary = copy.summary && !sameCopy(copy.summary, story.title) ? copy.summary : ''
+                      const criteria = copy.criteria.filter((item) => !sameCopy(item, story.title))
+                      const storyOpen = Boolean(summary || criteria.length) && expandedStoryIds.includes(story.id)
                       return (
                         <li
                           key={story.id}
-                          className={`jira-row${storyCreated?.status === 'created' ? ' is-linked' : ''}`}
+                          className={`jira-row${storyCreated?.status === 'created' ? ' is-linked' : ''}${storyOpen ? ' is-open' : ''}`}
                         >
-                          <span className="jira-type story">Story</span>
-                          <span className="jira-row-title">
-                            {story.title}
-                            {story.asA && story.iWant ? (
-                              <span className="muted">
-                                {' '}
-                                As a {story.asA}, I want {story.iWant}
-                                {story.soThat ? `, so that ${story.soThat}` : ''}
-                              </span>
+                          <div className="jira-row-main">
+                            {summary || criteria.length ? (
+                              <button
+                                type="button"
+                                className="jira-story-toggle"
+                                aria-expanded={storyOpen}
+                                aria-label={storyOpen ? `Hide details for ${story.title}` : `Show details for ${story.title}`}
+                                onClick={() => toggleStory(story.id)}
+                              >
+                                <ChevronRight size={16} className={storyOpen ? 'chevron open' : 'chevron'} aria-hidden />
+                                <span className="jira-type story">Story</span>
+                                <span className="jira-row-title">{story.title}</span>
+                              </button>
+                            ) : (
+                              <div className="jira-story-toggle is-static">
+                                <span className="jira-chevron-spacer" aria-hidden />
+                                <span className="jira-type story">Story</span>
+                                <span className="jira-row-title">{story.title}</span>
+                              </div>
+                            )}
+                            {storyOpen ? (
+                              <div className="jira-row-acceptance">
+                                {summary ? <p>{summary}</p> : null}
+                                {criteria.length ? (
+                                  <ul className="jira-criteria">
+                                    {criteria.map((item) => (
+                                      <li key={item}>{item}</li>
+                                    ))}
+                                  </ul>
+                                ) : null}
+                              </div>
                             ) : null}
-                          </span>
+                          </div>
                           <div className="jira-row-meta">
                             <TicketBadge created={storyCreated} baseUrl={jira?.baseUrl} />
                             {(state.figmaDesign?.screens || []).length > 0 ? (

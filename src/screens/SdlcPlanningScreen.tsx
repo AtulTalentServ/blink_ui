@@ -600,7 +600,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
 
       {blockedMsg && !busy ? (
         <p className="status-banner info">
-          <AlertCircle size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+          <AlertCircle size={16} className="status-banner-icon" />
           {blockedMsg}
         </p>
       ) : null}
@@ -665,7 +665,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
       </ol>
 
       {needsAcAck || (specReady(state) && !planReady(state) && busy === 'plan') ? (
-        <section className={`auto-run-status${needsAcAck ? ' is-running' : ''}`} style={{ marginTop: '1rem' }}>
+        <section className={`auto-run-status${needsAcAck ? ' is-running' : ''}`}>
           <div className="auto-run-status__icon" aria-hidden="true">
             <Loader2 className="spin" size={18} />
           </div>
@@ -677,7 +677,7 @@ export function SdlcPlanningScreen({ state, onUpdate }: Props) {
       ) : null}
 
       {complete && needsPlanAck ? (
-        <section className="auto-run-status is-running" style={{ marginTop: '1rem' }}>
+        <section className="auto-run-status is-running">
           <div className="auto-run-status__icon" aria-hidden="true">
             <Loader2 className="spin" size={18} />
           </div>

@@ -244,9 +244,6 @@ export function StakeholderQaScreen(props: Props) {
 
         {tab === 'stakeholders' ? (
           <div className="req-tickets stakeholder-merged">
-            <p className="muted small" style={{ marginBottom: '0.75rem' }}>
-              1) Send leftover questions by email or Jira · 2) Resolve answers below · 3) Open Scope &amp; tickets
-            </p>
             <StakeholderQuestionsScreen
               embedded
               state={props.state}
