@@ -382,12 +382,9 @@ export function StakeholderQuestionsScreen({
           </div>
         )}
 
-        <div className="card-footer-actions right stake-footer">
-          <span className="sub">
-            {state.questions.length === 0
-              ? 'Queue empty'
-              : `${pendingCount} still need email, Jira, or an answer`}
-          </span>
+        {state.questions.length > 0 ? (
+        <div className="card-footer-actions stake-footer">
+          <span className="sub">{pendingCount} still need email, Jira, or an answer</span>
           <button
             type="button"
             className="ghost-btn"
@@ -416,6 +413,7 @@ export function StakeholderQuestionsScreen({
             Send all emails
           </button>
         </div>
+        ) : null}
       </section>
     </div>
   )

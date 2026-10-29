@@ -130,11 +130,13 @@ export function WorkspaceScreen({
     <div className="screen shape-screen workspace-screen">
       {!planAcknowledged ? (
         <section className="card shape-section">
-          <h3>Finish the Work plan first</h3>
-          <p className="muted">Acknowledge the technical plan, then return here.</p>
-          <button type="button" className="secondary-btn" onClick={() => onNavigate('sdlc-plan')}>
-            Go to Work plan <ExternalLink size={14} aria-hidden />
-          </button>
+          <div className="empty-state-block">
+            <h3>Finish the Work plan first</h3>
+            <p>Acknowledge the technical plan, then return here.</p>
+            <button type="button" className="secondary-btn" onClick={() => onNavigate('sdlc-plan')}>
+              Go to Work plan <ExternalLink size={16} aria-hidden />
+            </button>
+          </div>
         </section>
       ) : (
         <>

@@ -40,11 +40,13 @@ export function ReleaseClosureScreen({ state, onUpdate, onNavigate }: Props) {
     return (
       <div className="screen release-screen">
         <section className="card shape-section">
-          <h2>No active SDLC work item is recorded</h2>
-          <p className="muted">Complete work in Cursor and record Review &amp; PR evidence before recording a release or closure.</p>
-          <button type="button" className="secondary-btn" onClick={() => onNavigate('review-pr')}>
-            Go to Review &amp; PR <ExternalLink size={14} aria-hidden />
-          </button>
+          <div className="empty-state-block">
+            <h3>No active SDLC work item is recorded</h3>
+            <p>Complete work in Cursor and record Review &amp; PR evidence before recording a release or closure.</p>
+            <button type="button" className="secondary-btn" onClick={() => onNavigate('review-pr')}>
+              Go to Review &amp; PR <ExternalLink size={16} aria-hidden />
+            </button>
+          </div>
         </section>
       </div>
     )
@@ -217,7 +219,7 @@ export function ReleaseClosureScreen({ state, onUpdate, onNavigate }: Props) {
             : 'Closure requires a human-recorded merge, satisfied deployment requirements, and healthy monitoring or verification.'}
         </p>
         {monitoring.status === 'blocker' && monitoring.blocker ? (
-          <p className="error-text"><AlertCircle size={15} /> {monitoring.blocker}</p>
+          <p className="error-text"><AlertCircle size={16} /> {monitoring.blocker}</p>
         ) : null}
         {current.closure ? (
           <p className="release-screen__closed"><CheckCircle2 size={16} /> Closed by {current.closure.closedBy}.</p>

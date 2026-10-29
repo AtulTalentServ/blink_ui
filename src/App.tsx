@@ -71,6 +71,7 @@ import {
   type WizardStep,
 } from './wizard/types'
 import {
+  answersWithNewDefaults,
   applyRecommendedAnswers,
   assignQuestionBands,
   computeClarifyFrontierState,
@@ -1151,12 +1152,16 @@ export default function App() {
           onQuestions: (partialQuestions) => {
             if (controller.signal.aborted || !partialQuestions.length) return
             const banded = assignQuestionBands(partialQuestions, 1)
-            patch({
-              groomStatus: 'need_choices',
-              groomQuestions: banded,
-              groomOriginal: stateRef.current.groomOriginal || text,
-              groomConfirmed: false,
-              groomRound: 1,
+            setState((prev) => {
+              const updates: Partial<WizardState> = {
+                groomStatus: 'need_choices',
+                groomQuestions: banded,
+                groomOriginal: prev.groomOriginal || text,
+                groomConfirmed: false,
+                groomRound: 1,
+                groomAnswers: answersWithNewDefaults(prev.groomQuestions, banded, prev.groomAnswers),
+              }
+              return { ...prev, ...withShapeInvalidation(prev, updates) }
             })
           },
         },
@@ -1180,16 +1185,19 @@ export default function App() {
       }
       const finalQuestions = assignQuestionBands(result.questions ?? [], 1)
       const validIds = new Set(finalQuestions.map((q) => q.id))
-      const keptAnswers = stateRef.current.groomAnswers.filter((a) => validIds.has(a.questionId))
-      patch({
-        groomStatus: result.status,
-        groomMessage: result.message,
-        groomQuestions: finalQuestions,
-        groomDraft: result.requirementDraft || '',
-        groomOriginal: stateRef.current.groomOriginal || result.originalRequirement || text,
-        groomAnswers: keptAnswers,
-        groomConfirmed: false,
-        groomRound: 1,
+      setState((prev) => {
+        const keptAnswers = prev.groomAnswers.filter((a) => validIds.has(a.questionId))
+        const updates: Partial<WizardState> = {
+          groomStatus: result.status,
+          groomMessage: result.message,
+          groomQuestions: finalQuestions,
+          groomDraft: result.requirementDraft || '',
+          groomOriginal: prev.groomOriginal || result.originalRequirement || text,
+          groomAnswers: answersWithNewDefaults(prev.groomQuestions, finalQuestions, keptAnswers),
+          groomConfirmed: false,
+          groomRound: 1,
+        }
+        return { ...prev, ...withShapeInvalidation(prev, updates) }
       })
       if (showStatus()) {
         setStatus({
@@ -1390,7 +1398,11 @@ export default function App() {
                   patch({
                     groomStatus: 'need_choices',
                     groomQuestions: mergedPartial,
-                    groomAnswers: effectiveAnswers,
+                    groomAnswers: answersWithNewDefaults(
+                      current.groomQuestions,
+                      mergedPartial,
+                      effectiveAnswers,
+                    ),
                     groomConfirmed: false,
                     groomRound: nextRound,
                   })
@@ -1413,7 +1425,7 @@ export default function App() {
               if (merged.length > current.groomQuestions.length) {
                 const followPatch: Partial<WizardState> = {
                   groomDraft: draft,
-                  groomAnswers: effectiveAnswers,
+                  groomAnswers: answersWithNewDefaults(current.groomQuestions, merged, effectiveAnswers),
                   groomStatus: 'need_choices',
                   groomMessage:
                     result.message ||
@@ -2813,7 +2825,7 @@ export default function App() {
                 aria-live="polite"
               >
                 {(grooming || loading || saving) && status.type === 'info' ? (
-                  <Loader2 size={14} className="spin" style={{ flexShrink: 0 }} />
+                  <Loader2 size={14} className="spin" />
                 ) : null}
                 <span>{status.message}</span>
               </div>
@@ -2836,10 +2848,7 @@ export default function App() {
             )}
             {showNext ? (
               step === 'stakeholder-qa' && qaTab === 'clarify' && !state.groomConfirmed ? (
-                <div
-                  className="action-float-group"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', pointerEvents: 'auto' }}
-                >
+                <div className="action-float-group">
                   {clarifyFrontier.canLockNow ? (
                     <button
                       type="button"

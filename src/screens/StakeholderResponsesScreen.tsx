@@ -422,12 +422,11 @@ export function StakeholderResponsesScreen({
       ) : null}
 
       {groomError ? (
-        <section className="status-banner error" style={{ marginBottom: '1rem' }}>
-          <p style={{ margin: 0 }}>{groomError}</p>
+        <section className="status-banner error has-action">
+          <p>{groomError}</p>
           <button
             type="button"
             className="secondary-btn"
-            style={{ marginTop: '0.5rem' }}
             disabled={!state.projectId || !requirementText || !!groomBusy}
             onClick={() => {
               setGroomError(null)

@@ -1123,7 +1123,7 @@ export function IntegrationsScreen({
                   <strong>Sign in with GitHub</strong>
                 </div>
                 <p className="oauth-card-copy">Opens a GitHub window. If your browser blocks it, use the prompt below.</p>
-                <div className="row-actions" style={{ gap: 8 }}>
+                <div className="row-actions">
                   <button
                     type="button"
                     className="oauth-btn github"
@@ -1508,18 +1508,18 @@ export function IntegrationsScreen({
                           )}
                         </>
                       ) : (
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <div className="inline-field-row">
                           <input
                             id="int-project"
+                            className="full-input"
                             value={form.projectKey}
                             onChange={(e) => setForm({ ...form, projectKey: e.target.value.toUpperCase() })}
                             placeholder="e.g. FIT, PROJ, ENG"
-                            style={{ flex: 1 }}
                           />
                           {projects.length > 0 && (
                             <button
                               type="button"
-                              className="text-btn mini-btn"
+                              className="ghost-btn mini-btn"
                               onClick={() => setIsCustomProjectKey(false)}
                             >
                               Show list
