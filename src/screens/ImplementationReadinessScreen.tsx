@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -14,10 +14,17 @@ import {
 import {
   fetchCanonicalSnapshot,
   fetchShipSession,
-  implementStep,
+  streamCodexFollowUp,
+  streamCodexImplementStep,
   type DraftPullRequest,
   type ShipStepDto,
 } from '../api/blink'
+import {
+  CodexAgentConsole,
+  emptyCodexConsole,
+  reduceCodexEvent,
+  type CodexConsoleState,
+} from '../components/CodexAgentConsole'
 import { ImplementAllRequirementsPanel } from '../desktop/ImplementAllRequirementsPanel'
 import { StoryRunPanel } from './StoryRunPanel'
 import { patchFromCanonicalSnapshot } from '../wizard/canonical'
@@ -278,6 +285,8 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   const [message, setMessage] = useState<string | null>(null)
   const [prs, setPrs] = useState<DraftPullRequest[]>([])
   const [implementSteps, setImplementSteps] = useState<ShipStepDto[]>([])
+  const [codexConsole, setCodexConsole] = useState<CodexConsoleState>(emptyCodexConsole)
+  const [codexSessionId, setCodexSessionId] = useState<string | null>(null)
   const [selectedIssueId, setSelectedIssueId] = useState<string | undefined>(() => defaultIssueId(state))
   const [runMode, setRunMode] = useState<ImplementRunMode>(() => loadImplementRunMode())
   const [runningAll, setRunningAll] = useState(false)
@@ -393,17 +402,13 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     return [...frontend, ...rest]
   }, [rows, selectedPrUrls])
 
+  const implementAllAbort = useRef(false)
+
   const implementPayload = useCallback(
     (issueId: string, overlayFiles: WizardState['scopeOverlays']) => {
-      const tier = state.workClassification?.tier
       return {
         confirm: true,
         gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
-        requirementText: requirementTextOf(state),
-        productScope: state.productScope,
-        workClassification: state.workClassification,
-        specification: state.specification,
-        technicalPlan: state.technicalPlan,
         overlayFiles: overlayFiles || [],
         repositories: (state.repositories || []).map((r) => ({
           name: r.name,
@@ -412,10 +417,6 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         })),
         issueId,
         issueKey: issueId,
-        planAcknowledged: Boolean(state.planAcknowledged || state.shipPlanAcknowledged),
-        shipPlanAcknowledged: Boolean(state.shipPlanAcknowledged),
-        implementationAuthorized: true,
-        impactAnalysisSkipped: Boolean(state.impactAnalysisSkipped || (typeof tier === 'number' && tier >= 2)),
       }
     },
     [state],
@@ -436,11 +437,24 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
       setSelectedIssueId(issueId)
       setError(null)
       setMessage(null)
+      setCodexConsole({ ...emptyCodexConsole(), busy: true, phase: 'provisioning' })
       try {
-        const res = await implementStep(state.projectId, implementPayload(issueId, state.scopeOverlays))
+        const res = await streamCodexImplementStep(
+          state.projectId,
+          { ...implementPayload(issueId, state.scopeOverlays), ...(codexSessionId ? { codexSessionId } : {}) },
+          {
+            onThinking: (text) => setCodexConsole((prev) => reduceCodexEvent(prev, 'thinking', { text })),
+            onEvent: (event, payload) => setCodexConsole((prev) => reduceCodexEvent(prev, event, payload)),
+          },
+        )
+        if (res.status === 'blocked') {
+          throw new Error(res.message || 'Quality gate blocked the GitHub commit.')
+        }
         if (res.status !== 'ok') {
           throw new Error(res.message || res.errors?.join('; ') || 'Implementation agent failed')
         }
+        if (res.codexSessionId) setCodexSessionId(res.codexSessionId)
+        setCodexConsole((prev) => reduceCodexEvent(prev, 'done', res as unknown as Record<string, unknown>))
         const draftPrs = res.draftPullRequests || []
         setPrs(draftPrs)
         const impl = res.implementStep
@@ -484,13 +498,57 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
           /* best-effort */
         }
       } catch (err) {
+        setCodexConsole((prev) => reduceCodexEvent(prev, 'error', {
+          message: err instanceof Error ? err.message : 'Could not run implementation.',
+        }))
         setError(err instanceof Error ? err.message : 'Could not run implementation.')
       } finally {
         setBusy(false)
         setBusyIssueId(null)
       }
     },
-    [implementPayload, onUpdate, refreshShipProgress, state],
+    [codexSessionId, implementPayload, onUpdate, refreshShipProgress, state],
+  )
+
+  const runCodexFollowUp = useCallback(
+    async (instruction: string) => {
+      if (!state.projectId || !selectedIssueId) return
+      setBusy(true)
+      setCodexConsole((prev) => ({ ...prev, busy: true, phase: 'provisioning' }))
+      try {
+        const selectedPr = (prs[0] || (state.draftPullRequests || [])[0]) as DraftPullRequest | undefined
+        const res = await streamCodexFollowUp(
+          state.projectId,
+          {
+            ...implementPayload(selectedIssueId, state.scopeOverlays),
+            followUp: instruction,
+            confirm: true,
+            gitWritten: true,
+            codexSessionId: codexSessionId || undefined,
+            owner: selectedPr?.owner,
+            repo: selectedPr?.repo,
+            branch: selectedPr?.branch || `blink/implement-${selectedIssueId}`,
+          },
+          {
+            onThinking: (text) => setCodexConsole((prev) => reduceCodexEvent(prev, 'thinking', { text })),
+            onEvent: (event, payload) => setCodexConsole((prev) => reduceCodexEvent(prev, event, payload)),
+          },
+        )
+        if (res.codexSessionId) setCodexSessionId(res.codexSessionId)
+        setCodexConsole((prev) => reduceCodexEvent(prev, 'done', res as unknown as Record<string, unknown>))
+        if (res.draftPullRequests?.length) setPrs(res.draftPullRequests)
+        setMessage(res.summary || res.message || 'Follow-up applied')
+        await refreshShipProgress()
+      } catch (err) {
+        setCodexConsole((prev) => reduceCodexEvent(prev, 'error', {
+          message: err instanceof Error ? err.message : 'Follow-up failed',
+        }))
+        setError(err instanceof Error ? err.message : 'Follow-up failed')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [codexSessionId, implementPayload, prs, refreshShipProgress, selectedIssueId, state],
   )
 
   const runImplementAll = useCallback(
@@ -507,20 +565,42 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
       setRunningAll(true)
       setError(null)
       setMessage(null)
+      implementAllAbort.current = false
       let overlays = state.scopeOverlays || []
       const failures: string[] = []
       let completed = 0
+      let session = codexSessionId
       try {
         for (let index = 0; index < issueIds.length; index += 1) {
+          if (implementAllAbort.current) {
+            failures.push('Cancelled remaining tickets.')
+            break
+          }
           const issueId = issueIds[index]
           setBusyIssueId(issueId)
           setSelectedIssueId(issueId)
           setMessage(`Implementing ${shortStoryLabel(issueId)} (${index + 1}/${issueIds.length})…`)
           try {
-            const res = await implementStep(state.projectId, implementPayload(issueId, overlays))
+            setCodexConsole({ ...emptyCodexConsole(), busy: true, phase: 'provisioning' })
+            const res = await streamCodexImplementStep(
+              state.projectId,
+              { ...implementPayload(issueId, overlays), ...(session ? { codexSessionId: session } : {}) },
+              {
+                onThinking: (text) => setCodexConsole((prev) => reduceCodexEvent(prev, 'thinking', { text })),
+                onEvent: (event, payload) => setCodexConsole((prev) => reduceCodexEvent(prev, event, payload)),
+              },
+            )
+            if (res.status === 'blocked') {
+              throw new Error(res.message || 'Quality gate blocked the GitHub commit.')
+            }
             if (res.status !== 'ok') {
               throw new Error(res.message || res.errors?.join('; ') || 'Implementation agent failed')
             }
+            if (res.codexSessionId) {
+              session = res.codexSessionId
+              setCodexSessionId(res.codexSessionId)
+            }
+            setCodexConsole((prev) => reduceCodexEvent(prev, 'done', res as unknown as Record<string, unknown>))
             const draftPrs = res.draftPullRequests || []
             setPrs(draftPrs)
             const impl = res.implementStep
@@ -551,6 +631,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
             completed += 1
           } catch (err) {
             const reason = err instanceof Error ? err.message : 'Could not run implementation.'
+            setCodexConsole((prev) => reduceCodexEvent(prev, 'error', { message: reason }))
             failures.push(`${shortStoryLabel(issueId)}: ${reason}`)
           }
         }
@@ -576,7 +657,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         setBusyIssueId(null)
       }
     },
-    [implementPayload, onUpdate, refreshShipProgress, state],
+    [codexSessionId, implementPayload, onUpdate, refreshShipProgress, state],
   )
 
   const selectStory = (id: string) => {
@@ -618,6 +699,16 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         title={selectedRow?.title || selectedRow?.id}
         requirement={requirementTextOf(state)}
         pullRequests={previewPullRequests}
+      />
+
+      <CodexAgentConsole
+        projectId={state.projectId}
+        issueId={selectedRow?.id || selectedIssueId}
+        state={codexConsole}
+        onFollowUp={runCodexFollowUp}
+        onCancelled={() => { implementAllAbort.current = true }}
+        followUpDisabled={!codexSessionId && !selectedRow?.hasDraft}
+        title="Codex Cloud Agent · implement-step"
       />
 
       <section className="card shape-section implement-queue-card">
@@ -730,6 +821,16 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
             batchArchitecture={batchArchitecture}
             readyForAgent={readyForAgent}
             workspaceReady={workspaceReady}
+            onWebCodexImplementAll={() => runImplementAll(implementAllIds)}
+            webCodexBusy={runningAll || busy}
+            webCodexConsole={(
+              <CodexAgentConsole
+                projectId={state.projectId}
+                issueId={selectedIssueId}
+                state={codexConsole}
+                title="Codex Cloud Agent · implement all"
+              />
+            )}
           />
         )}
 

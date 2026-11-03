@@ -3089,6 +3089,92 @@ export async function implementStep(
   return response.json() as Promise<DeliveryAgentResponse>
 }
 
+export type CodexStreamHandlers = {
+  onThinking?: (text: string) => void
+  onEvent?: (event: string, payload: Record<string, unknown>) => void
+}
+
+export type CodexDeliveryResult = DeliveryAgentResponse & {
+  codexSessionId?: string
+  turnNumber?: number
+  recommendation?: string
+  reviewFindings?: Array<Record<string, unknown>>
+  githubCommentUrl?: string
+  filesChanged?: number
+  summary?: string
+  commitSha?: string
+  staleReview?: boolean
+}
+
+export function streamCodexImplementStep(
+  projectId: string,
+  payload: Record<string, unknown>,
+  handlers: CodexStreamHandlers = {},
+  signal?: AbortSignal,
+) {
+  return postSseJson<CodexDeliveryResult>(
+    `/projects/${projectId}/ship/implement-step/stream`,
+    payload,
+    handlers,
+    signal,
+  )
+}
+
+export function streamCodexFollowUp(
+  projectId: string,
+  payload: Record<string, unknown>,
+  handlers: CodexStreamHandlers = {},
+  signal?: AbortSignal,
+) {
+  return postSseJson<CodexDeliveryResult>(
+    `/projects/${projectId}/ship/codex/followup/stream`,
+    payload,
+    handlers,
+    signal,
+  )
+}
+
+export function streamCodexPrReview(
+  projectId: string,
+  payload: Record<string, unknown>,
+  handlers: CodexStreamHandlers = {},
+  signal?: AbortSignal,
+) {
+  return postSseJson<CodexDeliveryResult>(
+    `/projects/${projectId}/ship/pr-review/stream`,
+    payload,
+    handlers,
+    signal,
+  )
+}
+
+export function streamCodexFixFindings(
+  projectId: string,
+  payload: Record<string, unknown>,
+  handlers: CodexStreamHandlers = {},
+  signal?: AbortSignal,
+) {
+  return postSseJson<CodexDeliveryResult>(
+    `/projects/${projectId}/ship/fix-review-findings/stream`,
+    payload,
+    handlers,
+    signal,
+  )
+}
+
+export async function cancelCodexSession(
+  projectId: string,
+  payload: { issueId?: string },
+): Promise<{ status: string; message?: string }> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/ship/codex/cancel`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json()
+}
+
 export function qaValidation(
   projectId: string,
   payload: Record<string, unknown>,
