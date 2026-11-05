@@ -48,6 +48,10 @@ type Props = {
   batchArchitecture: ImplementArchitectureContext | null
   readyForAgent: boolean
   workspaceReady: boolean
+  /** Browser fallback: stream Codex Cloud Agents for each story without the desktop shell. */
+  onWebCodexImplementAll?: () => void | Promise<void>
+  webCodexBusy?: boolean
+  webCodexConsole?: ReactNode
 }
 
 function SetupRow({
@@ -85,6 +89,9 @@ export function ImplementAllRequirementsPanel({
   batchArchitecture,
   readyForAgent,
   workspaceReady,
+  onWebCodexImplementAll,
+  webCodexBusy,
+  webCodexConsole,
 }: Props) {
   const desktop = canRunDesktopImplementBatch()
   const [workspacePath, setWorkspacePath] = useState(() => loadDesktopWorkspacePath())
@@ -303,8 +310,8 @@ export function ImplementAllRequirementsPanel({
     return (
       <div className="implement-all-panel">
         <p className="status-banner info">
-          Implement-all runs on your machine through the Blink desktop app (Cursor CLI). Open desktop to pick a folder,
-          set up the agent CLI, and run with live status.
+          In the browser, Implement-all runs through Codex Cloud Agents (OpenAI-hosted sandboxes) with live streaming.
+          The Blink desktop app can still use Cursor CLI locally when you prefer an on-machine agent.
         </p>
         {batchRequirements ? (
           <DocMarkdown
@@ -314,6 +321,20 @@ export function ImplementAllRequirementsPanel({
         ) : (
           <p className="muted small">Add grooming or scope requirements first.</p>
         )}
+        {onWebCodexImplementAll ? (
+          <div className="implement-all-section" style={{ marginTop: '0.85rem' }}>
+            <button
+              type="button"
+              className="primary-btn"
+              disabled={!readyForAgent || !workspaceReady || Boolean(webCodexBusy) || !batchRequirements}
+              onClick={() => void onWebCodexImplementAll()}
+            >
+              {webCodexBusy ? <Loader2 className="spin" size={15} aria-hidden /> : <Play size={15} aria-hidden />}
+              <span>Implement all with Codex Cloud</span>
+            </button>
+            {webCodexConsole}
+          </div>
+        ) : null}
       </div>
     )
   }

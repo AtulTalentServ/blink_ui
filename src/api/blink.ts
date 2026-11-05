@@ -3089,6 +3089,193 @@ export async function implementStep(
   return response.json() as Promise<DeliveryAgentResponse>
 }
 
+export type CodexStreamHandlers = {
+  onThinking?: (text: string) => void
+  onEvent?: (event: string, payload: Record<string, unknown>) => void
+}
+
+export type CodexDeliveryResult = DeliveryAgentResponse & {
+  codexSessionId?: string
+  turnNumber?: number
+  recommendation?: string
+  reviewFindings?: Array<Record<string, unknown>>
+  githubCommentUrl?: string
+  filesChanged?: number
+  summary?: string
+  commitSha?: string
+  staleReview?: boolean
+}
+
+export function streamCodexImplementStep(
+  projectId: string,
+  payload: Record<string, unknown>,
+  handlers: CodexStreamHandlers = {},
+  signal?: AbortSignal,
+) {
+  return postSseJson<CodexDeliveryResult>(
+    `/projects/${projectId}/ship/implement-step/stream`,
+    payload,
+    handlers,
+    signal,
+  )
+}
+
+export function streamCodexFollowUp(
+  projectId: string,
+  payload: Record<string, unknown>,
+  handlers: CodexStreamHandlers = {},
+  signal?: AbortSignal,
+) {
+  return postSseJson<CodexDeliveryResult>(
+    `/projects/${projectId}/ship/codex/followup/stream`,
+    payload,
+    handlers,
+    signal,
+  )
+}
+
+export function streamCodexPrReview(
+  projectId: string,
+  payload: Record<string, unknown>,
+  handlers: CodexStreamHandlers = {},
+  signal?: AbortSignal,
+) {
+  return postSseJson<CodexDeliveryResult>(
+    `/projects/${projectId}/ship/pr-review/stream`,
+    payload,
+    handlers,
+    signal,
+  )
+}
+
+export function streamCodexFixFindings(
+  projectId: string,
+  payload: Record<string, unknown>,
+  handlers: CodexStreamHandlers = {},
+  signal?: AbortSignal,
+) {
+  return postSseJson<CodexDeliveryResult>(
+    `/projects/${projectId}/ship/fix-review-findings/stream`,
+    payload,
+    handlers,
+    signal,
+  )
+}
+
+export async function cancelCodexSession(
+  projectId: string,
+  payload: { issueId?: string },
+): Promise<{ status: string; message?: string }> {
+  const response = await fetch(apiUrl(`/projects/${projectId}/ship/codex/cancel`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) throw new Error(await readError(response))
+  return response.json()
+}
+
+export type CodexAttachment = {
+  name: string
+  path?: string
+  kind: 'file' | 'image' | 'file_ref'
+  content?: string
+  dataUrl?: string
+}
+
+export type CodexWorkbenchTurn = {
+  id: string
+  turnNumber: number
+  prompt: string
+  status: string
+  markdown: string
+  attachments?: CodexAttachment[]
+  activity?: Array<{ kind?: string; text?: string; status?: string }>
+  files?: Record<string, string>
+  createdAt?: string
+}
+
+export type CodexDiffLine = { kind: string; text: string; oldNo?: number; newNo?: number }
+export type CodexDiffHunk = { index: number; header: string; lines: CodexDiffLine[] }
+export type CodexFileDiff = {
+  path: string
+  status: string
+  additions: number
+  deletions: number
+  hunks: CodexDiffHunk[]
+}
+export type CodexWorkbenchFile = { path: string; language?: string; status?: string }
+export type CodexWorkbenchCommit = { sha: string; message: string; when?: string }
+
+export type CodexWorkbench = {
+  status: string
+  issueId?: string
+  scope?: string
+  scopeNote?: string
+  branch?: string
+  sessionId?: string
+  sessionStatus?: string
+  additions?: number
+  deletions?: number
+  stagedPaths?: string[]
+  turns?: CodexWorkbenchTurn[]
+  diff?: CodexFileDiff[]
+  files?: CodexWorkbenchFile[]
+  commits?: CodexWorkbenchCommit[]
+}
+
+export function fetchCodexWorkbench(
+  projectId: string,
+  issueId: string,
+  scope = 'uncommitted',
+  commitSha?: string,
+): Promise<CodexWorkbench> {
+  const q = new URLSearchParams({ issueId, scope })
+  if (commitSha) q.set('commitSha', commitSha)
+  return fetch(apiUrl(`/projects/${projectId}/ship/codex/workbench?${q}`), { headers: authHeaders() })
+    .then(async (response) => {
+      if (!response.ok) throw new Error(await readError(response))
+      return response.json() as Promise<CodexWorkbench>
+    })
+}
+
+export function fetchCodexFile(projectId: string, issueId: string, path: string): Promise<{ content: string; source: string }> {
+  const q = new URLSearchParams({ issueId, path })
+  return fetch(apiUrl(`/projects/${projectId}/ship/codex/file?${q}`), { headers: authHeaders() })
+    .then(async (response) => {
+      if (!response.ok) throw new Error(await readError(response))
+      return response.json() as Promise<{ content: string; source: string }>
+    })
+}
+
+export function postCodexGitAction(
+  projectId: string,
+  payload: { issueId: string; action: string; path?: string; hunkIndex?: number; owner?: string; repo?: string; branch?: string },
+): Promise<{ status: string; message?: string; evidence?: Record<string, unknown> }> {
+  return fetch(apiUrl(`/projects/${projectId}/ship/codex/git-action`), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(payload),
+  }).then(async (response) => {
+    if (!response.ok) throw new Error(await readError(response))
+    return response.json()
+  })
+}
+
+export function streamCodexSteer(
+  projectId: string,
+  payload: Record<string, unknown>,
+  handlers: CodexStreamHandlers = {},
+  signal?: AbortSignal,
+) {
+  return postSseJson<CodexDeliveryResult & { status: string }>(
+    `/projects/${projectId}/ship/codex/steer/stream`,
+    payload,
+    handlers,
+    signal,
+  )
+}
+
 export function qaValidation(
   projectId: string,
   payload: Record<string, unknown>,

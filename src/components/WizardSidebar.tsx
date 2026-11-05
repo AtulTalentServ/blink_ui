@@ -36,6 +36,7 @@ interface Props {
   unrestrictedNav?: boolean
   state: WizardState
   onNavigate: (step: WizardStep) => void
+  collapsedHint?: boolean
 }
 
 function readBool(key: string, fallback: boolean): boolean {
@@ -66,6 +67,7 @@ export function WizardSidebar({
   unrestrictedNav = false,
   state,
   onNavigate,
+  collapsedHint = false,
 }: Props) {
   const { state: developerState } = useDeveloperMode()
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -82,6 +84,10 @@ export function WizardSidebar({
       /* ignore */
     }
   }, [sidebarOpen])
+
+  useEffect(() => {
+    if (collapsedHint) setSidebarOpen(false)
+  }, [collapsedHint])
 
   useEffect(() => {
     try {

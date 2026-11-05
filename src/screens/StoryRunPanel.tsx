@@ -17,7 +17,7 @@ interface Props {
   pullRequests: string[]
 }
 
-export function StoryRunPanel({ projectId, title, pullRequests }: Props) {
+export function StoryRunPanel({ projectId, pullRequests }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -85,17 +85,9 @@ export function StoryRunPanel({ projectId, title, pullRequests }: Props) {
   }
 
   return (
-    <section className="card story-run-card">
+    <section className="story-run-card">
       <div className="story-run-head">
-        <div>
-          <p className="shape-kicker">Before merge</p>
-          <h3>See the application before it merges</h3>
-          <p className="muted">
-            {title ? `${title}. ` : ''}
-            This opens the draft application. Click through what will be there after merge. Nothing is installed or merged.
-          </p>
-        </div>
-        <button type="button" className="primary-btn" onClick={() => void openPreview()} disabled={busy}>
+        <button type="button" className="codex-btn codex-btn--primary" onClick={() => void openPreview()} disabled={busy}>
           <MonitorPlay size={16} />
           {busy ? 'Opening…' : 'Preview story'}
         </button>

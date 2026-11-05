@@ -2701,6 +2701,7 @@ export default function App() {
           groomingUnlocked={groomingUnlockedForDev}
           unrestrictedNav={unrestrictedNav}
           state={state}
+          collapsedHint={step === 'ship' && shipSubstage === 'implementation'}
           onNavigate={(s) => {
             setStatus(null)
             setKitResultOpen(false)
