@@ -22,7 +22,7 @@ import { patchFromCanonicalSnapshot } from '../wizard/canonical'
 import {
   applyCodexEvent,
   beginCodexRun,
-  busyIssueId,
+  busyIssueIds,
   codexRunInflight,
   clearCodexAbort,
   codexAbortRequested,
@@ -38,7 +38,7 @@ import {
   subscribeCodexRuns,
   trackCodexRun,
 } from '../wizard/codexRunStore'
-import type { StorySummary, WizardState } from '../wizard/types'
+import type { ScopeOverlayFile, StorySummary, WizardState } from '../wizard/types'
 
 interface Props {
   state: WizardState
@@ -450,7 +450,7 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
       trackCodexRun(codexRunKey(projectId, issueId), work)
       await work
     },
-    [implementPayload, model, onUpdate, refreshShipProgress, state],
+    [implementPayload, model, onUpdate, refreshShipProgress, state, stories],
   )
 
   const runCodexFollowUp = useCallback(
@@ -516,22 +516,19 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
         let overlays = state.scopeOverlays || []
         const failures: string[] = []
         let completed = 0
-        let session = getCodexRun(codexRunKey(projectId, issueIds[0])).sessionId
         try {
-          for (let index = 0; index < issueIds.length; index += 1) {
-            if (codexAbortRequested(projectId)) {
-              failures.push('Cancelled remaining tickets.')
-              break
-            }
-            const issueId = issueIds[index]
+          const storyById = new Map(stories.map((item) => [item.id, item]))
+          const pending = new Set(issueIds)
+          const completedIds = new Set<string>()
+          let waveNumber = 0
+          const runStory = async (issueId: string): Promise<ScopeOverlayFile[] | null> => {
             setSelectedIssueId(issueId)
             beginCodexRun(projectId, issueId)
-            if (session) rememberCodexSession(projectId, issueId, session)
-            patchProjectCodexMeta(projectId, { message: `Implementing ${shortStoryLabel(issueId)} (${index + 1}/${issueIds.length})…` })
+            patchProjectCodexMeta(projectId, { message: `Implementing ${shortStoryLabel(issueId)} (wave ${waveNumber})…` })
             try {
               const res = await streamCodexImplementStep(
                 projectId,
-                { ...implementPayload(issueId, overlays), ...(session ? { codexSessionId: session } : {}), model },
+                { ...implementPayload(issueId, overlays), model },
                 {
                   onThinking: (text) => applyCodexEvent(projectId, issueId, 'thinking', { text }),
                   onEvent: (event, payload) => applyCodexEvent(projectId, issueId, event, payload),
@@ -543,24 +540,21 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
               if (res.status !== 'ok') {
                 throw new Error(res.message || res.errors?.join('; ') || 'Implementation agent failed')
               }
-              if (res.codexSessionId) {
-                session = res.codexSessionId
-                rememberCodexSession(projectId, issueId, res.codexSessionId)
-              }
+              if (res.codexSessionId) rememberCodexSession(projectId, issueId, res.codexSessionId)
               applyCodexEvent(projectId, issueId, 'done', res as unknown as Record<string, unknown>)
               const draftPrs = res.draftPullRequests || []
               setPrs(draftPrs)
               const impl = res.implementStep
               const resolvedIssue = impl?.issueId || res.issueId || issueId
+              const nextOverlays = res.overlayFiles || overlays
               onUpdate({
                 implementStep: impl || { issueId: resolvedIssue, summary: res.message },
                 draftPullRequests: draftPrs,
                 sdlcStartIssueId: resolvedIssue,
                 implementationAuthorized: true,
-                scopeOverlays: res.overlayFiles || overlays,
+                scopeOverlays: nextOverlays,
                 nextSdlcCommand: res.nextCommand || '/qa-validation',
               })
-              overlays = res.overlayFiles || overlays
               setSelectedIssueId(resolvedIssue)
               await refreshShipProgress()
               if (!draftPrs.length) {
@@ -575,17 +569,43 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
                 const reason = draftedSkipMessage(skipReason)
                 finishCodexRun(projectId, issueId, { error: reason, message: null })
                 failures.push(`${shortStoryLabel(issueId)}: ${reason}`)
-                continue
+                return null
               }
               finishCodexRun(projectId, issueId, { error: null, message: null })
               completed += 1
+              return nextOverlays
             } catch (err) {
               const reason = err instanceof Error ? err.message : 'Could not run implementation.'
               failCodexRun(projectId, issueId, reason)
               failures.push(`${shortStoryLabel(issueId)}: ${reason}`)
+              return null
             } finally {
               finishCodexRun(projectId, issueId)
             }
+          }
+
+          while (pending.size > 0 && !codexAbortRequested(projectId)) {
+            const ready = [...pending].filter((issueId) => {
+              const deps = storyById.get(issueId)?.dependsOn || []
+              return deps.every((dependency) => completedIds.has(dependency) || !issueIds.includes(dependency))
+            })
+            if (!ready.length) {
+              failures.push(`Dependency cycle or unresolved dependency among: ${[...pending].join(', ')}`)
+              break
+            }
+            waveNumber += 1
+            const batch = ready.slice(0, 3)
+            const results = await Promise.all(batch.map((issueId) => runStory(issueId)))
+            batch.forEach((issueId, index) => {
+              pending.delete(issueId)
+              if (results[index]) {
+                completedIds.add(issueId)
+                overlays = results[index] || overlays
+              }
+            })
+          }
+          if (pending.size > 0 && codexAbortRequested(projectId)) {
+            failures.push('Cancelled remaining tickets.')
           }
           try {
             const snap = await fetchCanonicalSnapshot(projectId)
@@ -620,8 +640,9 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   const activeIssue = selectedRow?.id || selectedIssueId || ''
   const selectedRun = projectKey && activeIssue ? getCodexRun(codexRunKey(projectKey, activeIssue)) : null
   const busy = Boolean(selectedRun?.busy)
-  const runningIssueId = projectKey ? busyIssueId(projectKey) : null
-  const anyBusy = Boolean(runningIssueId)
+  const runningIssueIds = projectKey ? busyIssueIds(projectKey) : []
+  const runningIssueId = runningIssueIds[0] || null
+  const anyBusy = runningIssueIds.length > 0
   const codexConsole = selectedRun?.console ?? emptyCodexConsole()
   const codexSessionId = selectedRun?.sessionId ?? null
   const meta = projectKey ? projectCodexMeta(projectKey) : { runningAll: false, error: null, message: null }

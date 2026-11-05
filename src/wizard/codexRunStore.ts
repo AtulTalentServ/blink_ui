@@ -65,11 +65,16 @@ export function projectCodexMeta(projectId: string): ProjectCodexMeta {
 }
 
 export function busyIssueId(projectId: string): string | null {
+  return busyIssueIds(projectId)[0] || null
+}
+
+export function busyIssueIds(projectId: string): string[] {
   const prefix = `${projectId}:`
+  const out: string[] = []
   for (const [key, run] of runs) {
-    if (key.startsWith(prefix) && run.busy) return key.slice(prefix.length)
+    if (key.startsWith(prefix) && run.busy) out.push(key.slice(prefix.length))
   }
-  return null
+  return out
 }
 
 export function patchCodexRun(key: string, update: (prev: CodexRunSnapshot) => CodexRunSnapshot) {

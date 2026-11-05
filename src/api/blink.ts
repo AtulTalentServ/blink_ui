@@ -3192,6 +3192,16 @@ export type CodexWorkbenchTurn = {
   attachments?: CodexAttachment[]
   activity?: Array<{ kind?: string; text?: string; status?: string }>
   files?: Record<string, string>
+  usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    cachedInputTokens?: number
+    reasoningTokens?: number
+    totalTokens?: number
+    durationMs?: number
+    commandCount?: number
+    filesChanged?: number
+  }
   createdAt?: string
 }
 

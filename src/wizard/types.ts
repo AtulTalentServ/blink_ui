@@ -183,6 +183,7 @@ export interface EpicSummary {
 export interface StorySummary {
   id: string
   epicId?: string
+  dependsOn?: string[]
   title: string
   objective?: string
   asA?: string
