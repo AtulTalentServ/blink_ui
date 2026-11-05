@@ -64,12 +64,15 @@ export function ShipScreen({
   const activeIndex = SHIP_SUBSTAGES.findIndex((item) => item.id === substage)
 
   return (
-    <div className="screen ship-screen">
-      <div className="screen-header">
-        <h2>{copy.title}</h2>
-        <p>{copy.detail}</p>
-      </div>
+    <div className={`screen ship-screen${substage === 'implementation' ? ' is-workbench' : ''}`}>
+      {substage === 'implementation' ? null : (
+        <div className="screen-header">
+          <h2>{copy.title}</h2>
+          <p>{copy.detail}</p>
+        </div>
+      )}
 
+      <div className="ship-stepper-row">
       <ol className="ship-stepper" aria-label="Ship phases">
         {SHIP_SUBSTAGES.map((item, index) => {
           const enabled = permitted.has(item.id)
@@ -91,6 +94,12 @@ export function ShipScreen({
           )
         })}
       </ol>
+      {substage === 'implementation' && state.implementStep ? (
+        <button type="button" className="codex-btn codex-btn--primary" onClick={() => onSubstage('review-pr')}>
+          Continue to Review &amp; PR
+        </button>
+      ) : null}
+      </div>
 
       {shipHints.length > 0 ? (
         <ul className="ship-hint-list">

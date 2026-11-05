@@ -18,7 +18,7 @@ export type CodexPhase =
 
 export type CodexConsoleEvent = {
   id: string
-  kind: 'status' | 'session' | 'command' | 'output' | 'thinking' | 'error' | 'info'
+  kind: 'status' | 'session' | 'command' | 'output' | 'thinking' | 'error' | 'info' | 'activity'
   text: string
   at: string
 }
@@ -93,6 +93,11 @@ export function reduceCodexEvent(
   if (event === 'thinking') {
     const text = typeof payload.text === 'string' ? payload.text : ''
     return { ...push('thinking', text), thinking: state.thinking + text, busy: true }
+  }
+  if (event === 'activity') {
+    const text = typeof payload.text === 'string' ? payload.text : ''
+    if (!text) return state
+    return { ...push('activity', text), phase: state.phase === 'idle' ? 'running' : state.phase, busy: true }
   }
   if (event === 'error') {
     const message = typeof payload.message === 'string' ? payload.message : 'Codex error'

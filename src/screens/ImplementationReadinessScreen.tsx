@@ -1,40 +1,43 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { Loader2, Play, Search } from 'lucide-react'
 import {
-  AlertCircle,
-  CheckCircle2,
-  Circle,
-  ExternalLink,
-  Layers,
-  ListChecks,
-  Loader2,
-  Play,
-  RefreshCw,
-  User,
-} from 'lucide-react'
-import {
+  cancelCodexSession,
   fetchCanonicalSnapshot,
+  fetchCodexWorkbench,
   fetchShipSession,
+  postCodexGitAction,
   streamCodexFollowUp,
   streamCodexImplementStep,
+  streamCodexSteer,
+  type CodexAttachment,
+  type CodexWorkbench,
   type DraftPullRequest,
   type ShipStepDto,
 } from '../api/blink'
-import {
-  CodexAgentConsole,
-  emptyCodexConsole,
-  reduceCodexEvent,
-  type CodexConsoleState,
-} from '../components/CodexAgentConsole'
-import { ImplementAllRequirementsPanel } from '../desktop/ImplementAllRequirementsPanel'
-import { StoryRunPanel } from './StoryRunPanel'
+import { emptyCodexConsole } from '../components/CodexAgentConsole'
+import { CodexChatPanel, type ChatSend } from '../components/CodexChatPanel'
+import { CodexProjectInspector } from '../components/CodexProjectInspector'
+import type { LineComment } from '../components/CodexDiffViewer'
 import { patchFromCanonicalSnapshot } from '../wizard/canonical'
 import {
-  loadImplementRunMode,
-  implementArchitectureContext,
-  requirementsBatchContext,
-  saveImplementRunMode,
-  type ImplementRunMode,
-} from '../wizard/implementRunMode'
+  applyCodexEvent,
+  beginCodexRun,
+  busyIssueId,
+  codexRunInflight,
+  clearCodexAbort,
+  codexAbortRequested,
+  codexRunKey,
+  failCodexRun,
+  finishCodexRun,
+  getCodexRun,
+  getCodexRunVersion,
+  patchProjectCodexMeta,
+  projectCodexMeta,
+  rememberCodexSession,
+  requestCodexAbort,
+  subscribeCodexRuns,
+  trackCodexRun,
+} from '../wizard/codexRunStore'
 import type { StorySummary, WizardState } from '../wizard/types'
 
 interface Props {
@@ -53,16 +56,6 @@ interface StoryRow {
   prUrls: string[]
   /** Why a draft PR was not opened (token missing, docs-only stub, etc.). */
   skipReason?: string
-}
-
-function requirementTextOf(state: WizardState): string {
-  return (
-    state.groomDraft?.trim()
-    || state.requirementsText?.trim()
-    || state.productScope?.markdown?.trim()
-    || state.description?.trim()
-    || ''
-  )
 }
 
 function defaultIssueId(state: WizardState): string | undefined {
@@ -256,11 +249,6 @@ function buildStoryRows(
   return rows
 }
 
-function prLabel(url: string): string {
-  const match = url.match(/\/pull\/(\d+)/i)
-  return match ? `PR #${match[1]}` : 'PR'
-}
-
 function draftedSkipMessage(reason: string | undefined): string {
   switch (reason) {
     case 'docs_only_stub':
@@ -279,17 +267,21 @@ function draftedSkipMessage(reason: string | undefined): string {
 }
 
 export function ImplementationReadinessScreen({ state, onUpdate, onContinueToReview }: Props) {
-  const [busy, setBusy] = useState(false)
-  const [busyIssueId, setBusyIssueId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
+  const projectKey = state.projectId ? String(state.projectId) : ''
+  useSyncExternalStore(subscribeCodexRuns, getCodexRunVersion, getCodexRunVersion)
   const [prs, setPrs] = useState<DraftPullRequest[]>([])
   const [implementSteps, setImplementSteps] = useState<ShipStepDto[]>([])
-  const [codexConsole, setCodexConsole] = useState<CodexConsoleState>(emptyCodexConsole)
-  const [codexSessionId, setCodexSessionId] = useState<string | null>(null)
   const [selectedIssueId, setSelectedIssueId] = useState<string | undefined>(() => defaultIssueId(state))
-  const [runMode, setRunMode] = useState<ImplementRunMode>(() => loadImplementRunMode())
-  const [runningAll, setRunningAll] = useState(false)
+  const [workbench, setWorkbench] = useState<CodexWorkbench | null>(null)
+  const [scope, setScope] = useState('uncommitted')
+  const [commitSha, setCommitSha] = useState('')
+  const [inspectorTab, setInspectorTab] = useState<'changes' | 'files' | 'terminal' | 'git'>('changes')
+  const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [openPath, setOpenPath] = useState('')
+  const [storyQuery, setStoryQuery] = useState('')
+  const [turnCounts, setTurnCounts] = useState<Record<string, number>>({})
+  const [model, setModel] = useState('gpt-6-luna')
+  const [railOpen, setRailOpen] = useState(true)
 
   const readyForAgent = Boolean(state.projectId && (state.planAcknowledged || state.shipPlanAcknowledged))
   const workspaceReady = Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged)
@@ -348,31 +340,8 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     ],
   )
 
-  const nextPending = rows.find((r) => !r.hasDraft)
-  const batchRequirements = useMemo(() => requirementsBatchContext(state), [
-    state.groomDraft,
-    state.requirementsText,
-    state.productScope?.markdown,
-    state.description,
-  ])
-  const batchArchitecture = useMemo(() => implementArchitectureContext(state), [
-    state.architectureStyle,
-    state.repoTechnologies,
-    state.repositories,
-    state.repositoryModel,
-    state.topology,
-    state.topologyConfirmation,
-  ])
   const selectedRow = rows.find((r) => r.id === selectedIssueId) || rows[0]
-  const draftedCount = rows.filter((r) => r.hasDraft).length
-  const selectedHasDraft = Boolean(selectedRow?.hasDraft)
   const pendingIds = rows.filter((r) => !r.hasDraft).map((r) => r.id)
-  const implementAllIds = pendingIds.length ? pendingIds : rows.map((r) => r.id)
-  const implementAllLabel = pendingIds.length && pendingIds.length < rows.length
-    ? `Implement all · ${pendingIds.length} left`
-    : pendingIds.length
-      ? 'Implement all'
-      : 'Re-run all'
   const selectedPrUrls = useMemo(() => {
     if (!selectedRow) return [] as string[]
     if (selectedRow.id === state.implementStep?.issueId && latestSessionPrUrls.length) {
@@ -380,29 +349,6 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     }
     return selectedRow.prUrls
   }, [selectedRow, state.implementStep?.issueId, latestSessionPrUrls])
-  const previewPullRequests = useMemo(() => {
-    const seen = new Set<string>()
-    const frontend: string[] = []
-    const rest: string[] = []
-    for (const row of rows) {
-      for (const url of row.prUrls) {
-        const trimmed = url.trim()
-        if (!trimmed || seen.has(trimmed)) continue
-        seen.add(trimmed)
-        if (/frontend/i.test(trimmed)) frontend.push(trimmed)
-        else rest.push(trimmed)
-      }
-    }
-    for (const url of selectedPrUrls) {
-      const trimmed = url.trim()
-      if (!trimmed || seen.has(trimmed)) continue
-      seen.add(trimmed)
-      rest.push(trimmed)
-    }
-    return [...frontend, ...rest]
-  }, [rows, selectedPrUrls])
-
-  const implementAllAbort = useRef(false)
 
   const implementPayload = useCallback(
     (issueId: string, overlayFiles: WizardState['scopeOverlays']) => {
@@ -423,241 +369,246 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
   )
 
   const runImplement = useCallback(
-    async (issueId: string) => {
-      if (!state.projectId) {
-        setError('Save the project before running implementation.')
+    async (issueId: string, extra?: ChatSend) => {
+      const projectId = state.projectId ? String(state.projectId) : ''
+      if (!projectId) {
+        patchProjectCodexMeta('0', { error: 'Save the project before running implementation.', message: null })
         return
       }
       if (!issueId) {
-        setError('Select a story before running implementation.')
+        patchProjectCodexMeta(projectId, { error: 'Select a story before running implementation.', message: null })
         return
       }
-      setBusy(true)
-      setBusyIssueId(issueId)
-      setSelectedIssueId(issueId)
-      setError(null)
-      setMessage(null)
-      setCodexConsole({ ...emptyCodexConsole(), busy: true, phase: 'provisioning' })
-      try {
-        const res = await streamCodexImplementStep(
-          state.projectId,
-          { ...implementPayload(issueId, state.scopeOverlays), ...(codexSessionId ? { codexSessionId } : {}) },
-          {
-            onThinking: (text) => setCodexConsole((prev) => reduceCodexEvent(prev, 'thinking', { text })),
-            onEvent: (event, payload) => setCodexConsole((prev) => reduceCodexEvent(prev, event, payload)),
-          },
-        )
-        if (res.status === 'blocked') {
-          throw new Error(res.message || 'Quality gate blocked the GitHub commit.')
-        }
-        if (res.status !== 'ok') {
-          throw new Error(res.message || res.errors?.join('; ') || 'Implementation agent failed')
-        }
-        if (res.codexSessionId) setCodexSessionId(res.codexSessionId)
-        setCodexConsole((prev) => reduceCodexEvent(prev, 'done', res as unknown as Record<string, unknown>))
-        const draftPrs = res.draftPullRequests || []
-        setPrs(draftPrs)
-        const impl = res.implementStep
-        const resolvedIssue = impl?.issueId || res.issueId || issueId
-        const evidence = res.evidence && typeof res.evidence === 'object'
-          ? res.evidence as Record<string, unknown>
-          : null
-        const skipReason = typeof evidence?.draftPrSkipped === 'string'
-          ? evidence.draftPrSkipped
-          : typeof evidence?.draftPrError === 'string'
-            ? evidence.draftPrError
-            : undefined
-        onUpdate({
-          implementStep: impl || {
-            issueId: resolvedIssue,
-            summary: res.message,
-          },
-          draftPullRequests: draftPrs,
-          sdlcStartIssueId: resolvedIssue,
-          implementationAuthorized: true,
-          scopeOverlays: res.overlayFiles || state.scopeOverlays || [],
-          nextSdlcCommand: res.nextCommand || '/qa-validation',
-        })
-        setSelectedIssueId(resolvedIssue)
-        if (draftPrs.length) {
-          setError(null)
-          setMessage(`${shortStoryLabel(resolvedIssue)} drafted · ${draftPrs.length} PR(s) opened`)
-        } else {
-          setMessage(null)
-          setError(draftedSkipMessage(skipReason))
-        }
-        await refreshShipProgress()
+      const work = (async () => {
+        setSelectedIssueId(issueId)
+        beginCodexRun(projectId, issueId)
+        patchProjectCodexMeta(projectId, { error: null, message: null })
+        const sessionId = getCodexRun(codexRunKey(projectId, issueId)).sessionId
         try {
-          const snap = await fetchCanonicalSnapshot(state.projectId)
-          onUpdate(patchFromCanonicalSnapshot(snap, {
-            ...state,
-            shipSubstage: 'implementation',
-            gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
-          }))
-        } catch {
-          /* best-effort */
+          const res = await streamCodexImplementStep(
+            projectId,
+            { ...implementPayload(issueId, state.scopeOverlays), ...(sessionId ? { codexSessionId: sessionId } : {}), instruction: extra?.text || undefined, attachments: extra?.attachments || undefined, model },
+            {
+              onThinking: (text) => applyCodexEvent(projectId, issueId, 'thinking', { text }),
+              onEvent: (event, payload) => applyCodexEvent(projectId, issueId, event, payload),
+            },
+          )
+          if (res.status === 'blocked') {
+            throw new Error(res.message || 'Quality gate blocked the GitHub commit.')
+          }
+          if (res.status !== 'ok') {
+            throw new Error(res.message || res.errors?.join('; ') || 'Implementation agent failed')
+          }
+          rememberCodexSession(projectId, issueId, res.codexSessionId)
+          applyCodexEvent(projectId, issueId, 'done', res as unknown as Record<string, unknown>)
+          const draftPrs = res.draftPullRequests || []
+          setPrs(draftPrs)
+          const impl = res.implementStep
+          const resolvedIssue = impl?.issueId || res.issueId || issueId
+          const evidence = res.evidence && typeof res.evidence === 'object'
+            ? res.evidence as Record<string, unknown>
+            : null
+          const skipReason = typeof evidence?.draftPrSkipped === 'string'
+            ? evidence.draftPrSkipped
+            : typeof evidence?.draftPrError === 'string'
+              ? evidence.draftPrError
+              : undefined
+          onUpdate({
+            implementStep: impl || {
+              issueId: resolvedIssue,
+              summary: res.message,
+            },
+            draftPullRequests: draftPrs,
+            sdlcStartIssueId: resolvedIssue,
+            implementationAuthorized: true,
+            scopeOverlays: res.overlayFiles || state.scopeOverlays || [],
+            nextSdlcCommand: res.nextCommand || '/qa-validation',
+          })
+          setSelectedIssueId(resolvedIssue)
+          if (draftPrs.length) {
+            finishCodexRun(projectId, issueId, { error: null, message: `${shortStoryLabel(resolvedIssue)} drafted · ${draftPrs.length} PR(s) opened` })
+          } else {
+            finishCodexRun(projectId, issueId, { message: null, error: draftedSkipMessage(skipReason) })
+          }
+          await refreshShipProgress()
+          try {
+            const snap = await fetchCanonicalSnapshot(projectId)
+            onUpdate(patchFromCanonicalSnapshot(snap, {
+              ...state,
+              shipSubstage: 'implementation',
+              gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
+            }))
+          } catch {
+            /* best-effort */
+          }
+        } catch (err) {
+          failCodexRun(projectId, issueId, err instanceof Error ? err.message : 'Could not run implementation.')
+        } finally {
+          finishCodexRun(projectId, issueId)
         }
-      } catch (err) {
-        setCodexConsole((prev) => reduceCodexEvent(prev, 'error', {
-          message: err instanceof Error ? err.message : 'Could not run implementation.',
-        }))
-        setError(err instanceof Error ? err.message : 'Could not run implementation.')
-      } finally {
-        setBusy(false)
-        setBusyIssueId(null)
-      }
+      })()
+      trackCodexRun(codexRunKey(projectId, issueId), work)
+      await work
     },
-    [codexSessionId, implementPayload, onUpdate, refreshShipProgress, state],
+    [implementPayload, model, onUpdate, refreshShipProgress, state],
   )
 
   const runCodexFollowUp = useCallback(
-    async (instruction: string) => {
-      if (!state.projectId || !selectedIssueId) return
-      setBusy(true)
-      setCodexConsole((prev) => ({ ...prev, busy: true, phase: 'provisioning' }))
-      try {
-        const selectedPr = (prs[0] || (state.draftPullRequests || [])[0]) as DraftPullRequest | undefined
-        const res = await streamCodexFollowUp(
-          state.projectId,
-          {
-            ...implementPayload(selectedIssueId, state.scopeOverlays),
-            followUp: instruction,
-            confirm: true,
-            gitWritten: true,
-            codexSessionId: codexSessionId || undefined,
-            owner: selectedPr?.owner,
-            repo: selectedPr?.repo,
-            branch: selectedPr?.branch || `blink/implement-${selectedIssueId}`,
-          },
-          {
-            onThinking: (text) => setCodexConsole((prev) => reduceCodexEvent(prev, 'thinking', { text })),
-            onEvent: (event, payload) => setCodexConsole((prev) => reduceCodexEvent(prev, event, payload)),
-          },
-        )
-        if (res.codexSessionId) setCodexSessionId(res.codexSessionId)
-        setCodexConsole((prev) => reduceCodexEvent(prev, 'done', res as unknown as Record<string, unknown>))
-        if (res.draftPullRequests?.length) setPrs(res.draftPullRequests)
-        setMessage(res.summary || res.message || 'Follow-up applied')
-        await refreshShipProgress()
-      } catch (err) {
-        setCodexConsole((prev) => reduceCodexEvent(prev, 'error', {
-          message: err instanceof Error ? err.message : 'Follow-up failed',
-        }))
-        setError(err instanceof Error ? err.message : 'Follow-up failed')
-      } finally {
-        setBusy(false)
-      }
+    async (instruction: string, attachments?: CodexAttachment[]) => {
+      const projectId = state.projectId ? String(state.projectId) : ''
+      if (!projectId || !selectedIssueId) return
+      const issueId = selectedIssueId
+      const work = (async () => {
+        beginCodexRun(projectId, issueId)
+        const sessionId = getCodexRun(codexRunKey(projectId, issueId)).sessionId
+        try {
+          const selectedPr = (prs[0] || (state.draftPullRequests || [])[0]) as DraftPullRequest | undefined
+          const res = await streamCodexFollowUp(
+            projectId,
+            {
+              ...implementPayload(issueId, state.scopeOverlays),
+              followUp: instruction,
+              instruction,
+              attachments,
+              confirm: true,
+              gitWritten: true,
+              codexSessionId: sessionId || undefined,
+              owner: selectedPr?.owner,
+              repo: selectedPr?.repo,
+              branch: selectedPr?.branch || `blink/implement-${issueId}`,
+              model,
+            },
+            {
+              onThinking: (text) => applyCodexEvent(projectId, issueId, 'thinking', { text }),
+              onEvent: (event, payload) => applyCodexEvent(projectId, issueId, event, payload),
+            },
+          )
+          rememberCodexSession(projectId, issueId, res.codexSessionId)
+          applyCodexEvent(projectId, issueId, 'done', res as unknown as Record<string, unknown>)
+          if (res.draftPullRequests?.length) setPrs(res.draftPullRequests)
+          finishCodexRun(projectId, issueId, { error: null, message: res.summary || res.message || 'Follow-up applied' })
+          await refreshShipProgress()
+        } catch (err) {
+          failCodexRun(projectId, issueId, err instanceof Error ? err.message : 'Follow-up failed')
+        } finally {
+          finishCodexRun(projectId, issueId)
+        }
+      })()
+      trackCodexRun(codexRunKey(projectId, issueId), work)
+      await work
     },
-    [codexSessionId, implementPayload, prs, refreshShipProgress, selectedIssueId, state],
+    [implementPayload, model, prs, refreshShipProgress, selectedIssueId, state],
   )
 
   const runImplementAll = useCallback(
     async (issueIds: string[]) => {
-      if (!state.projectId) {
-        setError('Save the project before running implementation.')
+      const projectId = state.projectId ? String(state.projectId) : ''
+      if (!projectId) {
         return
       }
       if (!issueIds.length) {
-        setError('Add stories in Scope & tickets before implementing the project.')
+        patchProjectCodexMeta(projectId, { error: 'Add stories in Scope & tickets before implementing the project.', message: null })
         return
       }
-      setBusy(true)
-      setRunningAll(true)
-      setError(null)
-      setMessage(null)
-      implementAllAbort.current = false
-      let overlays = state.scopeOverlays || []
-      const failures: string[] = []
-      let completed = 0
-      let session = codexSessionId
-      try {
-        for (let index = 0; index < issueIds.length; index += 1) {
-          if (implementAllAbort.current) {
-            failures.push('Cancelled remaining tickets.')
-            break
-          }
-          const issueId = issueIds[index]
-          setBusyIssueId(issueId)
-          setSelectedIssueId(issueId)
-          setMessage(`Implementing ${shortStoryLabel(issueId)} (${index + 1}/${issueIds.length})…`)
-          try {
-            setCodexConsole({ ...emptyCodexConsole(), busy: true, phase: 'provisioning' })
-            const res = await streamCodexImplementStep(
-              state.projectId,
-              { ...implementPayload(issueId, overlays), ...(session ? { codexSessionId: session } : {}) },
-              {
-                onThinking: (text) => setCodexConsole((prev) => reduceCodexEvent(prev, 'thinking', { text })),
-                onEvent: (event, payload) => setCodexConsole((prev) => reduceCodexEvent(prev, event, payload)),
-              },
-            )
-            if (res.status === 'blocked') {
-              throw new Error(res.message || 'Quality gate blocked the GitHub commit.')
-            }
-            if (res.status !== 'ok') {
-              throw new Error(res.message || res.errors?.join('; ') || 'Implementation agent failed')
-            }
-            if (res.codexSessionId) {
-              session = res.codexSessionId
-              setCodexSessionId(res.codexSessionId)
-            }
-            setCodexConsole((prev) => reduceCodexEvent(prev, 'done', res as unknown as Record<string, unknown>))
-            const draftPrs = res.draftPullRequests || []
-            setPrs(draftPrs)
-            const impl = res.implementStep
-            const resolvedIssue = impl?.issueId || res.issueId || issueId
-            onUpdate({
-              implementStep: impl || { issueId: resolvedIssue, summary: res.message },
-              draftPullRequests: draftPrs,
-              sdlcStartIssueId: resolvedIssue,
-              implementationAuthorized: true,
-              scopeOverlays: res.overlayFiles || overlays,
-              nextSdlcCommand: res.nextCommand || '/qa-validation',
-            })
-            overlays = res.overlayFiles || overlays
-            setSelectedIssueId(resolvedIssue)
-            await refreshShipProgress()
-            if (!draftPrs.length) {
-              const evidence = res.evidence && typeof res.evidence === 'object'
-                ? res.evidence as Record<string, unknown>
-                : null
-              const skipReason = typeof evidence?.draftPrSkipped === 'string'
-                ? evidence.draftPrSkipped
-                : typeof evidence?.draftPrError === 'string'
-                  ? evidence.draftPrError
-                  : undefined
-              failures.push(`${shortStoryLabel(issueId)}: ${draftedSkipMessage(skipReason)}`)
-              continue
-            }
-            completed += 1
-          } catch (err) {
-            const reason = err instanceof Error ? err.message : 'Could not run implementation.'
-            setCodexConsole((prev) => reduceCodexEvent(prev, 'error', { message: reason }))
-            failures.push(`${shortStoryLabel(issueId)}: ${reason}`)
-          }
-        }
+      const work = (async () => {
+        patchProjectCodexMeta(projectId, { runningAll: true, error: null, message: null })
+        clearCodexAbort(projectId)
+        let overlays = state.scopeOverlays || []
+        const failures: string[] = []
+        let completed = 0
+        let session = getCodexRun(codexRunKey(projectId, issueIds[0])).sessionId
         try {
-          const snap = await fetchCanonicalSnapshot(state.projectId)
-          onUpdate(patchFromCanonicalSnapshot(snap, {
-            ...state,
-            shipSubstage: 'implementation',
-            gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
-          }))
-        } catch {
-          /* best-effort */
+          for (let index = 0; index < issueIds.length; index += 1) {
+            if (codexAbortRequested(projectId)) {
+              failures.push('Cancelled remaining tickets.')
+              break
+            }
+            const issueId = issueIds[index]
+            setSelectedIssueId(issueId)
+            beginCodexRun(projectId, issueId)
+            if (session) rememberCodexSession(projectId, issueId, session)
+            patchProjectCodexMeta(projectId, { message: `Implementing ${shortStoryLabel(issueId)} (${index + 1}/${issueIds.length})…` })
+            try {
+              const res = await streamCodexImplementStep(
+                projectId,
+                { ...implementPayload(issueId, overlays), ...(session ? { codexSessionId: session } : {}), model },
+                {
+                  onThinking: (text) => applyCodexEvent(projectId, issueId, 'thinking', { text }),
+                  onEvent: (event, payload) => applyCodexEvent(projectId, issueId, event, payload),
+                },
+              )
+              if (res.status === 'blocked') {
+                throw new Error(res.message || 'Quality gate blocked the GitHub commit.')
+              }
+              if (res.status !== 'ok') {
+                throw new Error(res.message || res.errors?.join('; ') || 'Implementation agent failed')
+              }
+              if (res.codexSessionId) {
+                session = res.codexSessionId
+                rememberCodexSession(projectId, issueId, res.codexSessionId)
+              }
+              applyCodexEvent(projectId, issueId, 'done', res as unknown as Record<string, unknown>)
+              const draftPrs = res.draftPullRequests || []
+              setPrs(draftPrs)
+              const impl = res.implementStep
+              const resolvedIssue = impl?.issueId || res.issueId || issueId
+              onUpdate({
+                implementStep: impl || { issueId: resolvedIssue, summary: res.message },
+                draftPullRequests: draftPrs,
+                sdlcStartIssueId: resolvedIssue,
+                implementationAuthorized: true,
+                scopeOverlays: res.overlayFiles || overlays,
+                nextSdlcCommand: res.nextCommand || '/qa-validation',
+              })
+              overlays = res.overlayFiles || overlays
+              setSelectedIssueId(resolvedIssue)
+              await refreshShipProgress()
+              if (!draftPrs.length) {
+                const evidence = res.evidence && typeof res.evidence === 'object'
+                  ? res.evidence as Record<string, unknown>
+                  : null
+                const skipReason = typeof evidence?.draftPrSkipped === 'string'
+                  ? evidence.draftPrSkipped
+                  : typeof evidence?.draftPrError === 'string'
+                    ? evidence.draftPrError
+                    : undefined
+                const reason = draftedSkipMessage(skipReason)
+                finishCodexRun(projectId, issueId, { error: reason, message: null })
+                failures.push(`${shortStoryLabel(issueId)}: ${reason}`)
+                continue
+              }
+              finishCodexRun(projectId, issueId, { error: null, message: null })
+              completed += 1
+            } catch (err) {
+              const reason = err instanceof Error ? err.message : 'Could not run implementation.'
+              failCodexRun(projectId, issueId, reason)
+              failures.push(`${shortStoryLabel(issueId)}: ${reason}`)
+            } finally {
+              finishCodexRun(projectId, issueId)
+            }
+          }
+          try {
+            const snap = await fetchCanonicalSnapshot(projectId)
+            onUpdate(patchFromCanonicalSnapshot(snap, {
+              ...state,
+              shipSubstage: 'implementation',
+              gitWritten: Boolean(state.gitWritten || state.generationComplete || state.bootstrapAcknowledged),
+            }))
+          } catch {
+            /* best-effort */
+          }
+          patchProjectCodexMeta(projectId, {
+            message: completed ? `Opened draft PRs for ${completed} ${completed === 1 ? 'story' : 'stories'}` : null,
+            error: failures.length ? failures.join(' ') : null,
+          })
+        } finally {
+          patchProjectCodexMeta(projectId, { runningAll: false })
         }
-        if (completed) {
-          setMessage(`Opened draft PRs for ${completed} ${completed === 1 ? 'story' : 'stories'}`)
-        } else {
-          setMessage(null)
-        }
-        if (failures.length) setError(failures.join(' '))
-      } finally {
-        setBusy(false)
-        setRunningAll(false)
-        setBusyIssueId(null)
-      }
+      })()
+      trackCodexRun(`${projectId}:all`, work)
+      await work
     },
-    [codexSessionId, implementPayload, onUpdate, refreshShipProgress, state],
+    [implementPayload, model, onUpdate, refreshShipProgress, state],
   )
 
   const selectStory = (id: string) => {
@@ -665,257 +616,241 @@ export function ImplementationReadinessScreen({ state, onUpdate, onContinueToRev
     onUpdate({ sdlcStartIssueId: id })
   }
 
-  const selectRunMode = (mode: ImplementRunMode) => {
-    setRunMode(mode)
-    saveImplementRunMode(mode)
+  const story = stories.find((item) => item.id === (selectedRow?.id || selectedIssueId))
+  const activeIssue = selectedRow?.id || selectedIssueId || ''
+  const selectedRun = projectKey && activeIssue ? getCodexRun(codexRunKey(projectKey, activeIssue)) : null
+  const busy = Boolean(selectedRun?.busy)
+  const runningIssueId = projectKey ? busyIssueId(projectKey) : null
+  const anyBusy = Boolean(runningIssueId)
+  const codexConsole = selectedRun?.console ?? emptyCodexConsole()
+  const codexSessionId = selectedRun?.sessionId ?? null
+  const meta = projectKey ? projectCodexMeta(projectKey) : { runningAll: false, error: null, message: null }
+  const runningAll = meta.runningAll
+  const error = selectedRun?.error || meta.error
+  const message = selectedRun?.message || meta.message
+
+  useEffect(() => {
+    if (!state.projectId || !activeIssue) return
+    let cancelled = false
+    const load = () => fetchCodexWorkbench(state.projectId as string, activeIssue, scope, commitSha || undefined)
+      .then((res) => {
+        if (cancelled) return
+        setWorkbench(res)
+        if (
+          busy
+          && res.sessionStatus
+          && res.sessionStatus !== 'running'
+          && !codexRunInflight(codexRunKey(String(state.projectId), activeIssue))
+        ) {
+          finishCodexRun(String(state.projectId), activeIssue)
+        }
+      })
+      .catch(() => { if (!cancelled) setWorkbench(null) })
+    void load()
+    if (!busy) return () => { cancelled = true }
+    const timer = window.setInterval(() => { void load() }, 4000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [state.projectId, activeIssue, scope, commitSha, busy])
+
+  const sendFollowUp = (send: ChatSend) => {
+    if (!send.text && send.attachments.length === 0) return
+    void runCodexFollowUp(send.text, send.attachments)
   }
 
+  const stopTurn = () => {
+    if (!projectKey || !state.projectId) return
+    requestCodexAbort(projectKey)
+    const issueId = runningIssueId || activeIssue
+    void cancelCodexSession(state.projectId, { issueId: issueId || '' })
+      .then(() => {
+        if (issueId) finishCodexRun(projectKey, issueId)
+        patchProjectCodexMeta(projectKey, { error: null, message: 'Cancelled the running turn.' })
+      })
+      .catch((err) => {
+        patchProjectCodexMeta(projectKey, { error: err instanceof Error ? err.message : 'Could not cancel the turn.' })
+      })
+  }
+
+  const steer = (send: ChatSend) => {
+    if (!state.projectId || !activeIssue) return
+    void streamCodexSteer(
+      state.projectId,
+      {
+        ...implementPayload(activeIssue, state.scopeOverlays),
+        instruction: send.text,
+        followUp: send.text,
+        attachments: send.attachments,
+        confirm: true,
+        gitWritten: true,
+        model,
+        codexSessionId: codexSessionId || undefined,
+      },
+      { onEvent: (event, payload) => applyCodexEvent(projectKey, activeIssue, event, payload) },
+    ).then((res) => {
+      rememberCodexSession(projectKey, activeIssue, res.codexSessionId)
+      if (res.status === 'injected') finishCodexRun(projectKey, activeIssue, { message: 'Steering message sent to the live session.' })
+      else applyCodexEvent(projectKey, activeIssue, 'done', res as unknown as Record<string, unknown>)
+    }).catch((err) => failCodexRun(projectKey, activeIssue, err instanceof Error ? err.message : 'Steer failed'))
+  }
+
+  const git = async (action: string, filePath?: string, hunkIndex?: number) => {
+    if (!state.projectId || !activeIssue) return
+    const pr = (prs[0] || (state.draftPullRequests || [])[0]) as DraftPullRequest | undefined
+    try {
+      await postCodexGitAction(state.projectId, {
+        issueId: activeIssue,
+        action,
+        path: filePath,
+        hunkIndex,
+        owner: pr?.owner,
+        repo: pr?.repo,
+        branch: pr?.branch,
+      })
+      const res = await fetchCodexWorkbench(state.projectId, activeIssue, scope, commitSha || undefined)
+      setWorkbench(res)
+    } catch (err) {
+      patchProjectCodexMeta(projectKey, { error: err instanceof Error ? err.message : 'Git action failed' })
+    }
+  }
+
+  const sendComments = (comments: LineComment[]) => {
+    const text = comments.map((c) => `${c.path}:${c.line}\n${c.snippet}\n${c.text}`).join('\n\n')
+    void runCodexFollowUp(`Apply these review comments:\n\n${text}`)
+  }
+
+  const storyKey = rows.map((row) => row.id).join('|')
+  useEffect(() => {
+    if (!state.projectId || !storyKey) return
+    let cancelled = false
+    const ids = storyKey.split('|')
+    void Promise.all(ids.map(async (id) => {
+      try {
+        const loaded = await fetchCodexWorkbench(state.projectId as string, id, 'last_turn')
+        return [id, loaded.turns?.length ?? 0] as const
+      } catch {
+        return [id, 0] as const
+      }
+    })).then((pairs) => {
+      if (cancelled) return
+      const next: Record<string, number> = {}
+      for (const [id, count] of pairs) next[id] = count
+      setTurnCounts(next)
+    })
+    return () => { cancelled = true }
+  }, [state.projectId, storyKey, busy])
+
+  const visibleRows = rows.filter((row) => {
+    const q = storyQuery.trim().toLowerCase()
+    if (!q) return true
+    return row.id.toLowerCase().includes(q) || row.title.toLowerCase().includes(q)
+  })
+
   return (
-    <div className="screen cursor-work-screen">
-      {!readyForAgent ? (
-        <p className="status-banner info">Acknowledge the plan on Work plan before implementation.</p>
-      ) : null}
-      {!workspaceReady && readyForAgent ? (
-        <p className="status-banner info">Finish Workspace first, then run stories here.</p>
-      ) : null}
-      {error ? <p className="status-banner error">{error}</p> : null}
-      {message && !error && runMode !== 'batch-all' ? (
-        <p className="status-banner success">
-          {message}
-          {selectedPrUrls[0] ? (
-            <>
-              {' · '}
-              <a href={selectedPrUrls[0]} target="_blank" rel="noreferrer">
-                Open PR
-              </a>
-            </>
+    <div className={`codex-workbench${railOpen ? '' : ' is-rail-collapsed'}${inspectorOpen ? '' : ' is-inspector-collapsed'}`}>
+      {!readyForAgent ? <p className="status-banner info">Acknowledge the plan on Work plan before implementation.</p> : null}
+      {!workspaceReady && readyForAgent ? <p className="status-banner info">Finish Workspace first, then run stories here.</p> : null}
+      {error ? (
+        <p className="status-banner error">
+          {error}
+          {/already running/i.test(error) ? (
+            <button type="button" className="codex-btn" onClick={stopTurn}>Cancel turn</button>
           ) : null}
         </p>
       ) : null}
-
-      <StoryRunPanel
-        projectId={state.projectId}
-        issueId={selectedRow?.id || selectedIssueId}
-        title={selectedRow?.title || selectedRow?.id}
-        requirement={requirementTextOf(state)}
-        pullRequests={previewPullRequests}
-      />
-
-      <CodexAgentConsole
-        projectId={state.projectId}
-        issueId={selectedRow?.id || selectedIssueId}
-        state={codexConsole}
-        onFollowUp={runCodexFollowUp}
-        onCancelled={() => { implementAllAbort.current = true }}
-        followUpDisabled={!codexSessionId && !selectedRow?.hasDraft}
-        title="Codex Cloud Agent · implement-step"
-      />
-
-      <section className="card shape-section implement-queue-card">
-        <div className="implement-run-mode" role="tablist" aria-label="Implementation run mode">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={runMode === 'individual'}
-            className={`implement-run-mode__btn${runMode === 'individual' ? ' is-active' : ''}`}
-            onClick={() => selectRunMode('individual')}
-          >
-            <User size={15} aria-hidden />
-            Individual tickets
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={runMode === 'batch-all'}
-            className={`implement-run-mode__btn${runMode === 'batch-all' ? ' is-active' : ''}`}
-            onClick={() => selectRunMode('batch-all')}
-          >
-            <Layers size={15} aria-hidden />
-            Implement all requirements
-          </button>
-        </div>
-        {runMode === 'individual' ? (
-          <>
-        <div className="implement-queue-card__meta">
-          <span>
-            {rows.length ? `${draftedCount}/${rows.length} drafted` : 'No stories yet'}
-          </span>
-          {selectedRow ? (
-            <span className="muted">
-              Selected <code>{shortStoryLabel(selectedRow.id)}</code>
-            </span>
-          ) : null}
-        </div>
-
-        {rows.length ? (
-          <ul className="implement-story-queue">
-            {rows.map((row) => {
-              const isSelected = row.id === selectedIssueId
-              const isBusy = busy && busyIssueId === row.id
-              return (
-                <li
-                  key={row.id}
-                  className={`implement-story-queue__item${isSelected ? ' is-selected' : ''}${row.hasDraft ? ' is-drafted' : ''}`}
-                >
-                  <div className="implement-story-queue__lead">
-                    <button
-                      type="button"
-                      className="implement-story-queue__select"
-                      onClick={() => selectStory(row.id)}
-                      disabled={busy}
-                    >
-                      <span className="implement-story-queue__icon" aria-hidden>
-                        {row.hasDraft ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+      {message && !error ? <p className="status-banner success">{message}</p> : null}
+      <div className="codex-workbench__grid">
+        {railOpen ? (
+          <aside className="codex-rail">
+            <header className="codex-rail__head">
+              <strong>Stories ({rows.length})</strong>
+              <label className="codex-rail__search">
+                <Search size={14} />
+                <input value={storyQuery} onChange={(e) => setStoryQuery(e.target.value)} placeholder="Search" aria-label="Search stories" />
+              </label>
+            </header>
+            <ul>
+              {visibleRows.map((row) => {
+                const isSelected = row.id === activeIssue
+                const isBusy = projectKey ? getCodexRun(codexRunKey(projectKey, row.id)).busy : false
+                const status = isBusy ? 'Running' : row.hasDraft ? 'Drafted' : 'Pending'
+                const turns = isSelected && workbench?.turns ? workbench.turns.length : turnCounts[row.id]
+                const caption = turns && turns > 0
+                  ? `${turns} ${turns === 1 ? 'turn' : 'turns'}`
+                  : status === 'Running' ? 'In progress' : ''
+                return (
+                  <li key={row.id} className={isSelected ? 'is-selected' : ''}>
+                    <button type="button" className={`codex-story-card is-${status.toLowerCase()}`} onClick={() => selectStory(row.id)}>
+                      <span className="codex-story-card__top">
+                        <code>{shortStoryLabel(row.id)}</code>
+                        <span className={`codex-pill is-${status.toLowerCase()}`}>{status}</span>
                       </span>
-                      <span className="implement-story-queue__copy">
-                        <code className="implement-story-queue__id">{shortStoryLabel(row.id)}</code>
-                        <span className="implement-story-queue__title">{row.title}</span>
-                      </span>
+                      <span className="codex-story-card__title">{row.title}</span>
+                      <span className="codex-story-bar" aria-hidden><span /></span>
+                      {caption ? <span className="codex-story-card__meta">{caption}</span> : null}
                     </button>
-                    {row.prUrls.length ? (
-                      <span className="implement-story-queue__prs">
-                        {row.prUrls.map((url) => (
-                          <a
-                            key={url}
-                            className="implement-story-queue__pr"
-                            href={url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {prLabel(url)}
-                            <ExternalLink size={12} />
-                          </a>
-                        ))}
-                      </span>
-                    ) : null}
-                  </div>
-                  <span className={`implement-story-queue__badge is-${row.hasDraft ? 'drafted' : isSelected ? 'selected' : 'pending'}`}>
-                    {row.hasDraft ? 'Drafted' : isSelected ? 'Selected' : 'Pending'}
-                  </span>
-                  <button
-                    type="button"
-                    className={`implement-story-queue__action${row.hasDraft ? ' is-rerun' : ' is-implement'}`}
-                    disabled={busy || !readyForAgent || !workspaceReady}
-                    onClick={() => void runImplement(row.id)}
-                  >
-                    {isBusy ? (
-                      <Loader2 className="spin" size={15} aria-hidden />
-                    ) : row.hasDraft ? (
-                      <RefreshCw size={15} aria-hidden />
-                    ) : (
-                      <Play size={15} aria-hidden />
-                    )}
-                    <span>{row.hasDraft ? 'Re-run' : 'Implement'}</span>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
-        ) : (
-          <p className="muted small">Add stories in Scope &amp; tickets first.</p>
-        )}
-          </>
-        ) : (
-          <ImplementAllRequirementsPanel
-            batchRequirements={batchRequirements}
-            batchArchitecture={batchArchitecture}
-            readyForAgent={readyForAgent}
-            workspaceReady={workspaceReady}
-            onWebCodexImplementAll={() => runImplementAll(implementAllIds)}
-            webCodexBusy={runningAll || busy}
-            webCodexConsole={(
-              <CodexAgentConsole
-                projectId={state.projectId}
-                issueId={selectedIssueId}
-                state={codexConsole}
-                title="Codex Cloud Agent · implement all"
-              />
-            )}
-          />
-        )}
-
-        {runMode === 'individual' && selectedRow?.hasDraft && (selectedRow.lastSummary || selectedPrUrls.length > 0 || (state.implementStep?.issueId === selectedRow.id && state.implementStep?.notes?.length)) ? (
-          <div className="implement-result">
-            {selectedRow.lastSummary || (state.implementStep?.issueId === selectedRow.id ? state.implementStep?.summary : null) ? (
-              <p className="implement-result__summary">
-                {selectedRow.lastSummary
-                  || (state.implementStep?.issueId === selectedRow.id ? state.implementStep?.summary : null)}
-              </p>
-            ) : null}
-            {selectedPrUrls.length > 0 ? (
-              <ul className="implement-result__prs">
-                {selectedPrUrls.map((url, index) => (
-                  <li key={url}>
-                    <a href={url} target="_blank" rel="noreferrer">
-                      Draft PR{selectedPrUrls.length > 1 ? ` ${index + 1}` : ''}
-                    </a>
                   </li>
-                ))}
-              </ul>
-            ) : selectedRow.prCount > 0 ? (
-              <p className="muted small">{selectedRow.prCount} draft PR(s) recorded</p>
-            ) : null}
-          </div>
-        ) : null}
-
-        {runMode === 'individual' ? (
-        <div className="ship-actions implement-queue-actions">
-          {rows.length ? (
-            <button
-              type="button"
-              className="primary-btn"
-              disabled={busy || !readyForAgent || !workspaceReady}
-              onClick={() => void runImplementAll(implementAllIds)}
-            >
-              {runningAll ? <Loader2 className="spin" size={16} aria-hidden /> : <ListChecks size={16} aria-hidden />}
-              <span>{implementAllLabel}</span>
+                )
+              })}
+            </ul>
+            <button type="button" className="codex-btn codex-btn--ghost codex-rail__run" disabled={anyBusy || runningAll || !readyForAgent || !workspaceReady || pendingIds.length === 0} onClick={() => void runImplementAll(pendingIds)}>
+              {runningAll ? <Loader2 className="spin" size={14} /> : <Play size={14} />}
+              Run all pending
             </button>
-          ) : null}
-          {nextPending ? (
-            <button
-              type="button"
-              className="secondary-btn"
-              disabled={busy || !readyForAgent || !workspaceReady}
-              onClick={() => void runImplement(nextPending.id)}
-            >
-              {busy && !runningAll && busyIssueId === nextPending.id ? (
-                <Loader2 className="spin" size={16} aria-hidden />
-              ) : (
-                <Play size={16} aria-hidden />
-              )}
-              <span>Next pending · {shortStoryLabel(nextPending.id)}</span>
-            </button>
-          ) : selectedIssueId ? (
-            <button
-              type="button"
-              className="secondary-btn"
-              disabled={busy || !readyForAgent || !workspaceReady}
-              onClick={() => void runImplement(selectedIssueId)}
-            >
-              {busy ? (
-                <Loader2 className="spin" size={16} aria-hidden />
-              ) : selectedHasDraft ? (
-                <RefreshCw size={16} aria-hidden />
-              ) : (
-                <Play size={16} aria-hidden />
-              )}
-              <span>{selectedHasDraft ? 'Re-run selected' : 'Implement selected'}</span>
-            </button>
-          ) : null}
-          {selectedHasDraft && onContinueToReview ? (
-            <button type="button" className="secondary-btn" onClick={onContinueToReview}>
-              Continue to Review &amp; PR
-            </button>
-          ) : null}
-        </div>
-        ) : null}
-
-        {runMode === 'individual' && !workspaceReady ? (
-          <p className="muted small implement-queue-hint">
-            <AlertCircle size={14} /> Workspace must be ready before the agent can run.
-          </p>
-        ) : null}
-      </section>
+          </aside>
+        ) : (
+          <button type="button" className="codex-btn codex-rail__show" onClick={() => setRailOpen(true)}>Stories</button>
+        )}
+        <CodexChatPanel
+          storyId={activeIssue}
+          title={selectedRow?.title}
+          projectName={state.projectName}
+          branch={workbench?.branch}
+          prUrl={selectedPrUrls[0]}
+          acceptance={story?.acceptanceCriteria}
+          busy={busy}
+          canRun={readyForAgent && workspaceReady && Boolean(activeIssue) && !(anyBusy && !busy)}
+          hasSession={Boolean(codexSessionId || selectedRow?.hasDraft)}
+          turns={workbench?.turns || []}
+          additions={workbench?.additions}
+          deletions={workbench?.deletions}
+          liveEvents={codexConsole.events}
+          liveOutput={codexConsole.output}
+          livePhase={codexConsole.phase}
+          files={workbench?.files || []}
+          model={model}
+          onModel={setModel}
+          onImplement={(send) => { if (activeIssue) void runImplement(activeIssue, send) }}
+          onFollowUp={sendFollowUp}
+          onSteer={steer}
+          onStop={stopTurn}
+          onOpenFile={(filePath) => { setOpenPath(filePath); setInspectorOpen(true); setInspectorTab('files') }}
+          onViewDiff={() => { setInspectorOpen(true); setInspectorTab('changes') }}
+        />
+        {inspectorOpen ? (
+        <CodexProjectInspector
+          projectId={state.projectId}
+          issueId={activeIssue}
+          prUrls={selectedPrUrls}
+          workbench={workbench}
+          scope={scope}
+          consoleState={codexConsole}
+          openPath={openPath}
+          tab={inspectorTab}
+          onTab={setInspectorTab}
+          onScope={(next, sha) => { setScope(next); setCommitSha(sha || '') }}
+          onGit={(action, filePath, hunkIndex) => { void git(action, filePath, hunkIndex) }}
+          onSendComments={sendComments}
+          onReference={(filePath) => setOpenPath(filePath)}
+          onContinue={onContinueToReview}
+          onClose={() => setInspectorOpen(false)}
+        />
+        ) : (
+          <button type="button" className="codex-btn codex-rail__show" onClick={() => setInspectorOpen(true)}>Changes</button>
+        )}
+      </div>
     </div>
   )
 }
