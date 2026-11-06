@@ -3,6 +3,7 @@ import {
   ClipboardList,
   Cpu,
   FileText,
+  FolderSearch,
   GitBranch,
   Home,
   Layers,
@@ -11,8 +12,20 @@ import {
   Rocket,
   Users,
 } from 'lucide-react'
-import { groomQaGateSatisfied } from './groomGate'
-import type { WizardState, WizardStep } from './types'
+import { groomQaGateSatisfied } from './groomGate.ts'
+import type { WizardState, WizardStep, WorkMode } from './types'
+
+export type StepPath = {
+  projectType?: string
+  workMode?: WorkMode
+}
+
+function asPath(path?: string | StepPath, workMode?: WorkMode): StepPath {
+  if (path && typeof path === 'object') {
+    return { projectType: path.projectType, workMode: path.workMode ?? workMode }
+  }
+  return { projectType: path, workMode }
+}
 
 export interface StepDefinition {
   id: WizardStep
@@ -31,6 +44,7 @@ export const WIZARD_STEPS: StepDefinition[] = [
   { id: 'welcome', label: 'Home', icon: Home, iconColor: '#2563eb' },
   { id: 'project-stakeholders', label: 'Project & Stakeholders', icon: Users, iconColor: '#2563eb' },
   { id: 'integrations', label: 'Integrations', icon: Link2, iconColor: '#2563eb' },
+  { id: 'existing-source', label: 'Bind existing', icon: FolderSearch, iconColor: '#2563eb' },
   { id: 'requirements', label: 'Requirements', icon: FileText, iconColor: '#2563eb' },
   { id: 'stakeholder-qa', label: 'Stakeholder Q&A', icon: MessageSquare, iconColor: '#2563eb' },
   { id: 'project-shape', label: 'Project Shape', icon: Layers, iconColor: '#2563eb' },
@@ -44,7 +58,7 @@ export const WIZARD_PHASES: PhaseDefinition[] = [
   {
     id: 'setup',
     label: 'Project setup',
-    stepIds: ['welcome', 'project-stakeholders', 'integrations'],
+    stepIds: ['welcome', 'project-stakeholders', 'integrations', 'existing-source'],
   },
   {
     id: 'scope',
@@ -75,8 +89,43 @@ export const WIZARD_PHASES: PhaseDefinition[] = [
 
 export const STEP_ORDER = WIZARD_STEPS.map((s) => s.id)
 
+export function isExistingOnlyStep(step: WizardStep): boolean {
+  return step === 'existing-source'
+}
+
+/** Bound products already have topology and remotes. Maintenance also keeps the live stack. */
+function isAdoptedSkipStep(step: WizardStep, path: StepPath): boolean {
+  if (path.projectType !== 'existing') return false
+  if (step === 'project-shape' || step === 'repositories') return true
+  if (step === 'technology-per-repo') return path.workMode !== 'modernization'
+  return false
+}
+
+export function isStepVisible(step: WizardStep, path?: string | StepPath, workMode?: WorkMode): boolean {
+  const resolved = asPath(path, workMode)
+  if (isExistingOnlyStep(step)) return resolved.projectType === 'existing'
+  if (isAdoptedSkipStep(step, resolved)) return false
+  return STEP_ORDER.includes(step)
+}
+
+export function visibleWizardSteps(path?: string | StepPath, workMode?: WorkMode): StepDefinition[] {
+  return WIZARD_STEPS.filter((step) => isStepVisible(step.id, path, workMode))
+}
+
 export function stepIndex(step: WizardStep): number {
   return WIZARD_STEPS.findIndex((s) => s.id === step)
+}
+
+export function nextVisibleStep(step: WizardStep, path?: string | StepPath, workMode?: WorkMode): WizardStep | undefined {
+  let idx = stepIndex(resolveNavStep(step)) + 1
+  while (idx < STEP_ORDER.length && !isStepVisible(STEP_ORDER[idx], path, workMode)) idx += 1
+  return STEP_ORDER[idx]
+}
+
+export function prevVisibleStep(step: WizardStep, path?: string | StepPath, workMode?: WorkMode): WizardStep | undefined {
+  let idx = stepIndex(resolveNavStep(step)) - 1
+  while (idx >= 0 && !isStepVisible(STEP_ORDER[idx], path, workMode)) idx -= 1
+  return idx >= 0 ? STEP_ORDER[idx] : undefined
 }
 
 export function phaseForStep(step: WizardStep): PhaseDefinition {
@@ -84,8 +133,8 @@ export function phaseForStep(step: WizardStep): PhaseDefinition {
 }
 
 /** Single progress line: "3 of 9" — no phase grouping. */
-export function phaseProgressLabel(step: WizardStep): string {
-  const visible = WIZARD_STEPS.filter((s) => s.id !== 'welcome')
+export function phaseProgressLabel(step: WizardStep, path?: string | StepPath, workMode?: WorkMode): string {
+  const visible = visibleWizardSteps(path, workMode).filter((s) => s.id !== 'welcome')
   const idx = visible.findIndex((s) => s.id === step)
   if (idx < 0) return WIZARD_STEPS.find((s) => s.id === step)?.label || 'Home'
   return `${idx + 1} of ${visible.length}`
@@ -111,11 +160,15 @@ export function canNavigateToStep(
   unrestricted = false,
   shapeAcknowledged = false,
   canonicalAllowedSteps?: string[] | null,
+  path?: string | StepPath,
+  workMode?: WorkMode,
 ): boolean {
   target = resolveNavStep(target)
   current = resolveNavStep(current)
+  const resolved = asPath(path, workMode)
   if (unrestricted) return stepIndex(target) >= 0
   if (target === 'welcome') return true
+  if (!isStepVisible(target, resolved)) return false
   // Leaving welcome is only via Start (unrestricted / completedThrough), not sidebar nav.
   if (current === 'welcome') return false
   const targetIdx = stepIndex(target)
@@ -124,7 +177,9 @@ export function canNavigateToStep(
   const reqIdx = stepIndex('requirements')
   if (targetIdx > reqIdx && !groomingUnlocked) return false
   const planIdx = stepIndex('sdlc-plan')
-  if (targetIdx >= planIdx && !shapeAcknowledged) return false
+  const needsShapeReview =
+    isStepVisible('project-shape', resolved) || isStepVisible('technology-per-repo', resolved)
+  if (targetIdx >= planIdx && !shapeAcknowledged && needsShapeReview) return false
   const reachable = Math.max(completedThrough, currentIdx)
   // Always allow revisiting the current step and anything already completed.
   // Canonical eligibility must not trap the user on Ship after a soft checkpoint.
@@ -184,22 +239,32 @@ export function stepAttention(
 export function primaryContinueLabel(
   step: WizardStep,
   busy: { saving?: boolean; creatingRepos?: boolean },
+  path?: string | StepPath,
+  workMode?: WorkMode,
 ): string {
   if (busy.creatingRepos) return 'Creating on GitHub…'
   if (busy.saving) return 'Saving…'
+  const resolved = asPath(path, workMode)
+  const existing = resolved.projectType === 'existing'
   switch (step) {
     case 'project-stakeholders':
       return 'Save & continue'
     case 'integrations':
+      return existing ? 'Continue to Bind' : 'Continue to Requirements'
+    case 'existing-source':
       return 'Continue to Requirements'
     case 'requirements':
       return 'Clarify requirements'
+    case 'stakeholder-qa':
+      if (existing && resolved.workMode === 'modernization') return 'Continue to Technology'
+      if (existing) return 'Continue to Work plan'
+      return 'Continue'
     case 'project-shape':
       return 'Continue to Repositories'
     case 'repositories':
       return 'Continue to Technology'
     case 'technology-per-repo':
-      return 'Confirm stack & plan'
+      return existing ? 'Confirm stack & continue' : 'Confirm stack & plan'
     case 'sdlc-plan':
       return 'Continue to Ship'
     default:

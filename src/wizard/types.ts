@@ -26,10 +26,13 @@ import {
 } from './defaults'
 import { assignmentsFromRoles, STAKEHOLDER_ROLES } from './stakeholders'
 
+export type WorkMode = 'new' | 'maintenance' | 'modernization'
+
 export type WizardStep =
   | 'welcome'
   | 'project-stakeholders'
   | 'integrations'
+  | 'existing-source'
   | 'requirements'
   | 'stakeholder-qa'
   | 'sdlc-plan'
@@ -351,9 +354,12 @@ export interface WizardState extends SetupForm {
   requirementFileName: string | null
   requirementFile: File | null
   projectId: string | null
+  /** Home-card intent. Maintenance and modernization both bind an existing product. */
+  workMode: WorkMode
   stakeholdersCatalogLoaded: boolean
-  existingSourceMode: 'none' | 'zip' | 'git' | 'connect'
+  existingSourceMode: 'none' | 'zip' | 'git' | 'connect' | 'folder'
   gitRepositoryUrl: string
+  localFolderPath: string
   sourceZipName: string | null
   skipSourceWarning: boolean
   stakeholderAssignments: StakeholderAssignment[]
@@ -614,9 +620,11 @@ export const defaultWizardState: WizardState = {
   requirementFileName: null,
   requirementFile: null,
   projectId: null,
+  workMode: 'new',
   stakeholdersCatalogLoaded: false,
   existingSourceMode: 'none',
   gitRepositoryUrl: '',
+  localFolderPath: '',
   sourceZipName: null,
   skipSourceWarning: false,
   stakeholderAssignments: defaultStakeholderAssignments(),
@@ -695,7 +703,7 @@ export const defaultWizardState: WizardState = {
   shapeProposal: null,
   topologyConfirmation: null,
   shipSubstage: 'workspace',
-  wizardLayoutVersion: 7,
+  wizardLayoutVersion: 8,
   canonicalRevision: null,
   canonicalAllowedSteps: null,
   canonicalAllowedShipSubstages: null,

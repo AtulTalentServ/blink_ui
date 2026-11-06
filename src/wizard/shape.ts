@@ -2,8 +2,8 @@ import { substageFromLegacyStep } from './ship.ts'
 import { STEP_ORDER } from './steps.ts'
 import type { TopologyConfirmation, WizardState, WizardStep } from './types.ts'
 
-/** Saved drafts from before Ship consolidated workspace/implementation/review/release. */
-export const WIZARD_LAYOUT_VERSION = 7
+/** Saved drafts from before the existing-project bind step. */
+export const WIZARD_LAYOUT_VERSION = 8
 
 /** Pre-ship sidebar order (welcome + 12 working steps). Used only for layout migrations. */
 export const LEGACY_STEP_ORDER_PRE_SHIP: WizardStep[] = [
@@ -459,8 +459,25 @@ function applyV6ToV7(input: {
     state: {
       ...input.state,
       shipSubstage: substage,
-      wizardLayoutVersion: WIZARD_LAYOUT_VERSION,
+      wizardLayoutVersion: Math.max(7, input.state.wizardLayoutVersion ?? 7),
     },
+  }
+}
+
+/** Insert existing-source after integrations without moving later named steps. */
+function applyV7ToV8(input: {
+  step: WizardStep
+  completedThrough: number
+  state: WizardState
+}): { step: WizardStep; completedThrough: number; state: WizardState } {
+  const insertAt = STEP_ORDER.indexOf('existing-source')
+  let completedThrough = input.completedThrough
+  if (insertAt >= 0 && completedThrough >= insertAt) completedThrough += 1
+  completedThrough = Math.min(completedThrough, STEP_ORDER.length - 1)
+  return {
+    step: input.step,
+    completedThrough,
+    state: { ...input.state, wizardLayoutVersion: WIZARD_LAYOUT_VERSION },
   }
 }
 
@@ -501,6 +518,9 @@ export function remapWizardProgress(input: {
   }
   if ((next.state.wizardLayoutVersion ?? 0) < 7) {
     next = applyV6ToV7(next)
+  }
+  if ((next.state.wizardLayoutVersion ?? 0) < 8) {
+    next = applyV7ToV8(next)
   }
   return next
 }

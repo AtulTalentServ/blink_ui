@@ -198,6 +198,13 @@ export function ProjectShapeScreen({
 
   const applyShape = (patch: Partial<WizardState>) => {
     const next = { ...state, ...patch }
+    if (state.projectType === 'existing' && state.repositoriesTouched) {
+      onUpdate({
+        ...patch,
+        repoTechnologiesSuggested: false,
+      })
+      return
+    }
     if (state.repositoriesTouched) {
       onUpdate({
         ...patch,
@@ -447,7 +454,7 @@ export function RepositoriesScreen({
   const [rosterError, setRosterError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (state.repositoriesTouched) return
+    if (state.repositoriesTouched || state.projectType === 'existing') return
     const shape = shapeFrom(state)
     const repos = defaultRepositories(state.projectName, shape)
     const current = state.repositories || []
@@ -553,8 +560,8 @@ export function RepositoriesScreen({
     <div className="screen screen-project">
       <div className="screen-header screen-header-row">
         <div>
-          <h2>Repositories</h2>
-          <p>Name the repositories for this project. Create remotes yourself when ready, then enter their URLs here.</p>
+        <h2>Repositories</h2>
+        <p>Name the repositories for this project. Create remotes yourself when ready, then enter their URLs here.</p>
         </div>
         <div className="screen-header-actions">
           <button type="button" className="ghost-btn" onClick={restoreFromShape}>

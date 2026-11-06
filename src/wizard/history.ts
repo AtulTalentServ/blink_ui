@@ -1,4 +1,4 @@
-import { canNavigateToStep, STEP_ORDER, stepIndex } from './steps.ts'
+import { canNavigateToStep, isStepVisible, STEP_ORDER, stepIndex, type StepPath } from './steps.ts'
 import { isWizardStep, normalizeWizardStep } from './resume.ts'
 import type { WizardStep } from './types.ts'
 
@@ -53,11 +53,16 @@ export function allowedStep(
   unrestricted: boolean,
   shapeAcknowledged = false,
   canonicalAllowedSteps?: string[] | null,
+  path?: string | StepPath,
 ): WizardStep {
   if (!requested) return current
   const target = requested === 'sdlc-scope' ? 'requirements' : requested
   if (!unrestricted && target === 'sdlc-plan' && !shapeAcknowledged) {
-    return 'project-shape'
+    if (isStepVisible('project-shape', path)) return 'project-shape'
+    if (isStepVisible('technology-per-repo', path)) return 'technology-per-repo'
+  }
+  if (target === 'existing-source' && (typeof path === 'object' ? path.projectType : path) !== 'existing') {
+    return current === 'existing-source' ? 'requirements' : current
   }
   if (target === current) return current
   if (
@@ -69,6 +74,7 @@ export function allowedStep(
       unrestricted,
       shapeAcknowledged,
       canonicalAllowedSteps,
+      path,
     )
   ) {
     return target
@@ -79,7 +85,7 @@ export function allowedStep(
   return current
 }
 
-export function seedWizardHistory(current: WizardStep, force = false): void {
+export function seedWizardHistory(current: WizardStep, force = false, path?: string | StepPath): void {
   if (typeof history === 'undefined') return
   if (!force && isWizardHistoryState(history.state) && history.state.step === current) {
     writeStepUrl(current, 'replace')
@@ -88,6 +94,7 @@ export function seedWizardHistory(current: WizardStep, force = false): void {
   const idx = Math.max(0, stepIndex(current))
   writeStepUrl(STEP_ORDER[0], 'replace')
   for (let i = 1; i <= idx; i += 1) {
+    if (!isStepVisible(STEP_ORDER[i], path)) continue
     writeStepUrl(STEP_ORDER[i], 'push')
   }
 }
