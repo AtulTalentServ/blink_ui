@@ -24,7 +24,9 @@ assert.deepEqual(
 assert.equal(STEP_ORDER.includes('generation'), false)
 assert.equal(STEP_ORDER.includes('sdlc-scope'), false)
 assert.equal(STEP_ORDER.indexOf('requirements') + 1, STEP_ORDER.indexOf('stakeholder-qa'))
-assert.equal(STEP_ORDER.filter((s) => s !== 'welcome').length, 9)
+assert.equal(STEP_ORDER.includes('existing-source'), true)
+assert.equal(STEP_ORDER.indexOf('integrations') + 1, STEP_ORDER.indexOf('existing-source'))
+assert.equal(STEP_ORDER.filter((s) => s !== 'welcome').length, 10)
 
 const planned = {
   ...defaultWizardState,
@@ -42,7 +44,7 @@ const remappedPlan = remapWizardProgress({
 })
 assert.equal(remappedPlan.step, 'project-shape')
 assert.equal(remappedPlan.completedThrough, STEP_ORDER.indexOf('stakeholder-qa'))
-assert.equal(remappedPlan.state.wizardLayoutVersion, 7)
+assert.equal(remappedPlan.state.wizardLayoutVersion, 8)
 assert.equal(remappedPlan.state.technicalPlan?.markdown, '# plan')
 
 const remappedDone = remapWizardProgress({
@@ -61,7 +63,7 @@ const remappedScope = remapWizardProgress({
 })
 assert.equal(remappedScope.step, 'requirements')
 assert.equal(remappedScope.completedThrough, STEP_ORDER.indexOf('requirements'))
-assert.equal(remappedScope.state.wizardLayoutVersion, 7)
+assert.equal(remappedScope.state.wizardLayoutVersion, 8)
 
 const remappedWorkspace = remapWizardProgress({
   step: 'generation',
@@ -70,7 +72,7 @@ const remappedWorkspace = remapWizardProgress({
 })
 assert.equal(remappedWorkspace.step, 'ship')
 assert.equal(remappedWorkspace.completedThrough, STEP_ORDER.indexOf('ship'))
-assert.equal(remappedWorkspace.state.wizardLayoutVersion, 7)
+assert.equal(remappedWorkspace.state.wizardLayoutVersion, 8)
 
 const remappedImplementation = remapWizardProgress({
   step: 'implementation',

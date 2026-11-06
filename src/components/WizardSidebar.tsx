@@ -13,10 +13,10 @@ import { openDeveloperTools } from '../developer/window'
 import { TalentServLogo } from './TalentServLogo'
 import { BlinkLogo } from './BlinkLogo'
 import {
-  WIZARD_STEPS,
   canNavigateToStep,
   phaseProgressLabel,
   stepAttention,
+  visibleWizardSteps,
 } from '../wizard/steps'
 import type { WizardState, WizardStep } from '../wizard/types'
 
@@ -91,8 +91,11 @@ export function WizardSidebar({
     }
   }, [sidebarWidth])
 
-  const progressLabel = useMemo(() => phaseProgressLabel(currentStep), [currentStep])
-  const currentLabel = WIZARD_STEPS.find((s) => s.id === currentStep)?.label
+  const progressLabel = useMemo(
+    () => phaseProgressLabel(currentStep, state),
+    [currentStep, state],
+  )
+  const currentLabel = visibleWizardSteps(state).find((s) => s.id === currentStep)?.label
 
   useEffect(() => {
     if (!mobileOpen) return
@@ -149,7 +152,7 @@ export function WizardSidebar({
     }
   }
 
-  const navSteps = WIZARD_STEPS
+  const navSteps = visibleWizardSteps(state)
 
   const navBody = (
     <nav className="nav-card" aria-label="SDLC steps">
@@ -170,6 +173,7 @@ export function WizardSidebar({
             unrestrictedNav,
             Boolean(state.shapeAcknowledged),
             state.canonicalAllowedSteps,
+            state,
           )
           const Icon =
             attention === 'done'
@@ -276,6 +280,7 @@ export function WizardSidebar({
               unrestrictedNav,
               Boolean(state.shapeAcknowledged),
               state.canonicalAllowedSteps,
+              state,
             )
             const Icon =
               attention === 'done'

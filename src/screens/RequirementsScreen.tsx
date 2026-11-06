@@ -1,20 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { CloudUpload, FileText, X } from 'lucide-react'
-import type { ScopeOverlayFile, WizardState } from '../wizard/types'
 import { extractRequirementText } from '../api/blink'
+import { isExistingProject } from '../wizard/existing'
+import { extractZipRepositoryContext, upsertZipOverlay } from '../wizard/sourceZip'
+import type { WizardState } from '../wizard/types'
 
 const REQ_FILE_TYPES = ['.pdf', '.doc', '.docx', '.txt', '.md']
-const SOURCE_ZIP_OVERLAY_PATH = '.cursor/context/source-zip-context.md'
-const IGNORED_ZIP_SEGMENTS = /(^|\/)(node_modules|\.git|dist|build|\.next|\.venv|__pycache__|target|vendor)\//i
-const KEY_MANIFEST_NAMES = new Set([
-  'package.json',
-  'go.mod',
-  'pyproject.toml',
-  'requirements.txt',
-  'pom.xml',
-  'cargo.toml',
-  'readme.md',
-])
 
 interface Props {
   state: WizardState
@@ -40,120 +31,6 @@ function sourceMode(gitUrl: string, zipName: string | null): WizardState['existi
   if (gitUrl.trim()) return 'git'
   if (zipName) return 'zip'
   return 'none'
-}
-
-async function readZipEntryText(
-  bytes: Uint8Array,
-  view: DataView,
-  localHeaderOffset: number,
-  compSize: number,
-  method: number,
-): Promise<string | null> {
-  if (localHeaderOffset + 30 > bytes.length) return null
-  if (view.getUint32(localHeaderOffset, true) !== 0x04034b50) return null
-  const nameLen = view.getUint16(localHeaderOffset + 26, true)
-  const extraLen = view.getUint16(localHeaderOffset + 28, true)
-  const dataStart = localHeaderOffset + 30 + nameLen + extraLen
-  if (dataStart + compSize > bytes.length) return null
-  const slice = bytes.subarray(dataStart, dataStart + compSize)
-  if (method === 0) {
-    return new TextDecoder('utf-8', { fatal: false }).decode(slice)
-  }
-  if (method === 8 && typeof DecompressionStream !== 'undefined') {
-    try {
-      const ds = new DecompressionStream('deflate-raw')
-      const writer = ds.writable.getWriter()
-      void writer.write(new Uint8Array(slice))
-      void writer.close()
-      const buf = await new Response(ds.readable).arrayBuffer()
-      return new TextDecoder('utf-8', { fatal: false }).decode(buf)
-    } catch {
-      return null
-    }
-  }
-  return null
-}
-
-/**
- * Inspect an uploaded Project ZIP in browser memory (Central Directory + key manifests)
- * so Clarify (`grill-requirement`) receives real repository structure in `{{REPOSITORY_CONTEXT}}`.
- */
-async function extractZipRepositoryContext(file: File): Promise<string | null> {
-  try {
-    const buffer = await file.arrayBuffer()
-    const bytes = new Uint8Array(buffer)
-    const view = new DataView(buffer)
-    const minEocdOffset = Math.max(0, bytes.length - 65557)
-    let eocdOffset = -1
-    for (let i = bytes.length - 22; i >= minEocdOffset; i -= 1) {
-      if (view.getUint32(i, true) === 0x06054b50) {
-        eocdOffset = i
-        break
-      }
-    }
-    if (eocdOffset < 0) return null
-    const cdSize = view.getUint32(eocdOffset + 12, true)
-    const cdOffset = view.getUint32(eocdOffset + 16, true)
-    if (cdOffset + cdSize > bytes.length) return null
-
-    const decoder = new TextDecoder('utf-8', { fatal: false })
-    const paths: string[] = []
-    const manifests: { path: string; localOffset: number; compSize: number; method: number }[] = []
-
-    let ptr = cdOffset
-    const cdEnd = cdOffset + cdSize
-    while (ptr + 46 <= cdEnd) {
-      if (view.getUint32(ptr, true) !== 0x02014b50) break
-      const method = view.getUint16(ptr + 10, true)
-      const compSize = view.getUint32(ptr + 20, true)
-      const uncompSize = view.getUint32(ptr + 24, true)
-      const nameLen = view.getUint16(ptr + 28, true)
-      const extraLen = view.getUint16(ptr + 30, true)
-      const commentLen = view.getUint16(ptr + 32, true)
-      const localOffset = view.getUint32(ptr + 42, true)
-      const rawName = decoder.decode(bytes.subarray(ptr + 46, ptr + 46 + nameLen))
-      ptr += 46 + nameLen + extraLen + commentLen
-
-      if (!rawName || rawName.endsWith('/') || IGNORED_ZIP_SEGMENTS.test(rawName)) continue
-      paths.push(rawName)
-      const baseName = rawName.split('/').pop()?.toLowerCase() || ''
-      if (
-        KEY_MANIFEST_NAMES.has(baseName) &&
-        manifests.length < 4 &&
-        uncompSize > 0 &&
-        uncompSize <= 32_768
-      ) {
-        manifests.push({ path: rawName, localOffset, compSize, method })
-      }
-    }
-
-    if (!paths.length) return null
-    const lines: string[] = [
-      `# Uploaded Project ZIP: ${file.name}`,
-      `Total source files indexed: ${paths.length}`,
-      '',
-      '## File tree sample',
-      ...paths.slice(0, 80).map((p) => `- ${p}`),
-    ]
-    for (const m of manifests) {
-      const content = await readZipEntryText(bytes, view, m.localOffset, m.compSize, m.method)
-      if (content?.trim()) {
-        lines.push('', `## Manifest (${m.path})`, '```', content.trim().slice(0, 600), '```')
-      }
-    }
-    return lines.join('\n').slice(0, 1180)
-  } catch {
-    return null
-  }
-}
-
-function upsertZipOverlay(
-  existing: ScopeOverlayFile[] | undefined,
-  content: string | null,
-): ScopeOverlayFile[] {
-  const rest = (existing || []).filter((item) => item.path !== SOURCE_ZIP_OVERLAY_PATH)
-  if (!content?.trim()) return rest
-  return [...rest, { path: SOURCE_ZIP_OVERLAY_PATH, content }]
 }
 
 export function RequirementsScreen({
@@ -255,13 +132,21 @@ export function RequirementsScreen({
     <div className="screen screen-ref screen-requirements">
       <div className="screen-header">
         <h2>Requirements</h2>
-        <p>Add the source requirement. Clarify it with stakeholders in the next step.</p>
+        <p>
+          {isExistingProject(state)
+            ? 'Describe this change. GitHub remotes are already bound — do not restate the whole product.'
+            : 'Add the source requirement. Clarify it with stakeholders in the next step.'}
+        </p>
       </div>
 
       <section className="card ref-card req-capture-card">
           <div className="req-section-head">
             <h3>Requirement</h3>
-            <p>Upload a document or paste the text. You will clarify it with stakeholders in the next step.</p>
+            <p>
+              {isExistingProject(state)
+                ? 'Paste the change, defect, or modernization brief. A starter outline is filled from the bound repositories.'
+                : 'Upload a document or paste the text. You will clarify it with stakeholders in the next step.'}
+            </p>
           </div>
 
           {hasUploadedFile ? (
@@ -351,7 +236,11 @@ export function RequirementsScreen({
                 id="requirementsText"
                 className="req-textarea"
                 rows={hasUploadedFile ? 10 : 6}
-                placeholder="Describe what you are building…"
+                placeholder={
+                  isExistingProject(state)
+                    ? 'Describe the change against the bound application…'
+                    : 'Describe what you are building…'
+                }
                 value={localText}
                 onChange={(event) => handleTextChange(event.target.value)}
                 onBlur={flushTextChange}
@@ -368,6 +257,7 @@ export function RequirementsScreen({
             </button>
           )}
 
+          {isExistingProject(state) ? null : (
           <div className="req-existing">
             <div className="req-section-head">
               <h3>
@@ -447,6 +337,7 @@ export function RequirementsScreen({
               </div>
             </div>
           </div>
+          )}
 
         </section>
     </div>
@@ -455,7 +346,9 @@ export function RequirementsScreen({
 
 export function validateRequirements(state: WizardState): string | null {
   if (!state.requirementsText.trim() && !state.requirementFileName) {
-    return 'Upload a document or paste requirements.'
+    return isExistingProject(state)
+      ? 'Describe the change to the existing application.'
+      : 'Upload a document or paste requirements.'
   }
   return null
 }

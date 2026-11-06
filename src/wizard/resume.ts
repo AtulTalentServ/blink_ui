@@ -1,6 +1,6 @@
 import { DEFAULT_INTEGRATIONS } from './defaults.ts'
 import { remapWizardProgress } from './shape.ts'
-import { STEP_ORDER, WIZARD_STEPS } from './steps.ts'
+import { isStepVisible, nextVisibleStep, STEP_ORDER, WIZARD_STEPS } from './steps.ts'
 import { defaultWizardState, type WizardState, type WizardStep } from './types.ts'
 
 interface RemoteProject {
@@ -57,8 +57,18 @@ export function isWizardStep(value: unknown): value is WizardStep {
 
 export function normalizeWizardStep(
   step: string,
-  state?: Pick<WizardState, 'productScope' | 'sdlcStartIssueId'>,
+  state?: Pick<WizardState, 'productScope' | 'sdlcStartIssueId' | 'projectType' | 'workMode'>,
 ): WizardStep {
+  const path = state ? { projectType: state.projectType, workMode: state.workMode } : undefined
+  if (step === 'existing-source' && state?.projectType !== 'existing') return 'requirements'
+  if (
+    state?.projectType === 'existing'
+    && (step === 'project-shape' || step === 'repositories' || step === 'technology-per-repo')
+    && path
+    && !isStepVisible(step as WizardStep, path)
+  ) {
+    return nextVisibleStep('stakeholder-qa', path) || 'sdlc-plan'
+  }
   if (step === 'stakeholder-questions' || step === 'stakeholder-responses') return 'stakeholder-qa'
   if (step === 'sdlc-scope') return 'requirements'
   if (step === 'sdlc-planning') {
@@ -66,7 +76,10 @@ export function normalizeWizardStep(
     if (confirmed && state?.sdlcStartIssueId) return 'sdlc-plan'
     return 'requirements'
   }
-  if (step === 'ide-and-tools' || step === 'platform-delivery') return 'project-shape'
+  if (step === 'ide-and-tools' || step === 'platform-delivery') {
+    if (state?.projectType === 'existing') return nextVisibleStep('stakeholder-qa', path) || 'sdlc-plan'
+    return 'project-shape'
+  }
   if (step === 'review-resolve' || step === 'project-preview') return 'ship'
   if (
     step === 'generation'
@@ -141,6 +154,14 @@ export function restoreWizardState(raw: unknown): WizardState {
     }),
     wizardLayoutVersion: typeof currentState.wizardLayoutVersion === 'number' ? currentState.wizardLayoutVersion : 0,
     jiraCreatedIssues: (currentState.jiraCreatedIssues || []).filter((item) => item.status !== 'creating'),
+    workMode:
+      currentState.workMode === 'new' ||
+      currentState.workMode === 'maintenance' ||
+      currentState.workMode === 'modernization'
+        ? currentState.workMode
+        : currentState.projectType === 'existing'
+          ? 'maintenance'
+          : 'new',
   }
 }
 
@@ -330,6 +351,7 @@ export function canOfferResume(draft: Pick<WizardDraft, 'step' | 'state' | 'comp
  * last green (completedThrough).
  */
 export function resumeTarget(draft: Pick<WizardDraft, 'step' | 'completedThrough' | 'state'>): WizardStep {
+  const path = { projectType: draft.state.projectType, workMode: draft.state.workMode }
   const saved = normalizeWizardStep(draft.step, draft.state)
   if (!hasWizardProgress(draft) && draft.completedThrough <= 0) {
     return saved === 'welcome' ? 'welcome' : saved
@@ -341,7 +363,12 @@ export function resumeTarget(draft: Pick<WizardDraft, 'step' | 'completedThrough
       : STEP_ORDER.indexOf('project-stakeholders')
   const idx = Math.max(savedIdx, frontierIdx, STEP_ORDER.indexOf('project-stakeholders'))
   const next = STEP_ORDER[Math.min(idx, STEP_ORDER.length - 1)]
-  return next === 'welcome' ? 'project-stakeholders' : next
+  const visible = isStepVisible(next, path) ? next : nextVisibleStep(next, path) || next
+  if (visible === 'welcome') return 'project-stakeholders'
+  if (visible === 'existing-source' && path.projectType !== 'existing') {
+    return nextVisibleStep('existing-source', path) || 'requirements'
+  }
+  return visible
 }
 
 /** Persist this as wizardStep — never Home when a working screen exists. */

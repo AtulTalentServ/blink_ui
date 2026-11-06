@@ -25,6 +25,7 @@ import {
   validateProjectStakeholders,
 } from './screens/ProjectStakeholdersScreen'
 import { RequirementsScreen, validateRequirements } from './screens/RequirementsScreen'
+import { ExistingSourceScreen, validateExistingSource } from './screens/ExistingSourceScreen'
 import { IntegrationsScreen } from './screens/IntegrationsScreen'
 import {
   StakeholderQaScreen,
@@ -50,7 +51,14 @@ import {
 import { roleLabel } from './wizard/stakeholders'
 import { patchFromCanonicalSnapshot } from './wizard/canonical'
 import { substageFromLegacyStep } from './wizard/ship'
-import { primaryContinueLabel, phaseProgressLabel, stepIndex } from './wizard/steps'
+import { nextVisibleStep, phaseProgressLabel, prevVisibleStep, primaryContinueLabel, stepIndex } from './wizard/steps'
+import {
+  EXISTING_UNTITLED_DESCRIPTION,
+  EXISTING_UNTITLED_NAME,
+  isExistingDescriptionPlaceholder,
+  isExistingNamePlaceholder,
+  isExistingProject,
+} from './wizard/existing'
 import {
   acknowledgeShapePatch,
   validateProjectShape,
@@ -69,6 +77,7 @@ import {
   type ShipSubstage,
   type WizardState,
   type WizardStep,
+  type WorkMode,
 } from './wizard/types'
 import {
   answersWithNewDefaults,
@@ -175,6 +184,7 @@ export default function App() {
     false,
     Boolean(boot.state.shapeAcknowledged),
     boot.state.canonicalAllowedSteps,
+    boot.state,
   )
   const [state, setState] = useState<WizardState>(boot.state)
   const [step, setStep] = useState<WizardStep>(bootStep)
@@ -266,6 +276,8 @@ export default function App() {
         return null
       case 'project-stakeholders':
         return validateProjectStakeholders(current)
+      case 'existing-source':
+        return validateExistingSource(current)
       case 'sdlc-scope':
       case 'requirements':
         return validateRequirements(current)
@@ -286,8 +298,10 @@ export default function App() {
 
   const projectPayload = useCallback((): ProjectPayload => ({
     projectType: state.projectType,
-    projectName: state.projectName,
-    description: state.description,
+    projectName: state.projectName.trim() || (isExistingProject(state) ? EXISTING_UNTITLED_NAME : state.projectName),
+    description:
+      state.description.trim()
+      || (isExistingProject(state) ? EXISTING_UNTITLED_DESCRIPTION : state.description),
     stakeholders: state.stakeholderAssignments.map((row) => ({
       roleCode: row.roleId,
       name: row.personName,
@@ -386,8 +400,14 @@ export default function App() {
 
     patch({
       projectId: id,
-      projectName: payload.projectName,
-      description: payload.description,
+      projectName:
+        isExistingProject(state) && isExistingNamePlaceholder(state.projectName)
+          ? state.projectName
+          : payload.projectName,
+      description:
+        isExistingProject(state) && isExistingDescriptionPlaceholder(state.description)
+          ? state.description
+          : payload.description,
     })
     void syncCanonicalWizardDraft(id, stateRef.current.canonicalRevision ?? undefined)
       .then((snap) => patch(patchFromCanonicalSnapshot(snap, stateRef.current)))
@@ -474,7 +494,7 @@ export default function App() {
     [goToStep, patch],
   )
 
-  const startFresh = useCallback((type: 'new' | 'existing') => {
+  const startFresh = useCallback((mode: WorkMode) => {
     skipRemoteResumeRef.current = true
     freshStartRef.current = true
     lastSavedPayloadRef.current = null
@@ -485,10 +505,23 @@ export default function App() {
     setFolderQuery(null)
     setKitResultOpen(false)
     setStatus(null)
+    const type = mode === 'new' ? 'new' : 'existing'
     const fresh: WizardState = {
       ...defaultWizardState,
       projectType: type,
+      workMode: mode,
       existingSourceMode: 'none',
+      ...(type === 'existing'
+        ? {
+            repositories: [],
+            repoTechnologies: [],
+            repositoriesTouched: false,
+            setupContextReady: false,
+            setupDeliveryReady: false,
+            setupValidated: false,
+            localFolderPath: '',
+          }
+        : {}),
     }
     setState(fresh)
     setCompletedThrough(0)
@@ -503,7 +536,7 @@ export default function App() {
       })
     }
     goToStep('project-stakeholders')
-    seedWizardHistory('project-stakeholders', true)
+    seedWizardHistory('project-stakeholders', true, { projectType: type, workMode: mode })
   }, [goToStep, session?.email])
 
   useEffect(() => {
@@ -526,13 +559,14 @@ export default function App() {
             false,
             Boolean(stateRef.current.shapeAcknowledged),
             stateRef.current.canonicalAllowedSteps,
+            stateRef.current,
           ),
         )
         return
       }
       const idx = stepIndex(stepRef.current)
       if (idx > 0) {
-        const prev = STEP_ORDER[idx - 1]
+        const prev = prevVisibleStep(stepRef.current, stateRef.current) || STEP_ORDER[idx - 1]
         setStep(prev)
         writeStepUrl(prev, 'push')
       }
@@ -695,12 +729,13 @@ export default function App() {
           false,
           Boolean(remoteDraft.state.shapeAcknowledged),
           remoteDraft.state.canonicalAllowedSteps,
+          remoteDraft.state,
         )
         void fetchCanonicalSnapshot(String(remote.id))
           .then((snap) => patch(patchFromCanonicalSnapshot(snap, stateRef.current)))
           .catch(() => undefined)
         goToStep(nextStep, 'replace')
-        seedWizardHistory(nextStep, true)
+        seedWizardHistory(nextStep, true, remoteDraft.state)
       })
       .catch(() => undefined)
     return () => {
@@ -818,6 +853,13 @@ export default function App() {
   }, [governancePrep])
 
   const handleCreateGithubRepos = useCallback(async (): Promise<boolean> => {
+    if (isExistingProject(state)) {
+      setStatus({
+        type: 'info',
+        message: 'Existing projects use bound remotes. Blink will not create GitHub repositories.',
+      })
+      return true
+    }
     if (creatingReposRef.current) return false
     const github = state.integrations?.find((item) => item.id === 'github')
     if (!github?.connected || !state.projectId) {
@@ -916,7 +958,7 @@ export default function App() {
       window.clearTimeout(stuckTimer)
       clearBusy()
     }
-  }, [patch, state.bootstrapAcknowledged, state.integrations, state.jiraCreatedIssues, state.productScope, state.projectId, state.repositories, state.sdlcStartIssueId, state.specification, state.workClassification])
+  }, [patch, state.bootstrapAcknowledged, state.integrations, state.jiraCreatedIssues, state.productScope, state.projectId, state.projectType, state.repositories, state.sdlcStartIssueId, state.specification, state.workClassification])
 
   useEffect(() => {
     if (step === 'stakeholder-qa') {
@@ -1052,8 +1094,12 @@ export default function App() {
       setStatus(null)
     }
     const idx = stepIndex(step)
-    setCompletedThrough((prev) => Math.max(prev, idx))
-    const nextStep = STEP_ORDER[idx + 1]
+    const nextStep = nextVisibleStep(step, state)
+    if (nextStep === 'sdlc-plan' && isExistingProject(state) && !state.shapeAcknowledged) {
+      patch(acknowledgeShapePatch(state))
+    }
+    const completedIdx = nextStep ? Math.max(idx, stepIndex(nextStep) - 1) : idx
+    setCompletedThrough((prev) => Math.max(prev, completedIdx))
     if (nextStep) goToStep(nextStep)
   }, [
     step,
@@ -1094,9 +1140,9 @@ export default function App() {
       window.history.back()
       return
     }
-    const idx = stepIndex(step)
-    if (idx > 0) goToStep(STEP_ORDER[idx - 1])
-  }, [step, goToStep, kitResultOpen, qaTab])
+    const prev = prevVisibleStep(step, state)
+    if (prev) goToStep(prev)
+  }, [step, goToStep, kitResultOpen, qaTab, state])
 
   const groomAbortRef = useRef<AbortController | null>(null)
 
@@ -2517,16 +2563,17 @@ export default function App() {
                   }
                 : null
             }
-            onContinue={(type) => startFresh(type)}
+            onContinue={(mode) => startFresh(mode)}
             onResume={() => {
               setStatus(null)
               goToStep(resumeTarget({ step: lastWorkingRef.current, completedThrough, state }))
             }}
-            onStartNew={() => startFresh('new')}
           />
         )
       case 'project-stakeholders':
         return <ProjectStakeholdersScreen state={state} onUpdate={patch} />
+      case 'existing-source':
+        return <ExistingSourceScreen state={state} onUpdate={patch} />
       case 'integrations':
         return (
           <IntegrationsScreen
@@ -2715,7 +2762,7 @@ export default function App() {
             <div className="top-float-row">
             <div className="top-float-chip top-float-start">
               <span className="step-indicator">
-                {phaseProgressLabel(step)}
+                {phaseProgressLabel(step, state)}
               </span>
             </div>
             <div className="top-float-chip top-float-end">
@@ -2910,7 +2957,7 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      {primaryContinueLabel(step, { saving, creatingRepos })} <ChevronRight size={14} />
+                      {primaryContinueLabel(step, { saving, creatingRepos }, state)} <ChevronRight size={14} />
                     </>
                   )}
                 </button>

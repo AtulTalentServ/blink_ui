@@ -231,7 +231,7 @@ function normalizeGroomQuestions(value: unknown): GroomQuestionDto[] {
 export async function fetchStakeholderRoles(): Promise<StakeholderRoleDto[]> {
   const url = apiUrl('/stakeholder-roles')
   console.info(`[blink] GET ${url}`)
-  const response = await fetch(url, { cache: 'no-store' })
+  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
   if (!response.ok) throw new Error(await readError(response))
   return response.json() as Promise<StakeholderRoleDto[]>
 }
@@ -506,7 +506,7 @@ export async function fetchGovernanceStatus(projectId: string): Promise<{
   message?: string
 }> {
   const url = apiUrl(`/projects/${projectId}/governance-status`)
-  const response = await fetch(url, { cache: 'no-store' })
+  const response = await fetch(url, { cache: 'no-store', headers: authHeaders() })
   if (!response.ok) throw new Error(await readError(response))
   return response.json() as Promise<{
     status?: 'idle' | 'preparing' | 'ready' | 'failed' | null
@@ -1325,6 +1325,17 @@ export interface GithubOrgItem {
   personal?: boolean
 }
 
+export interface GithubRepoItem {
+  name: string
+  fullName: string
+  htmlUrl: string
+  description?: string
+  language?: string
+  defaultBranch?: string
+  privateRepo?: boolean
+  archived?: boolean
+}
+
 export interface IntegrationConnectResult {
   connected: boolean
   provider: string
@@ -1556,6 +1567,32 @@ export async function fetchGithubOrgs(payload: {
   })
   if (!response.ok) throw new ApiRequestError(await readError(response), response.status)
   return response.json() as Promise<GithubOrgItem[]>
+}
+
+export async function fetchGithubRepos(payload: {
+  projectId?: string | null
+  token?: string
+  organization?: string
+  personal?: boolean
+}): Promise<GithubRepoItem[]> {
+  const url = apiUrl('/integrations/github/repos')
+  console.info(`[blink] POST ${url}`)
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    const message = await readError(response)
+    if (response.status === 404 && /page not found/i.test(message)) {
+      throw new ApiRequestError(
+        'The local Blink API needs a restart to list GitHub repositories.',
+        response.status,
+      )
+    }
+    throw new ApiRequestError(message, response.status)
+  }
+  return response.json() as Promise<GithubRepoItem[]>
 }
 
 export async function fetchFigmaTeams(payload: {

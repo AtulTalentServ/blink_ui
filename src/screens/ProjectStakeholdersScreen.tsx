@@ -9,6 +9,7 @@ import {
   type StakeholderRoleDef,
 } from '../wizard/stakeholders'
 import { LOGIN_ALLOWED_DOMAIN } from '../auth/session'
+import { isExistingProject } from '../wizard/existing'
 import { syncRepositoriesFromArtifact, type WizardState } from '../wizard/types'
 
 interface Props {
@@ -176,6 +177,7 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
     setRemoveTarget(null)
   }
 
+  const existing = isExistingProject(state)
   const showNameCount = state.projectName.length >= NAME_COUNT_SHOW_AT
   const showDescCount = state.description.length >= DESC_COUNT_SHOW_AT
 
@@ -189,7 +191,10 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
       <section className="card project-setup-card">
         <div className="field-group">
           <div className="field-label-row">
-            <label htmlFor="projectName">Project name</label>
+            <label htmlFor="projectName">
+              Project name
+              {existing ? <span className="optional-tag">Optional</span> : null}
+            </label>
             {showNameCount ? (
               <span
                 id="projectName-count"
@@ -201,7 +206,7 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
           </div>
           <input
             id="projectName"
-            placeholder="e.g. Banking Application"
+            placeholder={existing ? 'Filled from the bound repository' : 'e.g. Banking Application'}
             value={state.projectName}
             maxLength={PROJECT_NAME_MAX}
             aria-describedby={showNameCount ? 'projectName-count' : undefined}
@@ -211,7 +216,10 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
 
         <div className="field-group">
           <div className="field-label-row">
-            <label htmlFor="description">Short description</label>
+            <label htmlFor="description">
+              Short description
+              {existing ? <span className="optional-tag">Optional</span> : null}
+            </label>
             {showDescCount ? (
               <span
                 id="description-count"
@@ -224,7 +232,7 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
           <textarea
             id="description"
             rows={3}
-            placeholder="What are we building, in a sentence or two?"
+            placeholder={existing ? 'Filled from the bound repository' : 'What are we building, in a sentence or two?'}
             value={state.description}
             maxLength={PROJECT_DESCRIPTION_MAX}
             aria-describedby={showDescCount ? 'description-count' : undefined}
@@ -325,11 +333,12 @@ export function ProjectStakeholdersScreen({ state, onUpdate }: Props) {
 }
 
 export function validateProjectStakeholders(state: WizardState): string | null {
-  if (!state.projectName.trim()) return 'Project name is required.'
+  const existing = isExistingProject(state)
+  if (!existing && !state.projectName.trim()) return 'Project name is required.'
   if (state.projectName.length > PROJECT_NAME_MAX) {
     return `Project name can be at most ${PROJECT_NAME_MAX.toLocaleString()} characters.`
   }
-  if (!state.description.trim()) return 'Project description is required.'
+  if (!existing && !state.description.trim()) return 'Project description is required.'
   if (state.description.length > PROJECT_DESCRIPTION_MAX) {
     return `Project description can be at most ${PROJECT_DESCRIPTION_MAX.toLocaleString()} characters.`
   }

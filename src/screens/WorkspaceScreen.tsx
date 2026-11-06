@@ -32,6 +32,7 @@ export function WorkspaceScreen({
 
   const planAcknowledged = Boolean(state.planAcknowledged || state.shipPlanAcknowledged)
   const githubConnected = state.integrations.some((item) => item.id === 'github' && item.connected)
+  const existingProject = state.projectType === 'existing'
   const repositoriesCreated = state.repositories.some((repository) => Boolean(repository.htmlUrl))
   const failedRepos = (state.repositories || []).filter(
     (repository) => repository.createStatus === 'failed' || /401|403|failed/i.test(repository.createMessage || ''),
@@ -175,7 +176,7 @@ export function WorkspaceScreen({
               )}
 
               <div className="workspace-step__actions">
-                {!repositoriesCreated || failedRepos.length ? (
+                {existingProject ? null : !repositoriesCreated || failedRepos.length ? (
                   <button
                     type="button"
                     className="primary-btn"

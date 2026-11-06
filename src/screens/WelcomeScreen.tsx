@@ -3,24 +3,24 @@ import {
   ClipboardList,
   FileText,
   FolderPlus,
-  FolderSearch,
   Link2,
   Play,
+  RefreshCw,
   Rocket,
   ShieldCheck,
   Users,
+  Wrench,
 } from 'lucide-react'
 import { AppHeader } from '../components/AppHeader'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { SessionControls } from '../components/SessionControls'
-import type { WizardState } from '../wizard/types'
+import type { WizardState, WorkMode } from '../wizard/types'
 
 interface Props {
   state: WizardState
   resume: { projectName: string; stepLabel: string } | null
-  onContinue: (type: 'new' | 'existing') => void
+  onContinue: (mode: WorkMode) => void
   onResume: () => void
-  onStartNew: () => void
 }
 
 const FLOW = [
@@ -31,8 +31,40 @@ const FLOW = [
   { icon: Rocket, label: 'Ship', desc: 'Repos and handoff' },
 ]
 
-export function WelcomeScreen({ resume, onContinue, onResume, onStartNew }: Props) {
-  const [confirmStartOver, setConfirmStartOver] = useState(false)
+const START_CARDS: { id: WorkMode; label: string; icon: typeof FolderPlus }[] = [
+  { id: 'new', label: 'New project', icon: FolderPlus },
+  { id: 'maintenance', label: 'Maintenance', icon: Wrench },
+  { id: 'modernization', label: 'Modernization', icon: RefreshCw },
+]
+
+const CONFIRM: Record<WorkMode, { title: string; copy: string; confirmLabel: string }> = {
+  new: {
+    title: 'New project?',
+    copy: 'This leaves the current draft and starts a new project.',
+    confirmLabel: 'New project',
+  },
+  maintenance: {
+    title: 'Maintenance?',
+    copy: 'This leaves the current draft and starts a maintenance project.',
+    confirmLabel: 'Maintenance',
+  },
+  modernization: {
+    title: 'Modernization?',
+    copy: 'This leaves the current draft and starts a modernization project.',
+    confirmLabel: 'Modernization',
+  },
+}
+
+export function WelcomeScreen({ resume, onContinue, onResume }: Props) {
+  const [pendingMode, setPendingMode] = useState<WorkMode | null>(null)
+
+  function choose(mode: WorkMode) {
+    if (resume) {
+      setPendingMode(mode)
+      return
+    }
+    onContinue(mode)
+  }
 
   return (
     <div className="welcome-page">
@@ -45,43 +77,27 @@ export function WelcomeScreen({ resume, onContinue, onResume, onStartNew }: Prop
           </h1>
         </div>
 
-        {resume ? (
-          <div className="project-cards is-resume">
-            <button type="button" className="project-card is-featured" onClick={onResume}>
+        <div className="project-cards">
+          {START_CARDS.map(({ id, label, icon: Icon }) => (
+            <button type="button" className="project-card" key={id} onClick={() => choose(id)}>
               <div className="project-card-icon">
-                <Play size={28} strokeWidth={1.75} />
+                <Icon size={28} strokeWidth={1.75} />
               </div>
-              <h3>Continue {resume.projectName}</h3>
+              <h3>{label}</h3>
             </button>
-            <button type="button" className="project-card" onClick={() => onContinue('existing')}>
-              <div className="project-card-icon">
-                <FolderSearch size={28} strokeWidth={1.75} />
-              </div>
-              <h3>Existing project</h3>
-            </button>
-            <button type="button" className="project-card" onClick={() => setConfirmStartOver(true)}>
-              <div className="project-card-icon">
-                <FolderPlus size={28} strokeWidth={1.75} />
-              </div>
-              <h3>Start over</h3>
-            </button>
-          </div>
-        ) : (
-          <div className="project-cards">
-            <button type="button" className="project-card" onClick={onStartNew}>
-              <div className="project-card-icon">
-                <FolderPlus size={28} strokeWidth={1.75} />
-              </div>
-              <h3>New project</h3>
-            </button>
-            <button type="button" className="project-card" onClick={() => onContinue('existing')}>
-              <div className="project-card-icon">
-                <FolderSearch size={28} strokeWidth={1.75} />
-              </div>
-              <h3>Existing project</h3>
-            </button>
-          </div>
-        )}
+          ))}
+          <button
+            type="button"
+            className="project-card"
+            disabled={!resume}
+            onClick={onResume}
+          >
+            <div className="project-card-icon">
+              <Play size={28} strokeWidth={1.75} />
+            </div>
+            <h3>Draft continue</h3>
+          </button>
+        </div>
 
         <ol className="welcome-flow" aria-label="How Blink works">
           {FLOW.map(({ icon: Icon, label, desc }) => (
@@ -105,17 +121,18 @@ export function WelcomeScreen({ resume, onContinue, onResume, onStartNew }: Prop
         <span className="footer-copy">© {new Date().getFullYear()} TalentServ. All rights reserved.</span>
       </footer>
 
-      {confirmStartOver && (
+      {pendingMode && (
         <ConfirmDialog
-          title="Start over?"
-          copy="This leaves the current draft and starts a new project."
-          confirmLabel="Start over"
-          titleId="start-over-title"
-          copyId="start-over-copy"
-          onCancel={() => setConfirmStartOver(false)}
+          title={CONFIRM[pendingMode].title}
+          copy={CONFIRM[pendingMode].copy}
+          confirmLabel={CONFIRM[pendingMode].confirmLabel}
+          titleId="home-start-title"
+          copyId="home-start-copy"
+          onCancel={() => setPendingMode(null)}
           onConfirm={() => {
-            setConfirmStartOver(false)
-            onStartNew()
+            const mode = pendingMode
+            setPendingMode(null)
+            onContinue(mode)
           }}
         />
       )}
